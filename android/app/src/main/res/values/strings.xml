@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Curtain Saas</string>
+    <string name="title_activity_main">Curtain Saas</string>
+    <string name="package_name">com.curtainsaas.app</string>
+    <string name="custom_url_scheme">com.curtainsaas.app</string>
+</resources>
