@@ -15,6 +15,21 @@ dist-ssr
 .env.*
 !.env.example
 
+# Build / release artifacts — generated, exceed GitHub's 100 MB limit; never track
+/release/
+/release-*/
+/installers-ready/
+**/win-unpacked/
+.asar-auto-update/
+*.exe
+*.asar
+
+
+# Playwright E2E
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/tests/e2e/.auth/
 
 # Editor directories and files
 .vscode/*
