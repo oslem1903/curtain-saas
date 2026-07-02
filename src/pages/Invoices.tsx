@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Download, FileText, Plus, RefreshCw, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { shareOrDownloadTextFile } from "../utils/nativeShare";
 
 type InvoiceRow = {
     id: string;
@@ -205,8 +207,8 @@ export default function Invoices() {
     const [invoices, setInvoices] = useState<InvoiceView[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
-    const [filterType, setFilterType] = useState("all");
-    const [filterStatus, setFilterStatus] = useState("all");
+    const [filterType, setFilterType] = usePersistedState("perdepro.invoices.type", "all");
+    const [filterStatus, setFilterStatus] = usePersistedState("perdepro.invoices.status", "all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [overdueOnly, setOverdueOnly] = useState(false);
@@ -319,7 +321,7 @@ export default function Invoices() {
         };
     }, [filtered]);
 
-    function handleExportCSV() {
+    async function handleExportCSV() {
         if (filtered.length === 0) return;
 
         const headers = [
@@ -350,13 +352,14 @@ export default function Invoices() {
             invoiceStatusLabel(effectiveStatus(invoice)),
         ]);
 
+        const filename = `faturalar_${new Date().toISOString().slice(0, 10)}.csv`;
         const content = [headers, ...rows].map((row) => row.join(";")).join("\n");
-        const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `faturalar_${new Date().toISOString().slice(0, 10)}.csv`);
-        link.click();
+        await shareOrDownloadTextFile({
+            filename,
+            mimeType: "text/csv;charset=utf-8;",
+            text: `\uFEFF${content}`,
+            title: "Fatura listesi",
+        });
     }
 
     function handleExportPDF() {

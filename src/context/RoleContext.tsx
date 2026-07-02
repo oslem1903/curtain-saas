@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { useAuth } from "./AuthContext";
@@ -43,6 +43,9 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Prom
 
 export function RoleProvider({ children }: { children: ReactNode }) {
     const { user, role: authRole, companyId } = useAuth();
+    // Stable birincil kimlik: effect'i `user` OBJESİ yerine buna bağla ki arka plan
+    // reload'unda (yeni user objesi, aynı id) gereksiz yeniden yükleme/flicker olmasın.
+    const userId = user?.id ?? null;
     const [realRole, setRealRole] = useState<RoleState>("unknown");
     const [viewingRole, setViewingRole] = useState<RoleState>("unknown");
     const [viewingUserId, setViewingUserId] = useState<string | null>(null);
@@ -60,14 +63,14 @@ export function RoleProvider({ children }: { children: ReactNode }) {
             setRealRole(fallbackRole);
             setViewingRole(fallbackRole);
             setViewingUserId(null);
-            setCurrentUserId(user?.id ?? null);
+            setCurrentUserId(userId);
             setStaffList([]);
             setLoading(false);
         }, 6500);
 
         const fetchRole = async () => {
             try {
-                if (!user) {
+                if (!userId) {
                     if (alive) {
                         setRealRole("unknown");
                         setViewingRole("unknown");
@@ -78,7 +81,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
                     return;
                 }
 
-                setCurrentUserId(user.id);
+                setCurrentUserId(userId);
                 const role = normalizeRole(authRole);
                 if (!alive) return;
 
@@ -127,7 +130,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
             alive = false;
             window.clearTimeout(fallbackTimer);
         };
-    }, [authRole, companyId, user]);
+    }, [authRole, companyId, userId]);
 
     useEffect(() => {
         const tables = ["appointments", "orders", "customers", "payments", "income", "expenses"];
@@ -179,23 +182,26 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         "Bilinmiyor"
     );
 
+    const contextValue = useMemo(() => ({
+        realRole,
+        viewingRole,
+        viewingUserId,
+        currentUserId,
+        effectiveRole,
+        staffList,
+        viewingLabel,
+        setViewingRoleAndUser,
+        clearSimulation,
+        isSimulating
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- setViewingRoleAndUser/clearSimulation stabil; memoizasyon kasıtlı
+    }), [realRole, viewingRole, viewingUserId, currentUserId, effectiveRole, staffList, viewingLabel, isSimulating]);
+
     if (loading) {
         return <div style={{ padding: 16 }}>Giriş bilgileri doğrulanıyor...</div>;
     }
 
     return (
-        <RoleContext.Provider value={{
-            realRole,
-            viewingRole,
-            viewingUserId,
-            currentUserId,
-            effectiveRole,
-            staffList,
-            viewingLabel,
-            setViewingRoleAndUser,
-            clearSimulation,
-            isSimulating
-        }}>
+        <RoleContext.Provider value={contextValue}>
             {children}
         </RoleContext.Provider>
     );

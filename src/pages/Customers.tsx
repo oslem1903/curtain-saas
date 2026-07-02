@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useNavigate } from "react-router-dom";
+import { usePersistedState } from "../hooks/usePersistedState";
 import {
     Edit3,
     Plus,
@@ -31,8 +32,7 @@ import {
     AlertCircle,
     FileText,
     FileSignature,
-    ClipboardCheck,
-    HelpCircle
+    ClipboardCheck
 } from "lucide-react";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
@@ -138,7 +138,7 @@ function parseCrmNotes(noteField: string | null): CrmNote[] {
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
         try {
             return JSON.parse(trimmed) as CrmNote[];
-        } catch (e) {
+        } catch {
             // Fallback
         }
     }
@@ -272,7 +272,7 @@ export default function Customers() {
     const [allOrders, setAllOrders] = useState<any[]>([]);
     const [allPayments, setAllPayments] = useState<any[]>([]);
     const [showAddForm, setShowAddForm] = useState(false);
-    const [activeFilter, setActiveFilter] = useState("all");
+    const [activeFilter, setActiveFilter] = usePersistedState("perdepro.customers.active", "all");
     const [detailTab, setDetailTab] = useState("general");
     const [newCrmNote, setNewCrmNote] = useState("");
     const [searchQuery, setSearchQuery] = useState("");
@@ -294,7 +294,7 @@ export default function Customers() {
     const [collectNote, setCollectNote] = useState("");
     const [collectSaving, setCollectSaving] = useState(false);
     const [collectError, setCollectError] = useState("");
-    const [toast, setToast] = useState("");
+    const [toast] = useState("");
 
     // Debounce search query
     useEffect(() => {
@@ -585,6 +585,7 @@ export default function Customers() {
     async function insertPaymentRow(row: Record<string, any>): Promise<string> {
         let { error } = await supabase.from("payments").insert(row);
         if (error && /customer_id/i.test(String(error.message || ""))) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { customer_id: _omit, ...rest } = row;
             ({ error } = await supabase.from("payments").insert(rest));
         }

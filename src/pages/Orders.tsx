@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Plus, Search, Filter, ArrowLeft, RefreshCw } from "lucide-react";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
 
@@ -75,6 +76,16 @@ function computeTotalNet(o: DbOrder) {
 
 function statusLabel(status?: string | null) {
     const s = String(status ?? "").toLowerCase();
+    if (s === "new_order") return "Yeni Sipariş";
+    if (s === "montaja_hazir") return "Montaja Hazır";
+    if (s === "montaj_planlandi") return "Montaj Planlandı";
+    if (s === "montajda") return "Montajda";
+    if (s === "montaj_tamamlandi") return "Montaj Tamamlandı";
+    if (s === "installation_ready") return "Montaja Hazır";
+    if (s === "installation_planned") return "Montaj Planlandı";
+    if (s === "installing") return "Montajda";
+    if (s === "installation_completed") return "Montaj Tamamlandı";
+    if (s === "delivered_closed") return "Teslim Edildi / Kapandı";
     if (s === "measured") return "Ölçü Alındı";
     if (s === "quoted" || s === "draft") return "Teklif Verildi";
     if (s === "approved") return "Onaylandı";
@@ -104,14 +115,31 @@ function statusClass(status?: string | null) {
 
 export default function Orders() {
     const nav = useNavigate();
+    const location = useLocation();
+    const newOrderId = (location.state as { newOrderId?: string } | null)?.newOrderId ?? null;
 
     const [rows, setRows] = useState<DbOrder[]>([]);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [q, setQ] = useState("");
-    const [statusFilter, setStatusFilter] = useState("all");
+    const [statusFilter, setStatusFilter] = usePersistedState("perdepro.orders.status", "all");
     const [refreshKey, setRefreshKey] = useState(0);
+    const [highlightId, setHighlightId] = useState<string | null>(newOrderId);
     const { effectiveRole: role, realRole, viewingUserId } = useRole();
+
+    // Siparişe dönüştürme / yeni sipariş sonrası: her zaman en üstten başla.
+    // (Tarayıcının önceki sayfadan kalan kaydırma konumunu taşımasını engeller.)
+    useEffect(() => {
+        window.scrollTo({ top: 0, behavior: "auto" });
+    }, []);
+
+    // Yeni oluşturulan siparişi birkaç saniye vurgula, sonra söndür.
+    useEffect(() => {
+        if (!newOrderId) return;
+        setHighlightId(newOrderId);
+        const t = window.setTimeout(() => setHighlightId(null), 4000);
+        return () => window.clearTimeout(t);
+    }, [newOrderId]);
 
     const handleRefresh = () => setRefreshKey(prev => prev + 1);
 
@@ -387,15 +415,19 @@ export default function Orders() {
                         className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-8 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 sm:py-2"
                     >
                         <option value="all">Tüm durumlar</option>
+                        {/* İş akışı statüleri */}
+                        <option value="new_order">Yeni Sipariş</option>
+                        <option value="draft">Teklif / Taslak</option>
                         <option value="measured">Ölçü Alındı</option>
                         <option value="quoted">Teklif Verildi</option>
                         <option value="approved">Onaylandı</option>
                         <option value="production">İmalatta</option>
                         <option value="installation_waiting">Montaj Bekliyor</option>
+                        <option value="installation_ready">Montaja Hazır</option>
+                        <option value="installation_planned">Montaj Planlandı</option>
+                        <option value="installing">Montajda</option>
+                        <option value="installation_completed">Montaj Tamamlandı</option>
                         <option value="completed">Tamamlandı</option>
-                        <option value="open">Açık</option>
-                        <option value="partial">Kısmi</option>
-                        <option value="paid">Ödendi</option>
                         <option value="cancelled">İptal</option>
                     </select>
                 </label>
@@ -430,7 +462,12 @@ export default function Orders() {
                                 <Link
                                     key={o.id}
                                     to={`/orders/${o.id}`}
-                                    className="block p-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition"
+                                    ref={(el) => { if (el && highlightId === o.id) el.scrollIntoView({ block: "nearest" }); }}
+                                    className={`block p-4 transition ${
+                                        highlightId === o.id
+                                            ? "bg-emerald-50 ring-2 ring-inset ring-emerald-400 dark:bg-emerald-900/20"
+                                            : "hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                                    }`}
                                 >
                                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                                         <div className="min-w-0">

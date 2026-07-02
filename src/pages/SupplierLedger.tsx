@@ -171,24 +171,53 @@ export default function SupplierLedger() {
     async function saveQuickSupplierPayment() {
         if (!companyId || !selectedSupplierId) return;
 
-        if (!quickPaymentAmount.trim()) {
-            alert("Tutar gir.");
+        const amount = parseFloat(quickPaymentAmount.replace(",", "."));
+        if (!amount || amount <= 0) {
+            alert("Geçerli bir tutar gir.");
             return;
         }
 
         try {
             setSaving(true);
 
-            const { error } = await supabase.from("supplier_payments").insert({
+            const payDateIso = new Date().toISOString();
+            const method = quickPaymentMethod || null;
+            const note = quickPaymentNote.trim();
+            const txDesc = note || `${selectedSupplierName} ödemesi`;
+
+            // 1) Cari hareket — SupplierDetail/Accounting ile aynı: bakiyeyi düşüren "payment".
+            //    Bu kayıt eksikti; Dashboard/NotificationBell/SupplierDetail bakiyesi bunu okur.
+            const { error: txError } = await supabase.from("supplier_transactions").insert({
                 company_id: companyId,
                 supplier_id: selectedSupplierId,
-                payment_date: new Date().toISOString(),
-                amount: Number(quickPaymentAmount),
-                payment_method: quickPaymentMethod || null,
-                note: quickPaymentNote || null,
+                transaction_date: payDateIso,
+                transaction_type: "payment",
+                amount,
+                description: txDesc,
+                payment_method: method,
+            });
+            if (txError) throw txError;
+
+            // 2) Denetim/görüntü kaydı (mevcut davranış korunur).
+            await supabase.from("supplier_payments").insert({
+                company_id: companyId,
+                supplier_id: selectedSupplierId,
+                payment_date: payDateIso,
+                amount,
+                payment_method: method,
+                note: note || null,
             });
 
-            if (error) throw error;
+            // 3) Gider kaydı — "Toplam Gider" senkronu; SupplierDetail/Accounting ödeme akışıyla birebir.
+            await supabase.from("expenses").insert({
+                company_id: companyId,
+                supplier_id: selectedSupplierId,
+                amount,
+                expense_date: payDateIso,
+                category: "Tedarik",
+                status: "paid",
+                note: txDesc,
+            });
 
             setQuickPaymentAmount("");
             setQuickPaymentMethod("");

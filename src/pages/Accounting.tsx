@@ -8,11 +8,14 @@ import {
     Plus,
     BarChart3,
     ArrowLeft,
-    RefreshCw
+    RefreshCw,
+    LockKeyhole,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { useAuth } from "../context/AuthContext";
+import { shareOrDownloadTextFile } from "../utils/nativeShare";
 
 
 function startOfDay(d: Date) {
@@ -140,14 +143,19 @@ const StatCard = ({
     icon: Icon,
     subtitle,
     bg,
+    onClick,
 }: {
     title: string;
     value: string;
     icon: any;
     subtitle: string;
     bg: string;
+    onClick?: () => void;
 }) => (
-    <div className="min-h-[132px] min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+    <div
+        className={`min-h-[132px] min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5 ${onClick ? "cursor-pointer hover:border-primary-300 hover:shadow-md transition-all" : ""}`}
+        onClick={onClick}
+    >
         <div className="flex h-full items-start justify-between gap-3">
             <div className="min-w-0">
                 <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">{title}</p>
@@ -195,8 +203,26 @@ const MONTHS_TR = [
     "Aralık",
 ];
 
+function ProBadge({ onUpgrade }: { onUpgrade: () => void }) {
+    return (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800/40 dark:bg-amber-900/20">
+            <LockKeyhole className="h-4 w-4 shrink-0 text-amber-600" />
+            <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Professional pakette</span>
+            <button
+                type="button"
+                onClick={onUpgrade}
+                className="ml-1 rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-black text-white hover:bg-amber-700"
+            >
+                Yükselt
+            </button>
+        </div>
+    );
+}
+
 export const Accounting = () => {
     const nav = useNavigate();
+    const { hasModule } = useAuth();
+    const isPro = hasModule("accounting");
 
     const [companyId, setCompanyId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -246,6 +272,22 @@ export const Accounting = () => {
     const [showExpenseModal, setShowExpenseModal] = useState(false);
     const [showSupplierPaymentModal, setShowSupplierPaymentModal] = useState(false);
     const [showFinancialDetails, setShowFinancialDetails] = useState(false);
+    const [showCollectionModal, setShowCollectionModal] = useState(false);
+    const [showMonthPaymentsModal, setShowMonthPaymentsModal] = useState(false);
+    const [showExpenseListModal, setShowExpenseListModal] = useState(false);
+    const [monthPaymentRows, setMonthPaymentRows] = useState<IncomeRow[]>([]);
+    const [supplierPaymentRows, setSupplierPaymentRows] = useState<any[]>([]);
+    const [orderDueDates, setOrderDueDates] = useState<Record<string, string>>({});
+    const [installerDebtTotal, setInstallerDebtTotal] = useState(0);
+    const [collectionDueDate, setCollectionDueDate] = useState("");
+    const [supplierPaymentDueDate, setSupplierPaymentDueDate] = useState("");
+
+    // Tahsilat formu state'leri
+    const [collectionOrderId, setCollectionOrderId] = useState("");
+    const [collectionAmount, setCollectionAmount] = useState("");
+    const [collectionMethod, setCollectionMethod] = useState("nakit");
+    const [collectionDate, setCollectionDate] = useState(new Date().toISOString().slice(0, 10));
+    const [collectionNote, setCollectionNote] = useState("");
 
     const [saving, setSaving] = useState(false);
 
@@ -275,8 +317,9 @@ export const Accounting = () => {
 
     const [supplierPaymentSupplierId, setSupplierPaymentSupplierId] = useState("");
     const [supplierPaymentAmount, setSupplierPaymentAmount] = useState("");
-    const [supplierPaymentMethod, setSupplierPaymentMethod] = useState("");
+    const [supplierPaymentMethod, setSupplierPaymentMethod] = useState("nakit");
     const [supplierPaymentNote, setSupplierPaymentNote] = useState("");
+    const [supplierPaymentDate, setSupplierPaymentDate] = useState(new Date().toISOString().slice(0, 10));
 
     const selectedSupplierDebt = useMemo(() => {
         if (!supplierPaymentSupplierId) return null;
@@ -387,28 +430,28 @@ export const Accounting = () => {
                     })
                     .reduce((a: number, r: any) => a + Number(r.amount ?? 0), 0);
 
-                const monthOrderPaymentSum = rows
-                    .filter((r: any) => {
-                        const d = r.income_date ? new Date(r.income_date).toISOString() : null;
-                        return (
-                            d &&
-                            d >= fromRange &&
-                            d <= toRange &&
-                            String(r.source ?? "").toLowerCase() === "order_payment"
-                        );
-                    })
-
+                const monthPaymentList = rows.filter((r: any) => {
+                    const d = r.income_date ? new Date(r.income_date).toISOString() : null;
+                    return (
+                        d &&
+                        d >= fromRange &&
+                        d <= toRange &&
+                        String(r.source ?? "").toLowerCase() === "order_payment"
+                    );
+                });
+                const monthOrderPaymentSum = monthPaymentList
                     .reduce((a: number, r: any) => a + Number(r.amount ?? 0), 0);
 
                 setTotalIncome(monthIncomeSum);
                 setTodayCollection(dayIncomeSum);
                 setMonthOrderPayments(monthOrderPaymentSum);
+                setMonthPaymentRows(monthPaymentList as IncomeRow[]);
                 setRecentIncome((rows.slice(0, 8) as IncomeRow[]) ?? []);
             }
 
             let exp: any = await supabase
                 .from("expenses")
-                .select("amount, expense_date, status, supplier_id, category, note, due_date")
+                .select("amount, expense_date, status, supplier_id, category, note, due_date, order_id")
                 .eq("company_id", cid);
 
             if (exp.error) {
@@ -426,6 +469,14 @@ export const Accounting = () => {
 
                 const monthExpenseSum = rows
                     .filter((r: any) => {
+                        // İptal edilen siparişin gider accrual'ı (status='cancelled') Toplam Gider'e
+                        // GİRMEZ — sipariş iptalinde hayalet gider bırakmamak için. (Mevcut veride
+                        // gider 'cancelled' olmaz; yalnız iptal edilen sipariş accrual'ını dışlar.)
+                        if (String(r.status ?? "").toLowerCase() === "cancelled") return false;
+                        // Accrual esas: ödeme anında oluşan tedarikçi nakit gideri (category='Tedarik')
+                        // Toplam Gider'e DAHİL EDİLMEZ — aynı maliyet sipariş accrual'ında zaten sayıldı.
+                        // Nakit çıkış ayrıca "Tedarikçi Ödemeleri" (supplier_payments) tarafında görünür.
+                        if (String(r.category ?? "").trim().toLowerCase() === "tedarik") return false;
                         const d = r.expense_date ? new Date(r.expense_date).toISOString() : null;
                         return d && d >= fromRange && d <= toRange;
                     })
@@ -433,7 +484,13 @@ export const Accounting = () => {
 
 
                 const unpaidSum = rows
-                    .filter((r: any) => (r.status ?? "paid").toLowerCase() !== "paid")
+                    .filter((r: any) => {
+                        // Sipariş tedarikçi accrual'ı (order_id dolu) "Bekleyen Gider"e girmez:
+                        // tedarikçi borcunun ödenmiş/kalan durumu cari'de (supplier_transactions)
+                        // tutulur; accrual'ın expense.status'u güncellenmediğinden buraya katılmaz.
+                        if (r.order_id) return false;
+                        return (r.status ?? "paid").toLowerCase() !== "paid";
+                    })
                     .reduce((a: number, r: any) => a + Number(r.amount ?? 0), 0);
 
                 const soon = new Date();
@@ -622,6 +679,24 @@ export const Accounting = () => {
                 setCustomerReceivableTotal(nextCustomerLedgers.reduce((sum, x) => sum + x.balance, 0));
             }
 
+            // Vade tarihleri — kolon henüz yoksa sessizce geç (migration öncesi uyumluluk)
+            try {
+                const dueRes = await supabase
+                    .from("orders")
+                    .select("id, payment_due_date")
+                    .eq("company_id", cid)
+                    .not("payment_due_date", "is", null);
+                if (!dueRes.error) {
+                    const map: Record<string, string> = {};
+                    (dueRes.data ?? []).forEach((r: any) => {
+                        if (r.payment_due_date) map[r.id] = r.payment_due_date;
+                    });
+                    setOrderDueDates(map);
+                }
+            } catch {
+                // payment_due_date kolonu yok — vade özelliği migration sonrası aktifleşir
+            }
+
             const employeeRes = await supabase
                 .from("employees")
                 .select("id, full_name, salary_amount, is_active")
@@ -686,25 +761,19 @@ export const Accounting = () => {
                 setRecentSupplierPayments((supplierPaymentsRes.data ?? []) as SupplierPaymentRow[]);
             }
 
-            const supplierExpenseQuery = await supabase
-                .from("expenses")
-                .select("amount, status, supplier_id")
+            // Tedarikçi borç/ödeme hesabı: supplier_transactions tablosundan
+            // (sipariş borçları debt, ödemeler credit olarak aynı tabloda tutuluyor)
+            const supplierTxQuery = await supabase
+                .from("supplier_transactions")
+                .select("id, supplier_id, transaction_type, amount, transaction_date, description, payment_method")
                 .eq("company_id", cid)
-                .not("supplier_id", "is", null);
+                .order("transaction_date", { ascending: false });
 
-            const supplierPaymentQuery = await supabase
-                .from("supplier_payments")
-                .select("amount, supplier_id")
-                .eq("company_id", cid);
-
-            if (supplierExpenseQuery.error) {
-                console.error("supplier expenses fetch error:", supplierExpenseQuery.error);
+            if (supplierTxQuery.error) {
+                console.warn("supplier_transactions fetch error:", supplierTxQuery.error.message);
                 setSupplierDebts([]);
                 setSupplierDebtTotal(0);
-            } else if (supplierPaymentQuery.error) {
-                console.error("supplier payments fetch error:", supplierPaymentQuery.error);
-                setSupplierDebts([]);
-                setSupplierDebtTotal(0);
+                setSupplierPaymentRows([]);
             } else {
                 const supplierNameMap: Record<string, string> = {};
                 (sup.data ?? []).forEach((s: any) => {
@@ -716,13 +785,9 @@ export const Accounting = () => {
                     { name: string; totalDebt: number; totalPaid: number; supplier_id: string }
                 > = {};
 
-                (supplierExpenseQuery.data ?? []).forEach((r: any) => {
-                    const status = String(r.status ?? "paid").toLowerCase();
-                    if (status === "paid") return;
+                (supplierTxQuery.data ?? []).forEach((r: any) => {
                     if (!r.supplier_id) return;
-
                     const key = String(r.supplier_id);
-
                     if (!debtMap[key]) {
                         debtMap[key] = {
                             supplier_id: key,
@@ -731,25 +796,9 @@ export const Accounting = () => {
                             totalPaid: 0,
                         };
                     }
-
-                    debtMap[key].totalDebt += Number(r.amount ?? 0);
-                });
-
-                (supplierPaymentQuery.data ?? []).forEach((r: any) => {
-                    if (!r.supplier_id) return;
-
-                    const key = String(r.supplier_id);
-
-                    if (!debtMap[key]) {
-                        debtMap[key] = {
-                            supplier_id: key,
-                            name: supplierNameMap[key] || "Tedarikçi",
-                            totalDebt: 0,
-                            totalPaid: 0,
-                        };
-                    }
-
-                    debtMap[key].totalPaid += Number(r.amount ?? 0);
+                    const amt = Number(r.amount ?? 0);
+                    if (r.transaction_type === "debt") debtMap[key].totalDebt += amt;
+                    else if (r.transaction_type === "payment" || r.transaction_type === "cancel" || r.transaction_type === "credit") debtMap[key].totalPaid += amt;
                 });
 
                 const debtRows: SupplierDebtRow[] = Object.values(debtMap)
@@ -765,6 +814,35 @@ export const Accounting = () => {
 
                 setSupplierDebts(debtRows);
                 setSupplierDebtTotal(debtRows.reduce((sum, x) => sum + x.remaining, 0));
+
+                // Tedarikçi ödemeleri listesi (Toplam Gider modalı için)
+                setSupplierPaymentRows(
+                    (supplierTxQuery.data ?? []).filter(
+                        (r: any) => r.transaction_type === "payment" || r.transaction_type === "credit"
+                    )
+                );
+            }
+
+            // Montajcı borcu: tamamlanan işlerin hakedişi − montajcıya yapılan ödemeler
+            // (tablolar/kolonlar henüz yoksa sessizce geçer)
+            try {
+                const [jobsRes, instTxRes] = await Promise.all([
+                    supabase.from("installation_jobs")
+                        .select("installer_fee, status")
+                        .eq("company_id", cid)
+                        .eq("status", "completed"),
+                    supabase.from("installer_transactions")
+                        .select("transaction_type, amount")
+                        .eq("company_id", cid),
+                ]);
+                if (!jobsRes.error) {
+                    const earned = (jobsRes.data ?? []).reduce((a: number, j: any) => a + Number(j.installer_fee ?? 0), 0);
+                    const paidNet = instTxRes.error ? 0 : (instTxRes.data ?? []).reduce(
+                        (a: number, t: any) => a + (t.transaction_type === "payment" ? Number(t.amount ?? 0) : -Number(t.amount ?? 0)), 0);
+                    setInstallerDebtTotal(Math.max(Math.round((earned - paidNet) * 100) / 100, 0));
+                }
+            } catch {
+                // montajcı cari migration'ı henüz çalıştırılmamış
             }
         } finally {
             setLoading(false);
@@ -813,13 +891,14 @@ export const Accounting = () => {
         });
 
 
+        const filename = `muhasebe_raporu_${startDate}_ile_${endDate}.csv`;
         const content = [headers, ...rows].map(e => e.join(";")).join("\n");
-        const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `muhasebe_raporu_${startDate}_ile_${endDate}.csv`);
-        link.click();
+        await shareOrDownloadTextFile({
+            filename,
+            mimeType: "text/csv;charset=utf-8;",
+            text: `\uFEFF${content}`,
+            title: "Muhasebe raporu",
+        });
     }
 
 
@@ -845,6 +924,12 @@ export const Accounting = () => {
         });
 
         (expenses || []).forEach(it => {
+            // İptal edilen siparişin gider accrual'ı (status='cancelled') sayılmaz — kart
+            // (monthExpenseSum) ile birebir aynı: iptal hayalet gider bırakmasın.
+            if (String(it.status ?? "").toLowerCase() === "cancelled") return;
+            // Accrual esas: tedarikçi nakit ödeme gideri (category='Tedarik') Toplam Gider'e girmez;
+            // nakit çıkış zaten ayrı "Tedarikçi Ödemeleri" kolonunda (supplier_payments) gösterilir.
+            if (String(it.category ?? "").trim().toLowerCase() === "tedarik") return;
             const key = getMonthKey(it.expense_date);
             if (!summary[key]) summary[key] = { income: 0, expense: 0, staff: 0, supplier: 0 };
             const amount = Number(it.amount || 0);
@@ -877,13 +962,14 @@ export const Accounting = () => {
             ];
         });
 
+        const filename = `finansal_ozet_${new Date().toISOString().slice(0, 10)}.csv`;
         const content = [headers, ...rows].map(e => e.join(";")).join("\n");
-        const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `finansal_ozet_${new Date().toISOString().slice(0,10)}.csv`);
-        link.click();
+        await shareOrDownloadTextFile({
+            filename,
+            mimeType: "text/csv;charset=utf-8;",
+            text: `\uFEFF${content}`,
+            title: "Finansal özet",
+        });
     }
 
 
@@ -1106,49 +1192,172 @@ export const Accounting = () => {
         }
     }
 
+    async function saveCollection() {
+        if (!companyId) return;
+        if (!collectionOrderId) { alert("Sipariş seç."); return; }
+        const amount = Number(collectionAmount);
+        if (!amount || amount <= 0) { alert("Geçerli bir tutar gir."); return; }
+
+        const order = orderIncomeOptions.find((o) => o.id === collectionOrderId);
+        if (!order) { alert("Sipariş bulunamadı."); return; }
+
+        const total = Number(order.total_amount ?? 0);
+        const paid = Number(order.paid_amount ?? 0);
+        const remaining = order.remaining_amount != null
+            ? Number(order.remaining_amount)
+            : Math.max(total - paid, 0);
+
+        if (amount > remaining + 0.01) {
+            alert(`Bu siparişin kalan borcu ${formatTL(remaining)}. Daha yüksek tahsilat giremezsiniz.`);
+            return;
+        }
+
+        try {
+            setSaving(true);
+            const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
+            const customerName = customer?.name || "Müşteri";
+            const collDateIso = new Date(collectionDate + "T12:00:00").toISOString();
+            const newPaid = paid + amount;
+            const newRemaining = Math.max(remaining - amount, 0);
+
+            // 1. Siparişi güncelle
+            await supabase.from("orders").update({
+                paid_amount: newPaid,
+                remaining_amount: newRemaining,
+            }).eq("id", collectionOrderId).eq("company_id", companyId);
+
+            // Kalan tutar için vade tarihi (kolon yoksa sessizce geçer)
+            if (newRemaining > 0 && collectionDueDate) {
+                await supabase.from("orders").update({ payment_due_date: collectionDueDate })
+                    .eq("id", collectionOrderId).eq("company_id", companyId);
+            } else if (newRemaining <= 0) {
+                await supabase.from("orders").update({ payment_due_date: null })
+                    .eq("id", collectionOrderId).eq("company_id", companyId).then(() => {}, () => {});
+            }
+
+            // 2. income tablosuna gelir kaydı
+            const desc = `${customerName} - Sipariş tahsilatı${collectionNote ? ` (${collectionNote})` : ""}`;
+            await supabase.from("income").insert({
+                company_id: companyId,
+                amount,
+                income_date: collDateIso,
+                payment_method: collectionMethod,
+                description: desc,
+                source: "order_payment",
+                order_id: collectionOrderId,
+            });
+
+            setCollectionOrderId("");
+            setCollectionAmount("");
+            setCollectionMethod("nakit");
+            setCollectionNote("");
+            setCollectionDueDate("");
+            setCollectionDate(new Date().toISOString().slice(0, 10));
+            await loadData();
+        } catch (e: any) {
+            alert(e?.message ?? "Tahsilat kaydedilemedi.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
     async function saveSupplierPayment() {
         if (!companyId) return;
         if (!supplierPaymentSupplierId) {
             alert("Tedarikçi seç.");
             return;
         }
-        if (!supplierPaymentAmount.trim()) {
-            alert("Tutar gir.");
+        const amount = Number(supplierPaymentAmount);
+        if (!amount || amount <= 0) {
+            alert("Geçerli bir tutar gir.");
+            return;
+        }
+
+        // Bakiyeden fazla ödeme kontrolü
+        if (selectedSupplierDebt && selectedSupplierDebt.remaining > 0 && amount > selectedSupplierDebt.remaining) {
+            alert(`Bu tedarikçinin kalan borcu ${formatTL(selectedSupplierDebt.remaining)}. Daha yüksek ödeme giremezsiniz.`);
             return;
         }
 
         try {
             setSaving(true);
 
-            const amount = Number(supplierPaymentAmount);
-            const nowIso = new Date().toISOString();
             const supplierName =
                 suppliers.find((s) => s.id === supplierPaymentSupplierId)?.name || "Tedarikçi";
+            const payDateIso = new Date(supplierPaymentDate + "T12:00:00").toISOString();
 
-            const { error } = await supabase.from("supplier_payments").insert({
+            // 1. supplier_transactions — SupplierDetail ile aynı sistem, "payment" türü
+            const txDesc = `${supplierName} ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`;
+            const { error: txError } = await supabase.from("supplier_transactions").insert({
                 company_id: companyId,
                 supplier_id: supplierPaymentSupplierId,
-                payment_date: nowIso,
+                transaction_date: payDateIso,
+                transaction_type: "payment",
+                amount,
+                description: txDesc,
+                payment_method: supplierPaymentMethod || null,
+            }).select("id").single();
+            if (txError) throw txError;
+
+            // Kalan borç için vade tarihi — en yeni açık borç kaydına işle (kolon yoksa sessizce geçer)
+            if (supplierPaymentDueDate) {
+                try {
+                    const { data: lastDebt } = await supabase
+                        .from("supplier_transactions")
+                        .select("id")
+                        .eq("company_id", companyId)
+                        .eq("supplier_id", supplierPaymentSupplierId)
+                        .eq("transaction_type", "debt")
+                        .order("transaction_date", { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                    if (lastDebt?.id) {
+                        await supabase.from("supplier_transactions")
+                            .update({ due_date: supplierPaymentDueDate })
+                            .eq("id", lastDebt.id);
+                    }
+                } catch {
+                    // due_date kolonu yok — migration sonrası aktifleşir
+                }
+            }
+
+            // 2. supplier_payments — muhasebe paneli için yedek kayıt
+            await supabase.from("supplier_payments").insert({
+                company_id: companyId,
+                supplier_id: supplierPaymentSupplierId,
+                payment_date: payDateIso,
                 amount,
                 payment_method: supplierPaymentMethod || null,
                 note: supplierPaymentNote || null,
             });
 
-            if (error) throw error;
+            // 3. Gider kaydı — "Toplam Gider" kartı bu tabloyu okur
+            await supabase.from("expenses").insert({
+                company_id: companyId,
+                supplier_id: supplierPaymentSupplierId,
+                amount,
+                expense_date: payDateIso,
+                category: "Tedarik",
+                status: "paid",
+                note: txDesc,
+            });
 
+            // 4. Genel muhasebe hareket kaydı
             await insertTransaction({
                 company_id: companyId,
-                tx_date: nowIso,
+                tx_date: payDateIso,
                 type: "supplier_payment",
                 direction: "out",
                 amount,
-                description: `${supplierName} ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`,
+                description: txDesc,
             });
 
             setSupplierPaymentSupplierId("");
             setSupplierPaymentAmount("");
-            setSupplierPaymentMethod("");
+            setSupplierPaymentMethod("nakit");
             setSupplierPaymentNote("");
+            setSupplierPaymentDueDate("");
+            setSupplierPaymentDate(new Date().toISOString().slice(0, 10));
             setShowSupplierPaymentModal(false);
 
             await loadData();
@@ -1210,8 +1419,9 @@ export const Accounting = () => {
                     {err ? <p className="mt-2 text-sm text-red-600 animate-pulse">⚠️ {err}</p> : null}
                 </div>
 
+                {isPro ? (
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                    {/* Tarih Aralığı Kontrolleri */}
+                    {/* Tarih Aralığı Kontrolleri — Pro */}
                     <div className="flex flex-col xs:flex-row items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-700">
                         <div className="flex items-center gap-1.5 px-3">
                             <input
@@ -1237,14 +1447,14 @@ export const Accounting = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <button 
+                        <button
                             onClick={handleExportSummary}
                             className="flex-1 sm:flex-none px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-blue-700 shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
                         >
                             <BarChart3 className="w-4 h-4" />
                             Özet
                         </button>
-                        <button 
+                        <button
                             onClick={handleExportReport}
                             className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:opacity-90 active:scale-95 transition-all"
                         >
@@ -1253,23 +1463,30 @@ export const Accounting = () => {
                         </button>
                     </div>
                 </div>
+                ) : (
+                <ProBadge onUpgrade={() => window.open("https://wa.me/905308427870?text=" + encodeURIComponent("Merhaba, PerdePRO kullanıcısıyım. Muhasebe & Finans modülü için Professional paketine geçmek istiyorum."), "_blank", "noreferrer")} />
+                )}
             </div>
 
             {/* Hızlı İşlem Butonları */}
             <div className="flex flex-wrap items-center gap-3 mt-4">
                 <button
-                    onClick={() => setShowIncomeModal(true)}
-                    className="flex-1 sm:flex-none px-5 py-2.5 bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
+                    onClick={() => isPro ? setShowIncomeModal(true) : undefined}
+                    disabled={!isPro}
+                    title={isPro ? undefined : "Professional pakette aktif olur"}
+                    className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm ${isPro ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white" : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed dark:bg-slate-800 dark:text-slate-500"}`}
                 >
                     <TrendingUp className="w-4 h-4" />
-                    + Gelir
+                    + Gelir {!isPro && <LockKeyhole className="w-3 h-3" />}
                 </button>
                 <button
-                    onClick={() => setShowExpenseModal(true)}
-                    className="flex-1 sm:flex-none px-5 py-2.5 bg-rose-500/10 text-rose-600 border border-rose-500/20 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-rose-500 hover:text-white transition-all shadow-sm"
+                    onClick={() => isPro ? setShowExpenseModal(true) : undefined}
+                    disabled={!isPro}
+                    title={isPro ? undefined : "Professional pakette aktif olur"}
+                    className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm ${isPro ? "bg-rose-500/10 text-rose-600 border border-rose-500/20 hover:bg-rose-500 hover:text-white" : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed dark:bg-slate-800 dark:text-slate-500"}`}
                 >
                     <TrendingDown className="w-4 h-4" />
-                    - Gider
+                    - Gider {!isPro && <LockKeyhole className="w-3 h-3" />}
                 </button>
                 <button
                     onClick={() => setShowSupplierPaymentModal(true)}
@@ -1281,11 +1498,16 @@ export const Accounting = () => {
             </div>
 
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard title="Bu Ay Tahsilat" value={loading ? "..." : formatTL(monthOrderPayments)} icon={Receipt} subtitle="sipariş ödemeleri" bg="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200" />
-                <StatCard title="Bekleyen Tahsilat" value={loading ? "..." : formatTL(pendingCollectionTotal)} icon={Wallet} subtitle="tahsil edilecek" bg="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" />
-                <StatCard title="Toplam Gider" value={loading ? "..." : formatTL(totalExpense)} icon={TrendingDown} subtitle="seçili dönem" bg="bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200" />
-                <StatCard title="Net Kasa" value={loading ? "..." : formatTL(net)} icon={Wallet} subtitle={healthLabel} bg="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200" />
+            {/* Muhasebe ayrımı: tahsilat / bekleyen / borçlar / ödenmiş gider / net kasa
+                Net Kasa = Tahsil edilen gelir − Ödenmiş giderler.
+                Tedarikçi ve montajcı borçları BEKLEYEN yükümlülüktür, net kasaya karışmaz. */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <StatCard title="Tahsil Edilen" value={loading ? "..." : formatTL(monthOrderPayments)} icon={Receipt} subtitle="sipariş ödemeleri (dönem)" bg="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200" onClick={() => setShowMonthPaymentsModal(true)} />
+                <StatCard title="Bekleyen Tahsilat" value={loading ? "..." : formatTL(pendingCollectionTotal)} icon={Wallet} subtitle="müşteriden alınacak" bg="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" onClick={() => setShowCollectionModal(true)} />
+                <StatCard title="Tedarikçi Borcu" value={loading ? "..." : formatTL(supplierDebtTotal)} icon={Receipt} subtitle="sipariş alış maliyetleri − ödemeler" bg="bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-200" onClick={() => setShowSupplierPaymentModal(true)} />
+                <StatCard title="Montajcı Borcu" value={loading ? "..." : formatTL(installerDebtTotal)} icon={TrendingDown} subtitle="tamamlanan iş hakedişi − ödemeler" bg="bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200" onClick={() => nav("/installers")} />
+                <StatCard title="Ödenmiş Gider" value={loading ? "..." : formatTL(totalExpense)} icon={TrendingDown} subtitle="tedarikçi + montajcı + genel" bg="bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-200" onClick={() => setShowExpenseListModal(true)} />
+                <StatCard title="Net Kasa" value={loading ? "..." : formatTL(net)} icon={Wallet} subtitle={`tahsilat − ödenmiş gider · ${healthLabel}`} bg="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200" />
             </div>
 
             {showFinancialDetails ? (
@@ -1297,6 +1519,7 @@ export const Accounting = () => {
             </div>
             ) : null}
 
+            {isPro && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <button onClick={() => setShowFinancialDetails((value) => !value)} className="flex w-full items-center justify-between gap-3 text-left">
                     <div className="min-w-0">
@@ -1314,6 +1537,7 @@ export const Accounting = () => {
                     </div>
                 ) : null}
             </div>
+            )}
 
             <div className="hidden">
                 <StatCard
@@ -1889,8 +2113,8 @@ export const Accounting = () => {
             ) : null}
 
             {showIncomeModal && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+                    <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 pb-safe sm:pb-6 space-y-4">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">Gelir Ekle</h2>
                             <button
@@ -2331,6 +2555,286 @@ export const Accounting = () => {
                 </div>
             )}
 
+            {/* ── Bu Ay Tahsilat Modalı (müşteri ödemeleri) ── */}
+            {showMonthPaymentsModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+                    <div className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl my-8">
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
+                            <div>
+                                <h2 className="text-xl font-black text-slate-900 dark:text-white">Bu Ay Tahsilatlar</h2>
+                                <p className="text-xs text-slate-500 mt-0.5">Müşterilerden gelen sipariş ödemeleri — toplam {formatTL(monthOrderPayments)}</p>
+                            </div>
+                            <button onClick={() => setShowMonthPaymentsModal(false)} className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1 text-sm">Kapat</button>
+                        </div>
+                        <div className="px-6 py-4">
+                            {monthPaymentRows.length === 0 ? (
+                                <div className="py-8 text-center text-sm text-slate-500">Bu dönemde müşteri tahsilatı yok.</div>
+                            ) : (
+                                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Tarih</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Müşteri / Açıklama</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Sipariş No</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Yöntem</th>
+                                                <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Tutar</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {monthPaymentRows.map((r, i) => (
+                                                <tr key={r.id} className={`border-b border-slate-50 dark:border-slate-800 ${i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"}`}>
+                                                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.income_date ? new Date(r.income_date).toLocaleDateString("tr-TR") : "—"}</td>
+                                                    <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{r.description || "—"}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{r.order_id ? `#${r.order_id.slice(0, 8).toUpperCase()}` : "—"}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell capitalize">{r.payment_method || "—"}</td>
+                                                    <td className="px-4 py-3 text-right font-black text-emerald-600">{formatTL(Number(r.amount ?? 0))}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Toplam Gider Modalı (tedarikçi ödemeleri) ── */}
+            {showExpenseListModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+                    <div className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl my-8">
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
+                            <div>
+                                <h2 className="text-xl font-black text-slate-900 dark:text-white">Tedarikçi Ödemeleri</h2>
+                                <p className="text-xs text-slate-500 mt-0.5">Tedarikçilere yapılan tüm ödemeler</p>
+                            </div>
+                            <button onClick={() => setShowExpenseListModal(false)} className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1 text-sm">Kapat</button>
+                        </div>
+                        <div className="px-6 py-4">
+                            {supplierPaymentRows.length === 0 ? (
+                                <div className="py-8 text-center text-sm text-slate-500">Tedarikçi ödemesi yok.</div>
+                            ) : (
+                                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Tarih</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Tedarikçi</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Yöntem</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Not</th>
+                                                <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Tutar</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {supplierPaymentRows.map((r: any, i: number) => (
+                                                <tr key={r.id} className={`border-b border-slate-50 dark:border-slate-800 ${i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"}`}>
+                                                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.transaction_date ? new Date(r.transaction_date).toLocaleDateString("tr-TR") : "—"}</td>
+                                                    <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{getSupplierName(r.supplier_id)}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell capitalize">{r.payment_method || "—"}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell max-w-[200px] truncate" title={r.description || ""}>{r.description || "—"}</td>
+                                                    <td className="px-4 py-3 text-right font-black text-rose-600">{formatTL(Number(r.amount ?? 0))}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Bekleyen Tahsilat Modalı ── */}
+            {showCollectionModal && (() => {
+                const todayStr = new Date().toISOString().slice(0, 10);
+                const pendingOrders = orderIncomeOptions
+                    .filter((o) => {
+                        const total = Number(o.total_amount ?? 0);
+                        const paid = Number(o.paid_amount ?? 0);
+                        const remaining = o.remaining_amount != null ? Number(o.remaining_amount) : Math.max(total - paid, 0);
+                        return remaining > 0.01;
+                    })
+                    .sort((a, b) => {
+                        // Vadesi olanlar önce, vade tarihine göre artan
+                        const da = orderDueDates[a.id] || "9999-12-31";
+                        const db = orderDueDates[b.id] || "9999-12-31";
+                        return da.localeCompare(db);
+                    });
+
+                const selectedCollOrder = collectionOrderId ? orderIncomeOptions.find((o) => o.id === collectionOrderId) : null;
+                const selectedCollCustomer = selectedCollOrder ? (Array.isArray(selectedCollOrder.customer) ? selectedCollOrder.customer[0] : selectedCollOrder.customer) : null;
+                const selectedCollTotal = Number(selectedCollOrder?.total_amount ?? 0);
+                const selectedCollPaid = Number(selectedCollOrder?.paid_amount ?? 0);
+                const selectedCollRemaining = selectedCollOrder?.remaining_amount != null
+                    ? Number(selectedCollOrder.remaining_amount)
+                    : Math.max(selectedCollTotal - selectedCollPaid, 0);
+                const collAmountNum = Number(collectionAmount || 0);
+                const collAfterPay = selectedCollRemaining - collAmountNum;
+
+                return (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+                    <div className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl my-8">
+                        {/* Başlık */}
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
+                            <h2 className="text-xl font-black text-slate-900 dark:text-white">Bekleyen Tahsilatlar</h2>
+                            <button onClick={() => { setShowCollectionModal(false); setCollectionOrderId(""); setCollectionAmount(""); }} className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1 text-sm">Kapat</button>
+                        </div>
+
+                        {/* Özet satırı */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 py-4 border-b border-slate-100 dark:border-slate-800">
+                            <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 p-3 text-center">
+                                <div className="text-[10px] font-bold uppercase text-amber-600">Toplam Bekleyen</div>
+                                <div className="mt-1 text-lg font-black text-amber-800 dark:text-amber-200">{formatTL(pendingCollectionTotal)}</div>
+                            </div>
+                            <div className="rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3 text-center">
+                                <div className="text-[10px] font-bold uppercase text-slate-500">Borçlu Müşteri</div>
+                                <div className="mt-1 text-lg font-black text-slate-800 dark:text-slate-200">{pendingOrders.length} sipariş</div>
+                            </div>
+                            <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 p-3 text-center">
+                                <div className="text-[10px] font-bold uppercase text-emerald-600">Bugün Tahsil</div>
+                                <div className="mt-1 text-lg font-black text-emerald-800 dark:text-emerald-200">{formatTL(todayCollection)}</div>
+                            </div>
+                            <div className="rounded-xl bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900/40 p-3 text-center">
+                                <div className="text-[10px] font-bold uppercase text-green-600">Bu Ay Tahsil</div>
+                                <div className="mt-1 text-lg font-black text-green-800 dark:text-green-200">{formatTL(monthOrderPayments)}</div>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-4 space-y-4">
+                            {/* Tahsilat formu — sipariş seçilince genişle */}
+                            {collectionOrderId && selectedCollOrder && (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/10 p-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="font-black text-amber-900 dark:text-amber-100">Tahsilat Yap</h3>
+                                        <button onClick={() => { setCollectionOrderId(""); setCollectionAmount(""); }} className="text-slate-400 hover:text-slate-600">✕</button>
+                                    </div>
+                                    <div className="text-sm text-slate-700 dark:text-slate-300 font-medium">
+                                        {selectedCollCustomer?.name || "Müşteri"} — Sipariş #{collectionOrderId.slice(0, 8).toUpperCase()}
+                                    </div>
+                                    {/* Bakiye özeti */}
+                                    <div className="grid grid-cols-3 gap-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3">
+                                        <div className="text-center">
+                                            <div className="text-[10px] font-bold uppercase text-slate-500">Sipariş Toplamı</div>
+                                            <div className="mt-1 text-sm font-black text-slate-700 dark:text-slate-300">{formatTL(selectedCollTotal)}</div>
+                                        </div>
+                                        <div className="text-center">
+                                            <div className="text-[10px] font-bold uppercase text-emerald-600">Ödenen</div>
+                                            <div className="mt-1 text-sm font-black text-emerald-700 dark:text-emerald-300">{formatTL(selectedCollPaid)}</div>
+                                        </div>
+                                        <div className="text-center">
+                                            <div className="text-[10px] font-bold uppercase text-red-600">Kalan Borç</div>
+                                            <div className="mt-1 text-sm font-black text-red-700 dark:text-red-300">{formatTL(selectedCollRemaining)}</div>
+                                        </div>
+                                    </div>
+                                    {/* Form alanları */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 mb-1">Tarih</label>
+                                            <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 mb-1">Tahsil Edilecek Tutar (₺)</label>
+                                            <input type="number" min={0} value={collectionAmount} onChange={(e) => setCollectionAmount(e.target.value)} placeholder="0.00" className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 mb-1">Ödeme Yöntemi</label>
+                                            <select value={collectionMethod} onChange={(e) => setCollectionMethod(e.target.value)} className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm">
+                                                <option value="nakit">Nakit</option>
+                                                <option value="eft">EFT</option>
+                                                <option value="havale">Havale</option>
+                                                <option value="kredi_karti">Kredi Kartı</option>
+                                                <option value="cek">Çek</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 mb-1">Not</label>
+                                            <input value={collectionNote} onChange={(e) => setCollectionNote(e.target.value)} placeholder="İsteğe bağlı" className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm" />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className="block text-xs font-bold text-slate-500 mb-1">Kalan tutar için vade tarihi (opsiyonel)</label>
+                                            <input type="date" value={collectionDueDate} onChange={(e) => setCollectionDueDate(e.target.value)} className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm" />
+                                            <p className="mt-1 text-[10px] text-slate-400">Kısmi ödeme yapıldıysa kalan borcun ne zaman tahsil edileceğini belirler.</p>
+                                        </div>
+                                    </div>
+                                    {/* Canlı hesaplama */}
+                                    {collectionAmount && collAmountNum > 0 && (
+                                        <div className={`rounded-lg px-4 py-2 text-sm font-bold ${collAfterPay < -0.01 ? "bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/30 dark:text-red-300" : "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300"}`}>
+                                            {collAfterPay < -0.01
+                                                ? `⚠ Kalan borçtan (${formatTL(selectedCollRemaining)}) fazla girilemez!`
+                                                : `Tahsilat sonrası kalan: ${formatTL(Math.max(collAfterPay, 0))}`
+                                            }
+                                        </div>
+                                    )}
+                                    <button onClick={saveCollection} disabled={saving} className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60">
+                                        {saving ? "Kaydediliyor..." : "Tahsilatı Kaydet"}
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Sipariş listesi */}
+                            {pendingOrders.length === 0 ? (
+                                <div className="py-8 text-center text-sm text-slate-500">Bekleyen tahsilat yok.</div>
+                            ) : (
+                                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Müşteri</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Tel</th>
+                                                <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Toplam</th>
+                                                <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Ödenen</th>
+                                                <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Kalan</th>
+                                                <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500 hidden sm:table-cell">Vade</th>
+                                                <th className="px-4 py-3"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {pendingOrders.map((o, i) => {
+                                                const cust = Array.isArray(o.customer) ? o.customer[0] : o.customer;
+                                                const tot = Number(o.total_amount ?? 0);
+                                                const pd = Number(o.paid_amount ?? 0);
+                                                const rem = o.remaining_amount != null ? Number(o.remaining_amount) : Math.max(tot - pd, 0);
+                                                const isSelected = collectionOrderId === o.id;
+                                                const due = orderDueDates[o.id];
+                                                const isOverdue = due ? due < todayStr : false;
+                                                return (
+                                                    <tr key={o.id} className={`border-b border-slate-50 dark:border-slate-800 ${isSelected ? "bg-amber-50 dark:bg-amber-950/10" : i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"}`}>
+                                                        <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{cust?.name || "—"}</td>
+                                                        <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{cust?.phone || "—"}</td>
+                                                        <td className="px-4 py-3 text-right text-slate-700 dark:text-slate-300">{formatTL(tot)}</td>
+                                                        <td className="px-4 py-3 text-right text-emerald-600 font-bold">{formatTL(pd)}</td>
+                                                        <td className="px-4 py-3 text-right text-red-600 font-black">{formatTL(rem)}</td>
+                                                        <td className="px-4 py-3 hidden sm:table-cell">
+                                                            {due ? (
+                                                                <span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${isOverdue ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300" : due === todayStr ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
+                                                                    {isOverdue ? "⚠ " : ""}{new Date(due + "T12:00:00").toLocaleDateString("tr-TR")}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-slate-400 text-xs">—</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-right">
+                                                            <button
+                                                                onClick={() => { setCollectionOrderId(o.id); setCollectionAmount(""); }}
+                                                                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-black text-white hover:bg-emerald-700"
+                                                            >
+                                                                Tahsilat Yap
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+                );
+            })()}
+
             {showSupplierPaymentModal && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
                     <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
@@ -2346,6 +2850,7 @@ export const Accounting = () => {
                             </button>
                         </div>
 
+                        {/* Tedarikçi seç */}
                         <div>
                             <label className="block text-sm font-medium mb-1">Tedarikçi</label>
                             <select
@@ -2362,24 +2867,84 @@ export const Accounting = () => {
                             </select>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Tutar</label>
-                            <input
-                                value={supplierPaymentAmount}
-                                onChange={(e) => setSupplierPaymentAmount(e.target.value)}
-                                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="0"
-                            />
+                        {/* Bakiye özeti — tedarikçi seçilince göster */}
+                        {selectedSupplierDebt && supplierPaymentSupplierId && (
+                            <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-100 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 p-3">
+                                <div className="text-center">
+                                    <div className="text-[10px] font-bold uppercase text-amber-600 dark:text-amber-400">Toplam Borç</div>
+                                    <div className="mt-1 text-sm font-black text-amber-700 dark:text-amber-300">{formatTL(selectedSupplierDebt.totalDebt)}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-[10px] font-bold uppercase text-emerald-600 dark:text-emerald-400">Ödenen</div>
+                                    <div className="mt-1 text-sm font-black text-emerald-700 dark:text-emerald-300">{formatTL(selectedSupplierDebt.totalPaid)}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-[10px] font-bold uppercase text-red-600 dark:text-red-400">Kalan Bakiye</div>
+                                    <div className="mt-1 text-sm font-black text-red-700 dark:text-red-300">{formatTL(selectedSupplierDebt.remaining)}</div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tarih + Tutar */}
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Tarih</label>
+                                <input
+                                    type="date"
+                                    value={supplierPaymentDate}
+                                    onChange={(e) => setSupplierPaymentDate(e.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Tutar (₺)</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={supplierPaymentAmount}
+                                    onChange={(e) => setSupplierPaymentAmount(e.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                                    placeholder="0.00"
+                                />
+                            </div>
                         </div>
 
+                        {/* Canlı hesaplama */}
+                        {supplierPaymentAmount.trim() && Number(supplierPaymentAmount) > 0 && selectedSupplierDebt && (
+                            <div className={`rounded-lg px-4 py-2 text-sm font-bold ${selectedSupplierRemainingAfterPayment < 0 ? "bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/30 dark:text-red-300" : "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300"}`}>
+                                {selectedSupplierRemainingAfterPayment < 0
+                                    ? `⚠ Ödeme bakiyeyi ${formatTL(Math.abs(selectedSupplierRemainingAfterPayment))} aşıyor!`
+                                    : `Ödeme sonrası kalan: ${formatTL(selectedSupplierRemainingAfterPayment)}`
+                                }
+                            </div>
+                        )}
+
+                        {/* Kalan borç vadesi */}
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Kalan borç için vade tarihi (opsiyonel)</label>
+                            <input
+                                type="date"
+                                value={supplierPaymentDueDate}
+                                onChange={(e) => setSupplierPaymentDueDate(e.target.value)}
+                                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                            />
+                            <p className="mt-1 text-[10px] text-slate-400">Kısmi ödeme yapılıyorsa kalan borcun ne zaman ödeneceğini belirler.</p>
+                        </div>
+
+                        {/* Ödeme yöntemi + Not */}
                         <div>
                             <label className="block text-sm font-medium mb-1">Ödeme Yöntemi</label>
-                            <input
+                            <select
                                 value={supplierPaymentMethod}
                                 onChange={(e) => setSupplierPaymentMethod(e.target.value)}
                                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="Nakit / Havale / Kart"
-                            />
+                            >
+                                <option value="nakit">Nakit</option>
+                                <option value="eft">EFT</option>
+                                <option value="havale">Havale</option>
+                                <option value="kredi_karti">Kredi Kartı</option>
+                                <option value="cek">Çek</option>
+                            </select>
                         </div>
 
                         <div>
@@ -2387,7 +2952,7 @@ export const Accounting = () => {
                             <textarea
                                 value={supplierPaymentNote}
                                 onChange={(e) => setSupplierPaymentNote(e.target.value)}
-                                rows={3}
+                                rows={2}
                                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
                                 placeholder="İsteğe bağlı not"
                             />
