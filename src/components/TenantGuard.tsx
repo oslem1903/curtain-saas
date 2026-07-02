@@ -15,7 +15,14 @@ export default function TenantGuard({
     const location = useLocation();
 
     if (status === "loading") {
-        return <div style={{ padding: 16 }}>Giriş ve firma yetkileri kontrol ediliyor... Mobil fix 2026-05-11-2</div>;
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+                <div className="text-center">
+                    <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary-600" />
+                    <p className="text-sm font-medium text-slate-500">Lisans ve yetkiler kontrol ediliyor...</p>
+                </div>
+            </div>
+        );
     }
 
     if (status === "unauthenticated") {

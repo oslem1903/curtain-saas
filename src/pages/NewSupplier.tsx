@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 
@@ -9,10 +9,15 @@ async function getContext() {
 export default function NewSupplier() {
     const nav = useNavigate();
 
-    const [name, setName] = useState("");
-    const [phone, setPhone] = useState("");
-    const [email, setEmail] = useState("");
-    const [address, setAddress] = useState("");
+    const [name, setName] = useState(() => localStorage.getItem("draft_supplier_name") || "");
+    const [phone, setPhone] = useState(() => localStorage.getItem("draft_supplier_phone") || "");
+    const [email, setEmail] = useState(() => localStorage.getItem("draft_supplier_email") || "");
+    const [address, setAddress] = useState(() => localStorage.getItem("draft_supplier_address") || "");
+
+    useEffect(() => { localStorage.setItem("draft_supplier_name", name); }, [name]);
+    useEffect(() => { localStorage.setItem("draft_supplier_phone", phone); }, [phone]);
+    useEffect(() => { localStorage.setItem("draft_supplier_email", email); }, [email]);
+    useEffect(() => { localStorage.setItem("draft_supplier_address", address); }, [address]);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
 
@@ -32,6 +37,11 @@ export default function NewSupplier() {
             });
 
             if (error) throw error;
+
+            localStorage.removeItem("draft_supplier_name");
+            localStorage.removeItem("draft_supplier_phone");
+            localStorage.removeItem("draft_supplier_email");
+            localStorage.removeItem("draft_supplier_address");
 
             nav("/suppliers");
         } catch (e: any) {

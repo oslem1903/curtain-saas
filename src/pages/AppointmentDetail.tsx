@@ -3,6 +3,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import {
+    cancelReminderNotification,
+    getNotificationSettings,
+    scheduleReminderNotification,
+    type ReminderTaskType,
+} from "../utils/localNotifications";
+import {
     AlertCircle,
     ArrowLeft,
     Calendar,
@@ -10,7 +16,6 @@ import {
     ClipboardList,
     Clock,
     Edit3,
-    ImagePlus,
     MapPin,
     Phone,
     Save,
@@ -31,6 +36,7 @@ type AppointmentRow = {
     measurement_notes: string | null;
     assigned_to: string | null;
     assigned_user_id?: string | null;
+    reminder_offset?: string | null;
     customer?: { name: string | null; phone: string | null } | Array<{ name: string | null; phone: string | null }> | null;
 };
 
@@ -45,6 +51,12 @@ function roleLabel(role: string) {
     if (role === "installer" || role === "measurement") return "Montaj Personeli";
     if (role === "accountant") return "Muhasebe";
     return "Personel";
+}
+
+function taskTypeFromAppointment(type?: string | null): ReminderTaskType {
+    if (type === "measurement") return "measurement";
+    if (type === "installation") return "installation";
+    return "other";
 }
 
 export default function AppointmentDetail() {
@@ -145,13 +157,13 @@ export default function AppointmentDetail() {
                         const profileById = new Map((profiles ?? []).map((profile) => [profile.user_id, profile]));
                         const staffRows = employeeRows.length > 0
                             ? employeeRows.map((employee: any) => {
-                                  const profile = profileById.get(employee.user_id);
-                                  return {
-                                      user_id: employee.user_id,
-                                      full_name: employee.full_name || profile?.full_name || "İsimsiz",
-                                      role: profile?.role || employee.target_role || "installer",
-                                  };
-                              })
+                                const profile = profileById.get(employee.user_id);
+                                return {
+                                    user_id: employee.user_id,
+                                    full_name: employee.full_name || profile?.full_name || "İsimsiz",
+                                    role: profile?.role || employee.target_role || "installer",
+                                };
+                            })
                             : (profiles ?? []);
 
                         setStaffList(
@@ -200,6 +212,18 @@ export default function AppointmentDetail() {
                 .eq("id", id);
 
             if (error) throw error;
+            const customerData = Array.isArray(row?.customer) ? row?.customer[0] : row?.customer;
+            await scheduleReminderNotification({
+                id: `appointment:${id}`,
+                title: row?.title || "Randevu hatırlatması",
+                customerName: customerData?.name,
+                phone: customerData?.phone,
+                address: editAddress || row?.address,
+                taskType: taskTypeFromAppointment(row?.type),
+                startAt: nextStartAt,
+                reminderOffset: (row?.reminder_offset as any) || getNotificationSettings().defaultReminderOffset,
+                detailUrl: `/appointments/${id}`,
+            });
             setIsEditMode(false);
             await loadData();
         } catch (e: any) {
@@ -216,6 +240,7 @@ export default function AppointmentDetail() {
         try {
             const { error } = await supabase.from("appointments").update({ status: "cancelled" }).eq("id", id);
             if (error) throw error;
+            await cancelReminderNotification(`appointment:${id}`);
             await loadData();
         } catch (e: any) {
             alert(`Hata: ${e?.message || "Randevu iptal edilemedi."}`);
@@ -255,6 +280,7 @@ export default function AppointmentDetail() {
             alert(error.message);
             return;
         }
+        await cancelReminderNotification(`appointment:${id}`);
         nav("/route/today");
     }
 
@@ -441,25 +467,6 @@ export default function AppointmentDetail() {
                                 >
                                     <CheckCircle2 className="w-6 h-6 text-emerald-400" />
                                     Olcuyu Kaydet
-                                </button>
-
-                                <button
-                                    onClick={() =>
-                                        nav("/visual-previews", {
-                                            state: {
-                                                appointmentId: row.id,
-                                                customerId: row.customer_id,
-                                                customerName: customerData?.name,
-                                                phone: customerData?.phone,
-                                                address: isEditMode ? editAddress : row.address,
-                                                measurementNotes: mNotes,
-                                            },
-                                        })
-                                    }
-                                    className="bg-primary-600 hover:bg-primary-700 text-white px-6 py-4 rounded-2xl font-black shadow-lg shadow-primary-500/20 transition-all flex items-center justify-center gap-3"
-                                >
-                                    <ImagePlus className="w-6 h-6" />
-                                    Kartela Onizleme
                                 </button>
 
                                 <button

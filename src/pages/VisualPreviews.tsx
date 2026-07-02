@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 
+import { useAuth } from "../context/AuthContext";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 
 type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie";
@@ -339,6 +340,8 @@ function drawMountingDetails(
 export default function VisualPreviews() {
   const nav = useNavigate();
   const location = useLocation();
+  const { company } = useAuth();
+  const isSoloPackage = company?.package_code === "solo" || (company?.subscription_plan === "starter" && company?.package_code !== "starter");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const photoRef = useRef<HTMLImageElement | null>(null);
   const textureRef = useRef<HTMLImageElement | null>(null);
@@ -745,6 +748,26 @@ export default function VisualPreviews() {
     ? `${seriesCode(selectedSeries)} ${selectedSeries.model_name || ""} / ${selectedVariant.color_name || selectedVariant.variant_code || ""}`.trim()
     : "Kartela seçilmedi";
 
+  if (isSoloPackage) {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
+        <button type="button" onClick={() => nav(-1)} className="inline-flex w-fit min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+          <ArrowLeft className="h-4 w-4" />
+          Geri
+        </button>
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center gap-3 text-slate-950 dark:text-white">
+            <Eye className="h-6 w-6 text-slate-500" />
+            <h1 className="text-xl font-black">Kartela önizleme solo pakette kapalı</h1>
+          </div>
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+            Uygulama alanı seçme, sıfırlama, önizleme gösterme ve ürün fotoğraf önizleme araçları bu pakette aktif değildir.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 pb-24">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -759,7 +782,12 @@ export default function VisualPreviews() {
         </div>
 
         <button
-          onClick={() => window.location.reload()}
+          onClick={() => {
+            setErr("");
+            setSuccess("");
+            setLoading(true);
+            // Data will reload via useEffect
+          }}
           className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
         >
           <RefreshCw size={18} className={loading ? "animate-spin" : ""} />

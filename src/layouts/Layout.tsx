@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -12,7 +12,6 @@ import {
   Bell,
   CheckCircle2,
   Map as MapIcon,
-  Package,
   FileText,
   UserCog,
   Calendar,
@@ -25,7 +24,9 @@ import {
   MonitorSmartphone,
   Ruler,
   ImagePlus,
-  FilePlus2
+  FilePlus2,
+  Zap,
+  TrendingUp
 } from "lucide-react";
 
 
@@ -35,6 +36,8 @@ import { clearDemoTenantContext, getEffectiveTenantContext, supabase, setAppRead
 import { canAccess, roleLabel, type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { useAuth } from "../context/AuthContext";
+import { useSupportModal } from "../context/SupportModalContext";
+import { useImpersonation } from "../context/ImpersonationContext";
 import SupportModal from "../components/SupportModal";
 import NotificationBell from "../components/NotificationBell";
 import AppUpdateNotifier from "../components/AppUpdateNotifier";
@@ -48,15 +51,18 @@ const NavItem = ({
   icon: Icon,
   label,
   onClick,
+  state: navState,
 }: {
   to: string;
   icon: any;
   label: string;
   onClick?: () => void;
+  state?: object;
 }) => {
   return (
     <NavLink
       to={to}
+      state={navState}
       onClick={onClick}
       className={({ isActive }) =>
         cn(
@@ -146,6 +152,23 @@ function safeDate(s: string | null): Date | null {
   if (!s) return null;
   const d = new Date(s);
   return Number.isFinite(d.getTime()) ? d : null;
+}
+
+const PACKAGE_DISPLAY_NAMES: Record<string, string> = {
+  solo: "Solo Perdeci",
+  solo_perdeci: "Solo Perdeci",
+  starter: "Başlangıç",
+  trial: "Deneme",
+  pro: "Profesyonel",
+  yonetici: "Yönetici",
+  enterprise: "Kurumsal",
+  ekip: "Ekip / Kurumsal",
+  lifetime: "Ömür Boyu",
+};
+
+function packageDisplayName(code?: string | null) {
+  const key = String(code || "").toLowerCase().trim();
+  return PACKAGE_DISPLAY_NAMES[key] || (key ? key : "Başlangıç");
 }
 
 function formatTR(d: Date) {
@@ -304,8 +327,9 @@ async function getContext() {
 export const Layout = () => {
   const { effectiveRole: role, realRole, viewingRole, viewingUserId, viewingLabel, isSimulating, setViewingRoleAndUser } = useRole();
   const { hasModule, company, readOnly } = useAuth();
+  const { openModal: openSupportModal } = useSupportModal();
+  const { isImpersonating, companyName: impersonatingCompanyName, readOnly: impersonationReadOnly, endSession } = useImpersonation();
   const isDemoWriteMode = realRole === "super_admin" && isSimulating && localStorage.getItem("demo_read_only") === "false";
-  const [isSupportOpen, setIsSupportOpen] = useState(false);
   const [currentUserData, setCurrentUserData] = useState<{ userId: string, companyId: string } | null>(null);
 
   useEffect(() => {
@@ -452,7 +476,7 @@ export const Layout = () => {
     const nextReadOnly = isDemoWriteMode;
     localStorage.setItem("demo_read_only", nextReadOnly ? "true" : "false");
     setAppReadOnlyMode(nextReadOnly);
-    navigate(0);
+    // No page reload - state updated via setAppReadOnlyMode
   }
 
 
@@ -519,7 +543,7 @@ export const Layout = () => {
           return {
             kind: "order",
             id: o.id,
-            title: `Sipariş termin: ${formatTR(due)}`,
+            title: `Tahmini teslim tarihi: ${formatTR(due)}`,
             when: due,
             isOverdue,
             customerName: c?.name || undefined,
@@ -707,6 +731,8 @@ export const Layout = () => {
             <>
               <NavItem to="/super-admin/companies" icon={Building2} label="Müşteri Firmalar" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/trials" icon={ShieldAlert} label="Deneme Hesapları" onClick={closeMobileMenu} />
+              <NavItem to="/super-admin/deployment/wizard" icon={Zap} label="Deployment Wizard" onClick={closeMobileMenu} />
+              <NavItem to="/super-admin/deployment/history" icon={TrendingUp} label="Deployment Geçmişi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/mobile" icon={MonitorSmartphone} label="Mobil Uygulama Yönetimi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/support" icon={LifeBuoy} label="Destek / Hata Merkezi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/updates" icon={Megaphone} label="Güncellemeler" onClick={closeMobileMenu} />
@@ -718,13 +744,12 @@ export const Layout = () => {
             <>
               {hasModule("admin") && <NavItem to="/dashboard" icon={LayoutDashboard} label="Gösterge Paneli" onClick={closeMobileMenu} />}
               {hasModule("customers") && <NavItem to="/customers" icon={Users} label="Müşteriler" onClick={closeMobileMenu} />}
-              {hasModule("measurements") && <NavItem to="/measurements/new" icon={Ruler} label="Ölçü Al" onClick={closeMobileMenu} />}
-              {hasModule("orders") && <NavItem to="/orders/new" icon={FilePlus2} label="Teklifler" onClick={closeMobileMenu} />}
+              {hasModule("measurements") && <NavItem to="/measurements/new" icon={Ruler} label="Ölçü & Teklifler" onClick={closeMobileMenu} />}
               {hasModule("orders") && <NavItem to="/orders" icon={ShoppingCart} label="Siparişler" onClick={closeMobileMenu} />}
-              {hasModule("appointments") && <NavItem to="/route/today" icon={Calendar} label="Randevular" onClick={closeMobileMenu} />}
+              {hasModule("measurements") && <NavItem to="/appointments/new" icon={Calendar} label="Randevular" onClick={closeMobileMenu} />}
               {hasModule("suppliers") && <NavItem to="/suppliers" icon={Truck} label="Tedarikçiler" onClick={closeMobileMenu} />}
-              {(hasModule("catalogs") || hasModule("suppliers") || hasModule("orders")) && <NavItem to="/products" icon={Package} label="Ürünler" onClick={closeMobileMenu} />}
-              {hasModule("installation") && <NavItem to="/route/today" icon={MapIcon} label="Montaj Takibi" onClick={closeMobileMenu} />}
+
+              {hasModule("installation") && <NavItem to="/installations" icon={UserCog} label="Montajlar" onClick={closeMobileMenu} />}
               {hasModule("accounting") && <NavItem to="/accounting" icon={Calculator} label="Finans" onClick={closeMobileMenu} />}
               {hasModule("catalogs") && <NavItem to="/catalogs" icon={Palette} label="Kartela Yönetimi" onClick={closeMobileMenu} />}
               {hasModule("staff") && <NavItem to="/staff" icon={UserCog} label="Personel" onClick={closeMobileMenu} />}
@@ -745,20 +770,20 @@ export const Layout = () => {
           {isFieldOnlyRole && (
             <>
               <NavItem to="/field" icon={LayoutDashboard} label="Panel" onClick={closeMobileMenu} />
-              <NavItem to="/route/today" icon={MapIcon} label="Bugünün Rotası" onClick={closeMobileMenu} />
-              <NavItem to="/measurements/new" icon={Ruler} label="Ölçü Al" onClick={closeMobileMenu} />
-              <NavItem to="/orders/new" icon={FilePlus2} label="Sipariş / Teklif Oluştur" onClick={closeMobileMenu} />
-              <NavItem to="/visual-previews" icon={ImagePlus} label="Kartela Önizleme" onClick={closeMobileMenu} />
-              <NavItem to="/field/customers" icon={Users} label="Müşterilerim" onClick={closeMobileMenu} />
+              {hasModule("installation") && <NavItem to="/route/today" icon={MapIcon} label="Bugünün Rotası" onClick={closeMobileMenu} />}
+              {hasModule("measurements") && <NavItem to="/measurements/new" icon={Ruler} label="Ölçü Al" onClick={closeMobileMenu} />}
+              {hasModule("orders") && <NavItem to="/orders/new" icon={FilePlus2} label="Sipariş / Teklif Oluştur" onClick={closeMobileMenu} />}
+              {hasModule("catalogs") && <NavItem to="/visual-previews" icon={ImagePlus} label="Kartela Önizleme" onClick={closeMobileMenu} />}
+              {hasModule("customers") && <NavItem to="/field/customers" icon={Users} label="Müşterilerim" onClick={closeMobileMenu} />}
             </>
           )}
 
             {/* Support Button for customer users */}
             {role !== "super_admin" && (
             <div className="px-4 py-6 border-t border-slate-200 dark:border-slate-800 mt-auto">
-              <button 
+              <button
                 onClick={() => {
-                  setIsSupportOpen(true);
+                  openSupportModal();
                   closeMobileMenu();
                 }}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 font-bold hover:bg-blue-100 transition-all group"
@@ -773,9 +798,7 @@ export const Layout = () => {
 
       {/* Support Modal */}
       {currentUserData && (
-        <SupportModal 
-          isOpen={isSupportOpen} 
-          onClose={() => setIsSupportOpen(false)} 
+        <SupportModal
           companyId={currentUserData.companyId}
           userId={currentUserData.userId}
         />
@@ -787,7 +810,7 @@ export const Layout = () => {
 	        {role !== "super_admin" && company ? (
 	          <div className="border-b border-slate-200 bg-white/90 px-4 py-2 text-xs font-bold text-slate-600 dark:border-slate-800 dark:bg-slate-900/90 dark:text-slate-300">
 	            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-	              <span>Paket: <span className="text-slate-900 dark:text-white">{company.subscription_plan || "starter"}</span></span>
+	              <span>Paket: <span className="text-slate-900 dark:text-white">{packageDisplayName(company.package_code || company.subscription_plan)}</span></span>
 	              {company.trial_end || company.trial_ends_at ? (
 	                <span>Deneme bitiş: {formatTR(new Date(company.trial_end || company.trial_ends_at || ""))}</span>
 	              ) : null}
@@ -824,17 +847,34 @@ export const Layout = () => {
 	            </div>
 	          </div>
 	        ) : null}
+        {isImpersonating && (
+            <div className="bg-amber-600 text-white text-center py-3 px-4 shadow-md sticky top-0 z-[60] flex items-center justify-between gap-3">
+                <div className="flex-1 flex items-center justify-center gap-3">
+                    <span className="font-bold">🔐 Firma Olarak Giriş Yapılmış:</span>
+                    <span className="text-sm font-semibold">{impersonatingCompanyName}</span>
+                    {impersonationReadOnly && (
+                        <span className="text-xs bg-amber-800 px-2 py-1 rounded-full">Salt Okunur</span>
+                    )}
+                </div>
+                <button
+                    onClick={() => endSession()}
+                    className="bg-white text-amber-700 px-4 py-1.5 rounded-full text-xs font-bold shadow hover:bg-amber-50 transition shrink-0"
+                >
+                    Süper Admin'e Dön
+                </button>
+            </div>
+        )}
         {isExpiredTrial && (
             <div className="bg-red-600 text-white text-center py-2 px-4 shadow-md sticky top-0 z-[60] flex items-center justify-center gap-3">
                 <span className="font-bold">Uyarı: DENEME SÜRENİZ DOLMUŞTUR</span>
                 <span className="text-sm">Hesabınız salt-okunur (read-only) moddadır. Yeni işlem yapılamaz.</span>
-                <a 
-                  href="#" 
-                  onClick={(e) => { 
-                    e.preventDefault(); 
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
                     const msg = encodeURIComponent("Merhaba Özlem Hanım, Perde SaaS deneme sürem doldu. Lisans satın almak ve devam etmek istiyorum.");
                     window.open(`https://wa.me/905308427870?text=${msg}`, "_blank");
-                  }} 
+                  }}
                   className="bg-white text-red-700 px-3 py-1 rounded-full text-xs font-bold shadow hover:bg-red-50 transition"
                 >
                     Özlem Cihan (Satış & Destek)
@@ -1098,8 +1138,14 @@ export const Layout = () => {
           </div>
         </header>
 
-        <div className="flex-1 p-4 pb-24 pt-6 sm:pt-8 lg:p-8 max-w-7xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-
+        <div className="min-w-0 flex-1 overflow-x-clip p-4 pb-24 pt-6 sm:pt-8 lg:p-8 max-w-7xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+          {/* Deneme süresi bitmek üzere uyarısı (son 1 gün) */}
+          {!showPurchaseScreen && trialInfo && !trialInfo.isExpired && trialInfo.daysLeft != null && trialInfo.daysLeft <= 1 && (
+            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              ⏳ Deneme süreniz {trialInfo.daysLeft === 0 ? "bugün" : "yarın"} doluyor
+              {trialInfo.trialEndsAt ? ` (${formatTR(trialInfo.trialEndsAt)})` : ""}. Kesintisiz devam etmek için lisans satın alın.
+            </div>
+          )}
           {showPurchaseScreen ? <PurchaseRequiredScreen trialInfo={trialInfo} /> : <Outlet />}
         </div>
       </main>
@@ -1141,7 +1187,7 @@ export const Layout = () => {
       )}
 
       {/* MOBILE BOTTOM NAVIGATION */}
-      <nav className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-[60] shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
+      <nav className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] overflow-hidden pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-[60] shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
 
         <NavLink 
           to={isFieldOnlyRole ? "/field" : "/dashboard"}
@@ -1152,14 +1198,23 @@ export const Layout = () => {
         </NavLink>
         {role === "accountant" ? (
           <>
-            <NavLink 
+            <NavLink
               to="/accounting"
               className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
             >
               <Calculator className="w-5 h-5" />
               <span className="max-w-full truncate">Muhasebe</span>
             </NavLink>
-            <NavLink 
+            {hasModule("suppliers") && (
+              <NavLink
+                to="/suppliers"
+                className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
+              >
+                <Truck className="w-5 h-5" />
+                <span className="max-w-full truncate">Tedarikçi</span>
+              </NavLink>
+            )}
+            <NavLink
               to="/invoices"
               className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
             >
@@ -1169,51 +1224,60 @@ export const Layout = () => {
           </>
         ) : isFieldOnlyRole ? (
           <>
-            <NavLink 
-              to="/route/today"
-              className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
-            >
-              <MapIcon className="w-5 h-5" />
-              <span className="max-w-full truncate">Rota</span>
-            </NavLink>
-            <NavLink 
+            {hasModule("installation") && (
+              <NavLink
+                to="/route/today"
+                className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
+              >
+                <MapIcon className="w-5 h-5" />
+                <span className="max-w-full truncate">Rota</span>
+              </NavLink>
+            )}
+            {hasModule("measurements") && (
+              <NavLink
+                to="/measurements/new"
+                className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
+              >
+                <Ruler className="w-5 h-5" />
+                <span className="max-w-full truncate">Ölçü</span>
+              </NavLink>
+            )}
+            {hasModule("catalogs") && (
+              <NavLink
+                to="/visual-previews"
+                className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
+              >
+                <ImagePlus className="w-5 h-5" />
+                <span className="max-w-full truncate">Kartela</span>
+              </NavLink>
+            )}
+          </>
+        ) : canUseFieldWork ? (
+          <>
+            <NavLink
               to="/measurements/new"
+              state={{ fresh: true }}
               className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
             >
               <Ruler className="w-5 h-5" />
               <span className="max-w-full truncate">Ölçü</span>
             </NavLink>
-            <NavLink 
-              to="/visual-previews"
-              className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
-            >
-              <ImagePlus className="w-5 h-5" />
-              <span className="max-w-full truncate">Kartela</span>
-            </NavLink>
-          </>
-        ) : canUseFieldWork ? (
-          <>
-            <NavLink 
+            <NavLink
               to="/orders"
               className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
             >
               <ShoppingCart className="w-5 h-5" />
               <span className="max-w-full truncate">Sipariş</span>
             </NavLink>
-            <NavLink 
-              to="/route/today"
-              className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
-            >
-              <MapIcon className="w-5 h-5" />
-              <span className="max-w-full truncate">Rota</span>
-            </NavLink>
-            <NavLink 
-              to="/customers"
-              className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
-            >
-              <Users className="w-5 h-5" />
-              <span className="max-w-full truncate">Müşteri</span>
-            </NavLink>
+            {hasModule("suppliers") && (
+              <NavLink
+                to="/suppliers"
+                className={({ isActive }) => cn("min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors", isActive ? "text-primary-600" : "text-slate-500")}
+              >
+                <Truck className="w-5 h-5" />
+                <span className="max-w-full truncate">Tedarikçi</span>
+              </NavLink>
+            )}
           </>
         ) : null}
         <button 
@@ -1221,10 +1285,9 @@ export const Layout = () => {
           className="min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium text-slate-500"
         >
           <Menu className="w-5 h-5" />
-          <span className="max-w-full truncate">Menü</span>
+          <span className="max-w-full truncate">Diğer</span>
         </button>
       </nav>
     </div>
   );
 };
-

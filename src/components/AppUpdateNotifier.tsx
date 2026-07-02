@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, Loader2, RefreshCw, X } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
+import { nativePlatform } from "../utils/nativeRuntime";
 
 declare global {
     interface Window {
@@ -58,13 +59,10 @@ function isNewerVersion(remote: string, current: string) {
     return false;
 }
 
-function isAndroid() {
-    return /Android/i.test(navigator.userAgent);
-}
-
 function getDownloadUrl(update: UpdateRow | null) {
     if (!update) return "";
-    if (isAndroid()) return update.android_download_url || update.download_url || "";
+    if (nativePlatform() === "android") return update.android_download_url || update.download_url || "";
+    if (nativePlatform() === "ios") return update.download_url || "";
     return update.windows_download_url || update.download_url || "";
 }
 
@@ -93,7 +91,7 @@ export default function AppUpdateNotifier() {
                     company_id: companyId,
                     user_id: user.id,
                     app_version: CURRENT_VERSION,
-                    platform: isAndroid() ? "android" : window.curtainUpdater ? "windows" : "web",
+                    platform: nativePlatform() === "web" && window.curtainUpdater ? "windows" : nativePlatform(),
                     device_name: navigator.platform || "Bilinmeyen cihaz",
                     last_seen_at: new Date().toISOString(),
                 }, { onConflict: "id" });
@@ -232,8 +230,12 @@ export default function AppUpdateNotifier() {
                     {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                     İndir ve Kur
                 </button>
-                <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-white px-3 py-1.5 text-xs font-black text-blue-900">
-                    Yenile
+                <button
+                    type="button"
+                    onClick={() => setDismissed(true)}
+                    className="rounded-xl bg-white px-3 py-1.5 text-xs font-black text-blue-900 hover:bg-blue-100"
+                >
+                    Sonra
                 </button>
                 <button type="button" onClick={() => setDismissed(true)} className="rounded-xl p-1.5 hover:bg-blue-100" aria-label="Kapat">
                     <X className="h-4 w-4" />
