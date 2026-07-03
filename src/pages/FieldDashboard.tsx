@@ -19,6 +19,7 @@ import {
 
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
+import { useAuth } from "../context/AuthContext";
 import { roleLabel } from "../auth/roles";
 
 type TaskRow = {
@@ -68,6 +69,8 @@ function fieldRouteFilter(row: TaskRow, targetUserId: string) {
 export default function FieldDashboard() {
   const navigate = useNavigate();
   const { effectiveRole, realRole, viewingUserId } = useRole();
+  const { company } = useAuth();
+  const isSoloPackage = company?.package_code === "solo" || (company?.subscription_plan === "starter" && company?.package_code !== "starter");
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -175,7 +178,7 @@ export default function FieldDashboard() {
     { label: "Bugünün Rotası", desc: "Sıralı görevler ve harita", icon: Map, to: "/route/today" },
     { label: "Ölçü Al", desc: "Mobil ölçü ve tahmini fiyat", icon: Ruler, to: "/measurements/new" },
     { label: "Sipariş / Teklif Oluştur", desc: "Saha ölçüsünden teklif", icon: ShoppingCart, to: "/orders/new" },
-    { label: "Kartela Önizleme", desc: "Fotoğrafa ürün bindirme", icon: ImagePlus, to: "/visual-previews" },
+    ...(!isSoloPackage ? [{ label: "Kartela Önizleme", desc: "Fotoğrafa ürün bindirme", icon: ImagePlus, to: "/visual-previews" }] : []),
     { label: "Müşterilerim", desc: "Arama, telefon, adres", icon: UserRound, to: "/field/customers" },
   ];
 
@@ -258,13 +261,15 @@ export default function FieldDashboard() {
                       <Ruler className="h-4 w-4" />
                       Ölçü Al
                     </button>
-                    <button
-                      onClick={() => navigate("/visual-previews", { state: { appointmentId: task.id, customerId: customer?.id ?? null } })}
-                      className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-                    >
-                      <Camera className="h-4 w-4" />
-                      Fotoğraf / Kartela
-                    </button>
+                    {!isSoloPackage ? (
+                      <button
+                        onClick={() => navigate("/visual-previews", { state: { appointmentId: task.id, customerId: customer?.id ?? null } })}
+                        className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                      >
+                        <Camera className="h-4 w-4" />
+                        Fotoğraf / Kartela
+                      </button>
+                    ) : null}
                     {phone ? (
                       <a href={`tel:${phone}`} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-200 px-4 text-sm font-bold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300">
                         <Phone className="h-4 w-4" />

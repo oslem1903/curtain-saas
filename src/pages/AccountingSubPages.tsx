@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Download, FileText, Plus, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { shareOrDownloadTextFile } from "../utils/nativeShare";
 
 type IncomeRow = {
     id: string;
@@ -24,6 +25,7 @@ type ExpenseRow = {
     status: string | null;
     note: string | null;
     due_date?: string | null;
+    order_id?: string | null;
     document_no?: string | null;
     is_installment?: boolean | null;
     installment_count?: number | null;
@@ -67,15 +69,20 @@ function formatDate(value?: string | null) {
     return new Date(value).toLocaleDateString("tr-TR");
 }
 
-function csvDownload(filename: string, headers: string[], rows: Array<Array<string | number>>) {
-    const content = [headers, ...rows].map((row) => row.join(";")).join("\n");
-    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
+// CSV alan\u0131n\u0131 g\u00FCvenli ka\u00E7\u0131\u015Flar: ayra\u00E7 (;), t\u0131rnak veya sat\u0131r sonu i\u00E7eriyorsa t\u0131rnakla.
+function csvEscape(value: string | number): string {
+    const s = String(value ?? "");
+    return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+async function csvDownload(filename: string, headers: string[], rows: Array<Array<string | number>>) {
+    const content = [headers, ...rows].map((row) => row.map(csvEscape).join(";")).join("\r\n");
+    await shareOrDownloadTextFile({
+        filename,
+        mimeType: "text/csv;charset=utf-8;",
+        text: `\uFEFF${content}`,
+        title: filename,
+    });
 }
 
 function PageHeader({ title, subtitle, onRefresh }: { title: string; subtitle: string; onRefresh: () => void }) {
@@ -266,7 +273,7 @@ export function ExpensesPage() {
         }
         let res: any = await supabase
             .from("expenses")
-            .select("id, expense_date, amount, category, vendor, payment_method, status, note, due_date, document_no, is_installment, installment_count, is_recurring")
+            .select("id, expense_date, amount, category, vendor, payment_method, status, note, due_date, order_id, document_no, is_installment, installment_count, is_recurring")
             .eq("company_id", cid)
             .order("expense_date", { ascending: false });
         if (res.error) {
@@ -358,7 +365,8 @@ export function ExpensesPage() {
     }
 
     const total = useMemo(() => rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
-    const pending = useMemo(() => rows.filter((x) => (x.status || "paid") !== "paid").reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
+    // Sipariş tedarikçi accrual'ı (order_id dolu) "Bekleyen"e girmez — ödenme durumu cari'de tutulur.
+    const pending = useMemo(() => rows.filter((x) => !x.order_id && (x.status || "paid") !== "paid").reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
 
     return (
         <div className="mx-auto max-w-7xl space-y-5 pb-24">

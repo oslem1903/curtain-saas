@@ -1,8 +1,33 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../supabaseClient";
-import { Upload, X, Check, Loader2 } from "lucide-react";
+import { supabase, getEffectiveTenantContext } from "../supabaseClient";
+import { Upload, X, Check, Loader2, Bell, LifeBuoy, Download } from "lucide-react";
+import { exportBackupWorkbook } from "../utils/backupExport";
+
+type MyTicket = {
+    id: string;
+    title: string | null;
+    status: string | null;
+    admin_response?: string | null;
+    created_at: string | null;
+};
+
+const TICKET_STATUS_LABELS: Record<string, { label: string; cls: string }> = {
+    open: { label: "Yeni Talep", cls: "bg-blue-100 text-blue-700" },
+    in_progress: { label: "İnceleniyor", cls: "bg-amber-100 text-amber-700" },
+    waiting_user: { label: "Sizden Bilgi Bekleniyor", cls: "bg-orange-100 text-orange-700" },
+    update_ready: { label: "Güncelleme Hazır", cls: "bg-violet-100 text-violet-700" },
+    resolved: { label: "Çözüldü", cls: "bg-emerald-100 text-emerald-700" },
+    closed: { label: "Kapatıldı", cls: "bg-slate-100 text-slate-600" },
+};
 import { normalizeRole, type RoleState } from "../auth/roles";
+import {
+    ensureNotificationPermission,
+    getNotificationSettings,
+    REMINDER_OPTIONS,
+    saveNotificationSettings,
+    type ReminderOffset,
+} from "../utils/localNotifications";
 
 export const Settings = () => {
     const navigate = useNavigate();
@@ -11,6 +36,23 @@ export const Settings = () => {
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+    const [notificationSettings, setNotificationSettings] = useState(() => getNotificationSettings());
+    const [myTickets, setMyTickets] = useState<MyTicket[]>([]);
+    const [ticketsLoading, setTicketsLoading] = useState(false);
+
+    // Yedekleme / Dışa Aktarma (Sadece Admin)
+    const [expFrom, setExpFrom] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+    });
+    const [expTo, setExpTo] = useState(() => new Date().toISOString().slice(0, 10));
+    const [expCustomer, setExpCustomer] = useState("");
+    const [expSupplier, setExpSupplier] = useState("");
+    const [expInstaller, setExpInstaller] = useState("");
+    const [exporting, setExporting] = useState(false);
+    const [expCustomers, setExpCustomers] = useState<Array<{ id: string; name: string }>>([]);
+    const [expSuppliers, setExpSuppliers] = useState<Array<{ id: string; name: string }>>([]);
+    const [expInstallers, setExpInstallers] = useState<Array<{ id: string; name: string }>>([]);
 
     useEffect(() => {
         async function loadProfile() {
@@ -45,10 +87,70 @@ export const Settings = () => {
         loadProfile();
     }, []);
 
+    // Kullanıcının kendi destek talepleri — iç not (internal_note) ASLA seçilmez
+    useEffect(() => {
+        let alive = true;
+        async function loadMyTickets() {
+            setTicketsLoading(true);
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) return;
+                const ticketsRes = await supabase
+                    .from("support_tickets")
+                    .select("id, title, status, admin_response, created_at")
+                    .eq("user_id", user.id)
+                    .order("created_at", { ascending: false })
+                    .limit(20);
+                let data = ticketsRes.data;
+                const error = ticketsRes.error;
+                if (error) {
+                    // admin_response kolonu henüz yoksa onsuz dene
+                    const fb = await supabase
+                        .from("support_tickets")
+                        .select("id, title, status, created_at")
+                        .eq("user_id", user.id)
+                        .order("created_at", { ascending: false })
+                        .limit(20);
+                    data = fb.data as any;
+                }
+                if (alive) setMyTickets((data ?? []) as MyTicket[]);
+            } catch {
+                // destek tablosu yoksa bölüm boş kalır
+            } finally {
+                if (alive) setTicketsLoading(false);
+            }
+        }
+        loadMyTickets();
+        return () => { alive = false; };
+    }, []);
+
     async function handleLogout() {
         await supabase.auth.signOut();
         navigate("/login", { replace: true });
-        window.location.reload();
+    }
+
+    // Logoyu küçültüp data-URL'e çevirir (storage gerektirmeyen kalıcı yöntem)
+    function fileToResizedDataUrl(file: File, maxSize = 512): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => {
+                    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+                    const canvas = document.createElement("canvas");
+                    canvas.width = Math.round(img.width * scale);
+                    canvas.height = Math.round(img.height * scale);
+                    const ctx = canvas.getContext("2d");
+                    if (!ctx) { reject(new Error("canvas yok")); return; }
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL("image/png"));
+                };
+                img.onerror = () => reject(new Error("görsel okunamadı"));
+                img.src = String(reader.result);
+            };
+            reader.onerror = () => reject(new Error("dosya okunamadı"));
+            reader.readAsDataURL(file);
+        });
     }
 
     async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -58,38 +160,48 @@ export const Settings = () => {
 
             if (!e.target.files || e.target.files.length === 0) return;
             const file = e.target.files[0];
-            const fileExt = file.name.split('.').pop();
-            const fileName = `${companyId}-${Math.random()}.${fileExt}`;
-            const filePath = `${fileName}`;
 
-            // 1. Upload to Storage
-            const { error: uploadError } = await supabase.storage
-                .from('logos')
-                .upload(filePath, file);
+            if (file.size > 5 * 1024 * 1024) {
+                setMessage({ type: 'error', text: 'Dosya çok büyük. Lütfen 5MB altında bir görsel seçin.' });
+                return;
+            }
 
-            if (uploadError) throw uploadError;
+            let logoValue: string | null = null;
 
-            // 2. Get Public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('logos')
-                .getPublicUrl(filePath);
+            // 1. Önce Supabase Storage dene
+            try {
+                const fileExt = file.name.split('.').pop();
+                const filePath = `${companyId}-logo.${fileExt}`;
+                const { error: uploadError } = await supabase.storage
+                    .from('logos')
+                    .upload(filePath, file, { upsert: true });
+                if (!uploadError) {
+                    const { data: { publicUrl } } = supabase.storage
+                        .from('logos')
+                        .getPublicUrl(filePath);
+                    // Cache kırmak için sürüm parametresi ekle
+                    logoValue = `${publicUrl}?v=${Date.now()}`;
+                }
+            } catch {
+                // storage erişilemiyor — aşağıdaki yedek yöntem devreye girer
+            }
 
-            // 3. Update Company Table
+            // 2. Storage başarısızsa: küçültülmüş base64 olarak kaydet (her zaman çalışır)
+            if (!logoValue) {
+                logoValue = await fileToResizedDataUrl(file);
+            }
+
             const { error: updateError } = await supabase
                 .from('companies')
-                .update({ logo_url: publicUrl })
+                .update({ logo_url: logoValue })
                 .eq('id', companyId);
 
             if (updateError) throw updateError;
 
-            setLogoUrl(publicUrl);
+            setLogoUrl(logoValue);
             setMessage({ type: 'success', text: 'Logo başarıyla güncellendi.' });
-            
-            // Layout'daki logoyu da güncellemek için sayfayı yenileyebiliriz veya bir event tetikleyebiliriz.
-            // Şimdilik basitlik adına window.location.reload() kullanabiliriz ya da sadece state'i güncelleriz.
-            // Layout logoyu DB'den çektiği için bir sonraki render'da (veya manuel refresh'de) güncellenecektir.
-        } catch (error: any) {
-            setMessage({ type: 'error', text: 'Logo yüklenirken hata oluştu: ' + error.message });
+        } catch {
+            setMessage({ type: 'error', text: 'Logo kaydedilemedi. Lütfen farklı bir görselle tekrar deneyin.' });
         } finally {
             setUploading(false);
         }
@@ -106,14 +218,75 @@ export const Settings = () => {
             if (error) throw error;
             setLogoUrl(null);
             setMessage({ type: 'success', text: 'Logo kaldırıldı.' });
-        } catch (error: any) {
-            setMessage({ type: 'error', text: 'Hata: ' + error.message });
+        } catch {
+            setMessage({ type: 'error', text: 'Logo kaldırılamadı. Lütfen tekrar deneyin.' });
         } finally {
             setUploading(false);
         }
     }
 
+    function updateNotificationSettings(next: typeof notificationSettings) {
+        setNotificationSettings(next);
+        saveNotificationSettings(next);
+        setMessage({ type: "success", text: "Bildirim ayarları kaydedildi." });
+    }
+
+    async function handleRequestNotificationPermission() {
+        const allowed = await ensureNotificationPermission();
+        setMessage({
+            type: allowed ? "success" : "error",
+            text: allowed ? "Bildirim izni aktif." : "Bildirim izni verilmedi. Telefon ayarlarından izin vermeniz gerekir.",
+        });
+    }
+
     const isAdmin = role === "admin";
+
+    // Dışa aktarma filtre seçenekleri (müşteri/tedarikçi/montajcı) — yalnız admin.
+    useEffect(() => {
+        if (role !== "admin") return;
+        let alive = true;
+        (async () => {
+            try {
+                const ctx = await getEffectiveTenantContext();
+                const [cs, ss, es] = await Promise.all([
+                    supabase.from("customers").select("id,name").eq("company_id", ctx.company_id).order("name", { ascending: true }),
+                    supabase.from("suppliers").select("id,name").eq("company_id", ctx.company_id).order("name", { ascending: true }),
+                    supabase.from("employees").select("id,full_name").eq("company_id", ctx.company_id).order("full_name", { ascending: true }),
+                ]);
+                if (!alive) return;
+                setExpCustomers((cs.data ?? []).map((c: any) => ({ id: c.id, name: c.name || "İsimsiz" })));
+                setExpSuppliers((ss.data ?? []).map((s: any) => ({ id: s.id, name: s.name || "İsimsiz" })));
+                setExpInstallers((es.data ?? []).map((e: any) => ({ id: e.id, name: e.full_name || "Montajcı" })));
+            } catch {
+                // sessiz — filtreler boş kalır, tarih aralığıyla yine dışa aktarılır
+            }
+        })();
+        return () => { alive = false; };
+    }, [role]);
+
+    async function handleExportBackup() {
+        if (!expFrom || !expTo) { setMessage({ type: "error", text: "Başlangıç ve bitiş tarihi seçin." }); return; }
+        if (expFrom > expTo) { setMessage({ type: "error", text: "Başlangıç tarihi bitiş tarihinden sonra olamaz." }); return; }
+        setExporting(true);
+        setMessage(null);
+        try {
+            const ctx = await getEffectiveTenantContext();
+            const res = await exportBackupWorkbook({
+                companyId: ctx.company_id,
+                dateFrom: expFrom,
+                dateTo: expTo,
+                customerId: expCustomer || null,
+                supplierId: expSupplier || null,
+                installerId: expInstaller || null,
+            });
+            const total = Object.values(res.sheetCounts).reduce((a, b) => a + b, 0);
+            setMessage({ type: "success", text: `${res.filename} indirildi — ${total} kayıt, 8 sayfa.` });
+        } catch (e: any) {
+            setMessage({ type: "error", text: e?.message ?? "Dışa aktarma başarısız oldu." });
+        } finally {
+            setExporting(false);
+        }
+    }
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 pb-24">
@@ -187,6 +360,67 @@ export const Settings = () => {
                     </div>
                 )}
 
+                {/* YEDEKLEME / DIŞA AKTARMA (Sadece Admin) */}
+                {isAdmin && (
+                    <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
+                        <div className="flex items-center gap-2">
+                            <Download className="w-5 h-5 text-primary-600" />
+                            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Yedekleme / Dışa Aktarma</h3>
+                        </div>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                            Seçtiğiniz tarih aralığındaki kayıtları çok sayfalı Excel (.xlsx) olarak indirin.
+                        </p>
+
+                        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <label className="flex flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Başlangıç Tarihi</span>
+                                <input type="date" value={expFrom} onChange={(e) => setExpFrom(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm" />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Bitiş Tarihi</span>
+                                <input type="date" value={expTo} onChange={(e) => setExpTo(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm" />
+                            </label>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <label className="flex flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Müşteri (opsiyonel)</span>
+                                <select value={expCustomer} onChange={(e) => setExpCustomer(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
+                                    <option value="">Tümü</option>
+                                    {expCustomers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                            </label>
+                            <label className="flex flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Tedarikçi (opsiyonel)</span>
+                                <select value={expSupplier} onChange={(e) => setExpSupplier(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
+                                    <option value="">Tümü</option>
+                                    {expSuppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                            </label>
+                            <label className="flex flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Montajcı (opsiyonel)</span>
+                                <select value={expInstaller} onChange={(e) => setExpInstaller(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
+                                    <option value="">Tümü</option>
+                                    {expInstallers.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                </select>
+                            </label>
+                        </div>
+
+                        <button
+                            onClick={handleExportBackup}
+                            disabled={exporting}
+                            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white px-5 py-2.5 text-sm font-bold shadow-sm disabled:opacity-60"
+                        >
+                            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                            {exporting ? "Hazırlanıyor..." : "Excel'e Aktar"}
+                        </button>
+
+                        <p className="mt-3 text-xs text-slate-400">
+                            Sayfalar: Siparişler · Ölçüler · Teklifler · Müşteriler · Tedarikçi Cari · Montajcı Cari · Tahsilatlar · Ödemeler
+                        </p>
+                    </div>
+                )}
+
                 {/* PROFIL */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
                     <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Profil Ayarları</h3>
@@ -204,12 +438,102 @@ export const Settings = () => {
 
                 {/* GORUNUM */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
+                    <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                                <Bell className="h-5 w-5 text-primary-600" />
+                                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Bildirimler</h3>
+                            </div>
+                            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                                Randevu, ölçü, montaj ve tahsilat hatırlatmaları telefon kilitliyken de planlanır.
+                            </p>
+                        </div>
+                        <label className="inline-flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold dark:border-slate-800 dark:bg-slate-800/50">
+                            <input
+                                type="checkbox"
+                                checked={notificationSettings.enabled}
+                                onChange={(e) => updateNotificationSettings({ ...notificationSettings, enabled: e.target.checked })}
+                                className="h-5 w-5 accent-primary-600"
+                            />
+                            Bildirimleri aç
+                        </label>
+                    </div>
+
+                    <div className="mt-6 grid gap-4 md:grid-cols-[1fr_auto]">
+                        <div>
+                            <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">Varsayılan hatırlatma süresi</label>
+                            <select
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold outline-none focus:border-primary-400 dark:border-slate-800 dark:bg-slate-900"
+                                value={notificationSettings.defaultReminderOffset}
+                                onChange={(e) => updateNotificationSettings({ ...notificationSettings, defaultReminderOffset: e.target.value as ReminderOffset })}
+                            >
+                                {REMINDER_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleRequestNotificationPermission}
+                            className="self-end rounded-xl bg-primary-600 px-5 py-3 text-sm font-black text-white hover:bg-primary-700"
+                        >
+                            Bildirim izni iste
+                        </button>
+                    </div>
+                </div>
+
+                {/* GORUNUM */}
+                <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
                     <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Görünüm</h3>
                     <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Koyu mod/Açık mod tercihlerinizi belirleyin.</p>
                     <div className="mt-4 flex gap-4">
                          <div className="flex-1 p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-center text-sm text-slate-500">
                             Sistem teması otomatik algılanmaktadır.
                          </div>
+                    </div>
+                </div>
+
+                {/* DESTEK TALEPLERIM */}
+                <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
+                    <div className="flex items-center gap-2">
+                        <LifeBuoy className="h-5 w-5 text-primary-600" />
+                        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Destek Taleplerim</h3>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Gönderdiğiniz destek taleplerinin durumunu buradan takip edebilirsiniz.
+                    </p>
+                    <div className="mt-4 space-y-2">
+                        {ticketsLoading ? (
+                            <div className="text-sm text-slate-400">Yükleniyor...</div>
+                        ) : myTickets.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400 dark:border-slate-700">
+                                Henüz destek talebiniz yok. Sol menüdeki "Sorun Bildir" ile talep oluşturabilirsiniz.
+                            </div>
+                        ) : (
+                            myTickets.map((t) => {
+                                const st = TICKET_STATUS_LABELS[String(t.status || "open")] ?? TICKET_STATUS_LABELS.open;
+                                return (
+                                    <div key={t.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div className="min-w-0 font-bold text-sm text-slate-800 dark:text-slate-200 truncate">{t.title || "Destek talebi"}</div>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${st.cls}`}>{st.label}</span>
+                                                {t.created_at && (
+                                                    <span className="text-[11px] text-slate-400">{new Date(t.created_at).toLocaleDateString("tr-TR")}</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {t.admin_response && (
+                                            <div className="mt-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                                                <span className="font-bold">Destek yanıtı:</span> {t.admin_response}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
                     </div>
                 </div>
 

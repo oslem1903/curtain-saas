@@ -252,7 +252,7 @@ export default function SuperAdminTrials() {
 
     async function applyPackage(account: CustomerAccount, plan: string) {
         await updateCompanyModules(account.id, {
-            subscription_plan: plan === "solo" ? "starter" : plan,
+            subscription_plan: plan,
             package_code: plan,
             enabled_modules: modulesForPlan(plan),
         });
@@ -295,7 +295,7 @@ export default function SuperAdminTrials() {
                 await supabase
                     .from("companies")
                     .update({
-                        subscription_plan: newCompanyPackage === "solo" ? "starter" : newCompanyPackage,
+                        subscription_plan: newCompanyPackage,
                         package_code: newCompanyPackage,
                         enabled_modules: modulesForPlan(newCompanyPackage),
                     })

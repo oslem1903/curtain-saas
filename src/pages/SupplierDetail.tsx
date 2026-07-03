@@ -20,6 +20,7 @@ type Transaction = {
     reference_no: string | null;
     payment_method: string | null;
     order_id: string | null;
+    due_date?: string | null;
 };
 
 function formatTL(n: number) {
@@ -36,6 +37,8 @@ export default function SupplierDetail() {
 
     const [supplier, setSupplier] = useState<Supplier | null>(null);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    // Özet bakiye toplamları TÜM hareketlerden gelir (ekstre listesi 100 ile sınırlı olsa da).
+    const [balanceTotals, setBalanceTotals] = useState({ debt: 0, paid: 0, cancel: 0 });
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [success, setSuccess] = useState("");
@@ -75,6 +78,7 @@ export default function SupplierDetail() {
                 p_limit: 100
             });
 
+            let txList: Transaction[] = [];
             if (ledgerErr) {
                 // RPC bazı kurulumlarda yok ("schema cache" / 404). Doğrudan
                 // supplier_transactions sorgusuna düş — Suppliers.tsx ile aynı yaklaşım.
@@ -88,7 +92,7 @@ export default function SupplierDetail() {
 
                 if (txErr) throw txErr;
 
-                setTransactions((txRows ?? []) as Transaction[]);
+                txList = (txRows ?? []) as Transaction[];
             } else {
                 // Map RPC result to Transaction type
                 const mappedTxs = (ledger ?? []).map((tx: any) => ({
@@ -102,8 +106,43 @@ export default function SupplierDetail() {
                     order_id: tx.order_id
                 }));
 
-                setTransactions(mappedTxs as Transaction[]);
+                txList = mappedTxs as Transaction[];
             }
+
+            // Vade (due_date) RPC tarafından döndürülmüyor → ayrı hafif sorguyla çekip
+            // id bazında merge et (RPC/migration'a dokunmadan; cari hesabı etkilenmez).
+            if (txList.length > 0) {
+                const { data: dueRows } = await supabase
+                    .from("supplier_transactions")
+                    .select("id,due_date")
+                    .eq("company_id", ctx.company_id)
+                    .eq("supplier_id", id);
+                if (dueRows) {
+                    const dueMap = new Map((dueRows as Array<{ id: string; due_date: string | null }>).map((r) => [r.id, r.due_date]));
+                    txList = txList.map((t) => ({ ...t, due_date: dueMap.get(t.id) ?? null }));
+                }
+            }
+            setTransactions(txList);
+
+            // Bakiye toplamları: TÜM hareketlerden (limit yok) hafif aggregate sorgu —
+            // yalnız transaction_type + amount. Ekstre listesi 100 ile sınırlı kalsa da
+            // özet bakiye, Dashboard/NotificationBell/Accounting ile aynı şekilde tutarlı olur.
+            // RPC/insert/cancel/due_date mantığına dokunulmaz.
+            const { data: aggRows, error: aggErr } = await supabase
+                .from("supplier_transactions")
+                .select("transaction_type, amount")
+                .eq("company_id", ctx.company_id)
+                .eq("supplier_id", id);
+            // Aggregate başarısızsa elimizdeki (limitli) listeden hesaba düş — 0 gösterme.
+            const sumSource = (!aggErr && aggRows ? aggRows : txList) as Array<{ transaction_type: string | null; amount: number | null }>;
+            const totals = { debt: 0, paid: 0, cancel: 0 };
+            for (const t of sumSource) {
+                const amt = Number(t.amount ?? 0);
+                if (t.transaction_type === "debt") totals.debt += amt;
+                else if (t.transaction_type === "payment") totals.paid += amt;
+                else if (t.transaction_type === "cancel") totals.cancel += amt;
+            }
+            setBalanceTotals(totals);
         } catch (e: any) {
             setErr(e?.message ?? "Yüklenemedi.");
         } finally {
@@ -113,9 +152,30 @@ export default function SupplierDetail() {
 
     useEffect(() => { load(); }, [load]);
 
-    const totalDebt   = transactions.filter(t => t.transaction_type === "debt").reduce((a, b) => a + b.amount, 0);
-    const totalPaid   = transactions.filter(t => t.transaction_type === "payment").reduce((a, b) => a + b.amount, 0);
-    const totalCancel = transactions.filter(t => t.transaction_type === "cancel").reduce((a, b) => a + b.amount, 0);
+    // Vade (due_date) inline düzenleme — yalnızca supplier_transactions.due_date update edilir
+    // (company_id kontrollü). Boş bırakılırsa null. Cari hesaplama mantığı değişmez.
+    async function updateDueDate(txId: string, value: string) {
+        const newDue = value ? value : null;
+        // Optimistik UI güncellemesi
+        setTransactions((prev) => prev.map((t) => (t.id === txId ? { ...t, due_date: newDue } : t)));
+        try {
+            const ctx = await getEffectiveTenantContext();
+            const { error } = await supabase
+                .from("supplier_transactions")
+                .update({ due_date: newDue })
+                .eq("id", txId)
+                .eq("company_id", ctx.company_id);
+            if (error) throw error;
+        } catch (e: any) {
+            setErr(e?.message ?? "Vade güncellenemedi.");
+            void load(); // hata → mevcut değerlere geri dön
+        }
+    }
+
+    // Özet bakiye TÜM hareketlerden (balanceTotals); ekstre listesi (transactions) son 100 ile sınırlı.
+    const totalDebt   = balanceTotals.debt;
+    const totalPaid   = balanceTotals.paid;
+    const totalCancel = balanceTotals.cancel;
     const balance     = totalDebt - totalPaid - totalCancel;
 
     const lastPaymentDate = useMemo(() => {
@@ -132,6 +192,9 @@ export default function SupplierDetail() {
     async function handleAddPayment() {
         const amount = parseFloat(payAmount.replace(",", "."));
         if (!amount || amount <= 0) { setErr("Geçerli bir tutar girin."); return; }
+        // Fazla ödeme engeli: bakiye TÜM hareketlerden (balanceTotals → balance) gelir.
+        // Tam ödemeyi yuvarlama hatasıyla bloklamamak için küçük tolerans (0.01) bırakılır.
+        if (amount > balance + 0.01) { setErr(`Açık bakiyeden fazla ödeme girilemez. Kalan bakiye: ${formatTL(balance)}`); return; }
         setSaving(true);
         setErr("");
         try {
@@ -499,6 +562,7 @@ export default function SupplierDetail() {
                                     <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Tarih</th>
                                     <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Açıklama</th>
                                     <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Evrak No</th>
+                                    <th className="px-4 py-3 text-left text-xs font-black uppercase text-slate-500">Vade</th>
                                     <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Borç (+)</th>
                                     <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Ödeme (−)</th>
                                     <th className="px-4 py-3 text-right text-xs font-black uppercase text-slate-500">Kalan</th>
@@ -524,6 +588,18 @@ export default function SupplierDetail() {
                                                     </button>
                                                 )}
                                             </td>
+                                            <td className="px-4 py-3">
+                                                {tx.transaction_type === "debt" ? (
+                                                    <input
+                                                        type="date"
+                                                        value={tx.due_date ?? ""}
+                                                        onChange={(e) => void updateDueDate(tx.id, e.target.value)}
+                                                        className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900"
+                                                    />
+                                                ) : (
+                                                    <span className="text-slate-400">—</span>
+                                                )}
+                                            </td>
                                             <td className="px-4 py-3 text-right font-bold text-red-600">
                                                 {tx.transaction_type === "debt" ? `+ ${formatTL(tx.amount)}` : "—"}
                                             </td>
@@ -539,7 +615,7 @@ export default function SupplierDetail() {
                             </tbody>
                             <tfoot>
                                 <tr className="border-t-2 border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
-                                    <td colSpan={3} className="px-4 py-3 text-xs font-black uppercase text-slate-500">Toplam</td>
+                                    <td colSpan={4} className="px-4 py-3 text-xs font-black uppercase text-slate-500">Toplam</td>
                                     <td className="px-4 py-3 text-right font-black text-red-700">{formatTL(totalDebt)}</td>
                                     <td className="px-4 py-3 text-right font-black text-emerald-700">{formatTL(totalPaid + totalCancel)}</td>
                                     <td className={`px-4 py-3 text-right font-black ${balance > 0 ? "text-red-700" : "text-emerald-700"}`}>{formatTL(balance)}</td>

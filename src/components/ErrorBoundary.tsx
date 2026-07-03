@@ -21,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public async componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
-    
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -53,6 +53,10 @@ export class ErrorBoundary extends Component<Props, State> {
     }
   }
 
+  private resetError = () => {
+    this.setState({ hasError: false });
+  }
+
   public render() {
     if (this.state.hasError) {
       return this.props.fallback || (
@@ -70,16 +74,16 @@ export class ErrorBoundary extends Component<Props, State> {
               </p>
             </div>
             <button
-              onClick={() => window.location.reload()}
+              onClick={this.resetError}
               className="w-full py-3 bg-slate-900 dark:bg-slate-700 text-white rounded-xl font-bold hover:bg-slate-800 transition-all"
             >
-              Sayfayı Yenile
+              Tekrar Dene
             </button>
             <button
               onClick={() => window.location.href = '/'}
               className="w-full py-3 text-slate-500 hover:text-slate-700 font-medium"
             >
-              Ana Sayfaya Dön
+              Giriş Sayfasına Git
             </button>
           </div>
         </div>

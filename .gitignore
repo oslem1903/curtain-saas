@@ -41,3 +41,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local tooling caches (not part of source)
+.android-sdk/
+.cache/
+.tmp/
+.claude/
+supabase/.temp/

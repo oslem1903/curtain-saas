@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 
 async function getContext() {
@@ -368,6 +368,11 @@ export default function Products() {
 
         if (form.rounding_rule < 0) {
             setErr("Yuvarlama kuralı negatif olamaz.");
+            return;
+        }
+
+        if (!form.supplier_id && form.cost_price > 0) {
+            setErr("Alış fiyatı kaydedebilmek için lütfen bir tedarikçi seçin.");
             return;
         }
 

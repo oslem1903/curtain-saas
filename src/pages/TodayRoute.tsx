@@ -1,6 +1,6 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Camera, CheckCircle2, Clipboard, FilePlus2, MapPin, Navigation, NotebookPen, Phone, RefreshCcw, Ruler, Route, Undo2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { CheckCircle2, MapPin, Navigation, NotebookPen, Phone, RefreshCcw, Route } from "lucide-react";
 
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
@@ -17,8 +17,27 @@ type Row = {
   assigned_to: string | null;
   assigned_user_id?: string | null;
   assigned_role?: string | null;
+  order_id?: string | null;
   customer: { id?: string | null; name: string | null; phone: string | null } | { id?: string | null; name: string | null; phone: string | null }[] | null;
 };
+
+function jobArea(job: any) {
+  let w = Number(job.width || 0);
+  let h = Number(job.height || 0);
+  if (w <= 0 || h <= 0) return 0;
+  const minW = Number(job.min_width || 0);
+  const minH = Number(job.min_height || 0);
+  const minArea = Number(job.min_area || 0);
+
+  if (minW > 0 && w < minW) w = minW;
+  if (minH > 0 && h < minH) h = minH;
+
+  let area = (w * h) / 10000;
+  if (minArea > 0 && area < minArea) {
+      area = minArea;
+  }
+  return area * Math.max(1, Number(job.qty ?? 1));
+}
 
 type StaffRow = {
   user_id: string;
@@ -78,16 +97,24 @@ function isAssignedTo(row: Pick<Row, "assigned_to" | "assigned_user_id">, userId
   return row.assigned_user_id === userId || row.assigned_to === userId;
 }
 
-function staffRoleLabel(role?: string | null) {
-  if (role === "admin") return "Yönetici";
-  if (role === "accountant") return "Muhasebe";
-  if (role === "measurement") return "Saha Personeli";
-  if (role === "installer" || role === "personnel") return "Saha Personeli";
-  return "Personel";
+function yolaMesaji(type: string | null, customerName: string, time: string | null) {
+  const tip = String(type ?? "").toLowerCase();
+  const isim = customerName || "";
+  const saat = fmtTime(time);
+  if (tip === "measurement") {
+    return `Merhaba ${isim}, ölçü randevusu için yola çıktım. Yaklaşık varış: ${saat}`;
+  }
+  if (tip === "installation") {
+    return `Merhaba ${isim}, montaj randevusu için yola çıktım. Yaklaşık varış: ${saat}`;
+  }
+  return `Merhaba ${isim}, randevunuz için yola çıktım. Yaklaşık varış: ${saat}`;
 }
 
 export default function TodayRoute() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const filterType = searchParams.get("type");
+
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -114,7 +141,7 @@ export default function TodayRoute() {
       const ctx = await getEffectiveTenantContext();
       let { data, error } = await supabase
         .from("appointments")
-        .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,assigned_user_id,assigned_role,customer:customers(id,name,phone)")
+        .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,assigned_user_id,assigned_role,order_id,customer:customers(id,name,phone)")
         .eq("company_id", ctx.company_id)
         .in("status", ["planned", "postponed", "onway"])
         .or(`and(start_at.gte.${dayStartISO},start_at.lt.${dayEndISO}),and(scheduled_at.gte.${dayStartISO},scheduled_at.lt.${dayEndISO})`);
@@ -122,7 +149,7 @@ export default function TodayRoute() {
       if (error && String(error.message || "").toLowerCase().includes("assigned_user_id")) {
         const retry = await supabase
           .from("appointments")
-          .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,customer:customers(id,name,phone)")
+          .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,order_id,customer:customers(id,name,phone)")
           .eq("company_id", ctx.company_id)
           .in("status", ["planned", "postponed", "onway"])
           .or(`and(start_at.gte.${dayStartISO},start_at.lt.${dayEndISO}),and(scheduled_at.gte.${dayStartISO},scheduled_at.lt.${dayEndISO})`);
@@ -161,13 +188,13 @@ export default function TodayRoute() {
         const nextMap: Record<string, { full_name: string; role: string }> = {};
         const staffRows = employeeRows.length > 0
           ? employeeRows.map((employee: any) => {
-              const profile = profileById.get(employee.user_id);
-              return {
-                user_id: employee.user_id,
-                full_name: employee.full_name || profile?.full_name || "İsimsiz",
-                role: profile?.role || employee.target_role || "installer",
-              };
-            })
+            const profile = profileById.get(employee.user_id);
+            return {
+              user_id: employee.user_id,
+              full_name: employee.full_name || profile?.full_name || "İsimsiz",
+              role: profile?.role || employee.target_role || "installer",
+            };
+          })
           : ((profiles ?? []) as StaffRow[]);
 
         for (const staff of staffRows) {
@@ -216,13 +243,18 @@ export default function TodayRoute() {
     void load();
   }, [load]);
 
-  async function markDone(id: string) {
-    if (!confirm("Bu randevu tamamlandı olarak işaretlensin mi?")) return;
-    await updateStatus(id, "done", true);
+  const displayRows = useMemo(() => {
+    if (!filterType) return rows;
+    return rows.filter((r) => String(r.type ?? "").toLowerCase() === filterType.toLowerCase());
+  }, [rows, filterType]);
+
+  async function markDone(row: Row) {
+    if (!confirm("Bu randevu tamamlandı olarak işaretlensin mi? (Varsa bağlı montaj işleri de tamamlanıp hakediş hesaplanacaktır.)")) return;
+    await updateStatus(row, "done", true);
   }
 
-  async function updateStatus(id: string, status: "onway" | "planned" | "postponed" | "done", removeWhenDone = false) {
-    setMarkingId(id);
+  async function updateStatus(row: Row, status: "onway" | "planned" | "postponed" | "done", removeWhenDone = false) {
+    setMarkingId(row.id);
     try {
       const ctx = await getEffectiveTenantContext();
       if (ctx.readOnly) throw new Error("Firma lisansı aktif değil veya sadece okuma modunda.");
@@ -233,7 +265,7 @@ export default function TodayRoute() {
           done: status === "done",
           done_at: status === "done" ? new Date().toISOString() : null,
         })
-        .eq("id", id)
+        .eq("id", row.id)
         .eq("company_id", ctx.company_id);
 
       if (isFieldRole(currentRole)) {
@@ -244,7 +276,39 @@ export default function TodayRoute() {
       const { error } = await query;
       if (error) throw error;
 
-      setRows((prev) => (removeWhenDone ? prev.filter((row) => row.id !== id) : prev.map((row) => (row.id === id ? { ...row, status } : row))));
+      if (status === "done" && row.order_id && row.type === "installation") {
+        const { data: jobs } = await supabase
+          .from("installation_jobs")
+          .select("*")
+          .eq("order_id", row.order_id)
+          .eq("company_id", ctx.company_id)
+          .neq("status", "completed");
+
+        if (jobs && jobs.length > 0) {
+          for (const job of jobs) {
+            let fee = Number(job.installer_fee || 0);
+            const rate = Number(job.unit_rate || 0);
+            if (fee === 0 && rate > 0) {
+              if (job.price_type === "m2") {
+                fee = Math.round(jobArea(job) * rate * 100) / 100;
+              } else if (job.price_type === "adet") {
+                const q = Math.max(1, Number(job.qty || 1));
+                fee = Math.round(q * rate * 100) / 100;
+              }
+            }
+            await supabase
+              .from("installation_jobs")
+              .update({
+                status: "completed",
+                completed_at: new Date().toISOString(),
+                installer_fee: fee > 0 ? fee : null,
+              })
+              .eq("id", job.id);
+          }
+        }
+      }
+
+      setRows((prev) => (removeWhenDone ? prev.filter((r) => r.id !== row.id) : prev.map((r) => (r.id === row.id ? { ...r, status } : r))));
     } catch (e: any) {
       alert(e?.message ?? "Durum güncellenemedi.");
     } finally {
@@ -296,7 +360,7 @@ export default function TodayRoute() {
   }
 
   function openDayRoute() {
-    const stops = rows.map((r) => (r.address ?? r.note ?? "").trim()).filter(Boolean);
+    const stops = displayRows.map((r) => (r.address ?? r.note ?? "").trim()).filter(Boolean);
     if (stops.length === 0) {
       alert("Rota için adres/konum bulunamadı.");
       return;
@@ -316,10 +380,16 @@ export default function TodayRoute() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-black text-slate-950 dark:text-white">Bugünün Rotası</h1>
+          <h1 className="text-2xl font-black text-slate-950 dark:text-white">
+            {filterType === "measurement"
+              ? "Bugünün Ölçü Randevuları"
+              : filterType === "installation"
+              ? "Bugünün Montaj Randevuları"
+              : "Bugünün Rotası"}
+          </h1>
           <div className="text-sm text-slate-500">{todayLabel}</div>
         </div>
 
@@ -340,109 +410,114 @@ export default function TodayRoute() {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 flex flex-col justify-between">
+            <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Bugünkü İş</div>
+            <div className="text-2xl font-black text-slate-900 dark:text-white">{displayRows.length}</div>
+        </div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 shadow-sm dark:border-emerald-900/30 dark:bg-emerald-950/20 flex flex-col justify-between">
+            <div className="text-xs font-bold uppercase tracking-wider text-emerald-600 mb-2">Tamamlanan</div>
+            <div className="text-2xl font-black text-emerald-700 dark:text-emerald-400">{displayRows.filter(r => r.status === "done").length}</div>
+        </div>
+        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4 shadow-sm dark:border-amber-900/30 dark:bg-amber-950/20 flex flex-col justify-between">
+            <div className="text-xs font-bold uppercase tracking-wider text-amber-600 mb-2">Bekleyen</div>
+            <div className="text-2xl font-black text-amber-700 dark:text-amber-400">{displayRows.filter(r => r.status !== "done" && r.status !== "postponed" && r.status !== "cancelled").length}</div>
+        </div>
+        <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-4 shadow-sm dark:border-rose-900/30 dark:bg-rose-950/20 flex flex-col justify-between">
+            <div className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-2">Ertelenen</div>
+            <div className="text-2xl font-black text-rose-700 dark:text-rose-400">{displayRows.filter(r => r.status === "postponed").length}</div>
+        </div>
+      </div>
+
       {err ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div> : null}
 
       {loading ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">Rota yükleniyor...</div>
-      ) : rows.length === 0 ? (
+      ) : displayRows.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
-          {isFieldRole(currentRole) ? "Bugün için atanmış randevunuz yok." : "Bugün için planlı randevu yok."}
+          {filterType === "measurement"
+            ? "Bugün için planlı ölçü randevusu yok."
+            : filterType === "installation"
+            ? "Bugün için planlı montaj randevusu yok."
+            : isFieldRole(currentRole)
+            ? "Bugün için atanmış randevunuz yok."
+            : "Bugün için planlı randevu yok."}
         </div>
       ) : (
-        <div className="space-y-3">
-          {rows.map((r, idx) => {
+        <div className="space-y-4">
+          {displayRows.map((r, idx) => {
             const when = r.start_at ?? r.scheduled_at;
             const customer = pickCustomer(r.customer);
             const phone = toTRPhone(customer?.phone);
             const assignedId = r.assigned_to || r.assigned_user_id || null;
             const assigned = assignedId ? staffMap[assignedId] : null;
             const destination = r.address ?? r.note ?? "";
-            const yolaMsg = `Merhaba ${customer?.name ?? ""}, Ölçü/randevu için yola çıktım. Yaklaşık varış: ${fmtTime(when)}`;
-
             return (
-              <article key={r.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
-                  <div className="min-w-0">
-                    <div className="text-sm text-slate-500">#{idx + 1} / {typeLabel(r.type)} / {statusLabel(r.status)}</div>
-                    <div className="mt-1 text-xl font-black text-slate-950 dark:text-white">{fmtTime(when)} - {customer?.name ?? r.title ?? "Müşteri bilgisi yok"}</div>
-                    <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">{destination || "Adres/konum yok"}</div>
+              <article key={r.id} className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 overflow-hidden">
+                <div className="p-5 flex flex-col lg:flex-row gap-5">
+                  {/* Sol Kısım: Zaman & İsim */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${
+                        r.status === "done" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
+                        r.status === "postponed" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
+                        r.status === "onway" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                        "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                      }`}>
+                        #{idx + 1} • {typeLabel(r.type)} • {statusLabel(r.status)}
+                      </span>
+                    </div>
+                    <div className="text-2xl font-black text-slate-950 dark:text-white flex items-center gap-3">
+                      <span className="text-primary-600 dark:text-primary-400">{fmtTime(when)}</span>
+                      <span>{customer?.name ?? r.title ?? "İsimsiz Müşteri"}</span>
+                    </div>
+                    <div className="mt-2 text-sm text-slate-600 dark:text-slate-300 flex items-start gap-2">
+                      <MapPin className="h-4 w-4 shrink-0 text-slate-400 mt-0.5" />
+                      <span className="max-w-xl">{destination || "Adres/konum yok"}</span>
+                    </div>
                     {!isFieldRole(currentRole) ? (
-                      <div className="mt-2 text-xs text-slate-500">
-                        Atanan personel: <span className="font-semibold text-slate-700 dark:text-slate-200">{assigned ? `${assigned.full_name} (${staffRoleLabel(assigned.role)})` : "Seçilmedi"}</span>
+                      <div className="mt-3 text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/50 inline-block px-3 py-1.5 rounded-lg border border-slate-100 dark:border-slate-700">
+                        Atanan: <span className="font-bold text-slate-700 dark:text-slate-200">{assigned ? `${assigned.full_name}` : "Seçilmedi"}</span>
                       </div>
                     ) : null}
-                    {r.note ? <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300">{r.note}</div> : null}
+                    {r.note ? (
+                      <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50/50 p-3 text-sm text-amber-800 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-300">
+                        <span className="font-bold">Not:</span> {r.note}
+                      </div>
+                    ) : null}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
+                  {/* Sağ Kısım: Butonlar */}
+                  <div className="flex flex-wrap items-center lg:items-start lg:justify-end gap-2 shrink-0">
                     {phone ? (
-                      <button onClick={() => openWhatsApp(phone, yolaMsg)} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700">
-                        <Navigation className="h-4 w-4" />
-                        Yola çıktım
+                      <button onClick={() => openWhatsApp(phone, yolaMesaji(r.type, customer?.name ?? "", when))} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-3 text-sm font-bold text-white hover:bg-blue-700 shadow-sm">
+                        <Navigation className="h-4 w-4" /> Yola Çıktım
                       </button>
                     ) : null}
                     {customer?.phone ? (
-                      <a href={`tel:${customer.phone.replace(/\s+/g, "")}`} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800">
-                        <Phone className="h-4 w-4" />
-                        Ara
+                      <a href={`tel:${customer.phone.replace(/\s+/g, "")}`} className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-bold text-white hover:bg-emerald-700 shadow-sm">
+                        <Phone className="h-4 w-4" /> Ara
                       </a>
                     ) : null}
                     {destination ? (
-                      <button onClick={() => openMaps(destination)} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-                        <MapPin className="h-4 w-4" />
-                        Konum
+                      <button onClick={() => openMaps(destination)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800 shadow-sm">
+                        <MapPin className="h-4 w-4" /> Konum
                       </button>
                     ) : null}
-                    {destination ? (
-                      <button
-                        onClick={async () => {
-                          await navigator.clipboard.writeText(destination);
-                          alert("Konum kopyalandı.");
-                        }}
-                        className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-                      >
-                        <Clipboard className="h-4 w-4" />
-                        Kopyala
-                      </button>
-                    ) : null}
-                    <button onClick={() => nav(`/appointments/${r.id}`)} className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+                    <button onClick={() => nav(`/appointments/${r.id}`)} className="inline-flex h-10 items-center rounded-xl border border-slate-200 px-3 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800 shadow-sm">
                       Detay
                     </button>
-                    <button onClick={() => nav("/measurements/new", { state: { appointmentId: r.id, customerId: customer?.id ?? null, customerName: customer?.name ?? "", phone: customer?.phone ?? "", address: destination } })} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary-600 px-4 text-sm font-bold text-white hover:bg-primary-700">
-                      <Ruler className="h-4 w-4" />
-                      Ölçü Al
+                    <button onClick={() => addNote(r)} disabled={markingId === r.id} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-sm font-bold hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-800 shadow-sm">
+                      <NotebookPen className="h-4 w-4" /> Not
                     </button>
-                    <button onClick={() => nav("/visual-previews", { state: { appointmentId: r.id, customerId: customer?.id ?? null } })} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-                      <Camera className="h-4 w-4" />
-                      Kartela
-                    </button>
-                    <button onClick={() => nav("/orders/new", { state: { fromAppointment: true, appointmentId: r.id, customerId: customer?.id ?? null, customerName: customer?.name ?? "", phone: customer?.phone ?? "", address: destination } })} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-                      <FilePlus2 className="h-4 w-4" />
-                      Teklif
-                    </button>
-                    <button onClick={() => addNote(r)} disabled={markingId === r.id} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-800">
-                      <NotebookPen className="h-4 w-4" />
-                      Not
-                    </button>
-                    {r.status !== "onway" ? (
-                      <button onClick={() => updateStatus(r.id, "onway")} disabled={markingId === r.id} className="inline-flex min-h-11 items-center rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
-                        Yolda
-                      </button>
-                    ) : (
-                      <button onClick={() => updateStatus(r.id, "planned")} disabled={markingId === r.id} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-amber-500 px-4 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-60">
-                        <Undo2 className="h-4 w-4" />
-                        Planlıya Al
-                      </button>
-                    )}
-                    <button onClick={() => updateStatus(r.id, "postponed")} disabled={markingId === r.id} className="inline-flex min-h-11 items-center rounded-xl bg-amber-500 px-4 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-60">
+                    <button onClick={() => updateStatus(r, "postponed")} disabled={markingId === r.id} className="inline-flex h-10 items-center rounded-xl bg-amber-500 px-3 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-60 shadow-sm">
                       Ertelendi
                     </button>
-                    <button onClick={() => reportIssue(r)} disabled={markingId === r.id} className="inline-flex min-h-11 items-center rounded-xl bg-red-600 px-4 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-60">
+                    <button onClick={() => reportIssue(r)} disabled={markingId === r.id} className="inline-flex h-10 items-center rounded-xl bg-red-600 px-3 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-60 shadow-sm">
                       Sorun Bildir
                     </button>
-                    <button onClick={() => markDone(r.id)} disabled={markingId === r.id} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Tamamlandı
+                    <button onClick={() => markDone(r)} disabled={markingId === r.id} className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60 shadow-sm w-full lg:w-auto mt-2 lg:mt-0 lg:ml-auto">
+                      <CheckCircle2 className="h-5 w-5" /> Tamamlandı
                     </button>
                   </div>
                 </div>

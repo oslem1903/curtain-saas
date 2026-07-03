@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase, setAppReadOnlyMode } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
@@ -20,8 +20,9 @@ type CompanyState = {
     is_pilot: boolean | null;
 };
 
-export const CORE_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "catalogs", "staff"];
-export const SOLO_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "suppliers", "installation", "catalogs", "staff"];
+export const CORE_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "suppliers", "installation", "catalogs", "staff"];
+// Solo Perdeci: kartela (catalogs) ve personel (staff) modülleri pakete dahil DEĞİL
+export const SOLO_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "suppliers", "installation"];
 export const PRO_MODULES = [...SOLO_MODULES, "accounting", "staff", "catalogs", "reports", "expenses", "profit"];
 export const ENTERPRISE_MODULES = [...PRO_MODULES, "vehicles", "commissions", "warehouse", "branches"];
 
@@ -59,7 +60,17 @@ function normalizeEnabledModules(modules: string[]) {
 }
 
 type AuthStatus = "loading" | "unauthenticated" | "ready" | "unauthorized" | "locked";
-type LockReason = "inactive_user" | "inactive_member" | "inactive_company" | "expired_trial" | "read_only" | "unknown";
+type LockReason = "inactive_user" | "inactive_member" | "inactive_company" | "expired_trial" | "read_only" | "device_limit" | "unknown";
+
+export function getDeviceId() {
+    const key = "curtain_saas_device_id";
+    let id = localStorage.getItem(key);
+    if (!id) {
+        id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(key, id);
+    }
+    return id;
+}
 
 type AuthContextValue = {
     status: AuthStatus;
@@ -111,23 +122,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [memberRole, setMemberRole] = useState<RoleState>("unknown");
     const [company, setCompany] = useState<CompanyState | null>(null);
     const [lockReason, setLockReason] = useState<LockReason | null>(null);
+    // İlk yükleme tamamlandı mı? Arka plan refresh'lerinde loading ekranı gösterme.
+    const hasLoadedOnce = useRef(false);
+    // Lisans kontrolünü cache'le — her açılışta RPC çalıştırma
+    const licenseCheckCache = useRef<string | null>(null);
+    const licenseCheckTime = useRef(0);
+    // Mevcut status'ün async-güvenli kopyası (arka plan reload guard'ı için).
+    const statusRef = useRef<AuthStatus>("loading");
+    useEffect(() => { statusRef.current = status; }, [status]);
 
-    const loadAuth = async () => {
+    const loadAuth = async (opts?: { forceLicense?: boolean; signedOut?: boolean }) => {
+        const isFirstLoad = !hasLoadedOnce.current;
+        // Arka plan reload'u (sekme dönüşü/token yenileme): status zaten "ready" ise
+        // GEÇİCİ null session / profile-member-company sorgu hataları alt ağacı unmount
+        // ETMEMELİ. Yalnız ilk yüklemede veya gerçek SIGNED_OUT'ta durum düşürülür.
+        const guardTransient = !isFirstLoad && statusRef.current === "ready";
         try {
-            setStatus("loading");
-            setLockReason(null);
+            if (isFirstLoad) {
+                setStatus("loading");
+                setLockReason(null);
+            }
 
             const { data: sessionData } = await withTimeout(supabase.auth.getSession(), "Oturum kontrolu");
             const sessionUser = sessionData.session?.user ?? null;
 
-            setUser(sessionUser);
-            setCompany(null);
-            setRole("unknown");
-            setMemberRole("unknown");
-
             if (!sessionUser) {
+                // Gerçek çıkış (SIGNED_OUT) → oturumu kapat. Aksi halde ready iken geçici
+                // null session'ı (token yenileme yarışı) yut; mevcut oturum korunur.
+                if (guardTransient && !opts?.signedOut) return;
+                setUser(null);
+                if (isFirstLoad) {
+                    setCompany(null);
+                    setRole("unknown");
+                    setMemberRole("unknown");
+                }
+                hasLoadedOnce.current = false;
                 setStatus("unauthenticated");
                 return;
+            }
+
+            setUser(sessionUser);
+            if (isFirstLoad) {
+                setCompany(null);
+                setRole("unknown");
+                setMemberRole("unknown");
             }
 
             const { data: rpcProfile, error: rpcProfileError } = await withTimeout(
@@ -175,12 +213,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (profileError || !profile) {
+            if (guardTransient) return; // ready iken geçici profil sorgu hatası → mevcut durumu koru
+            hasLoadedOnce.current = false;
             setStatus("unauthorized");
             return;
         }
 
         if (profile.is_active === false) {
             setLockReason("inactive_user");
+            hasLoadedOnce.current = true;
             setStatus("locked");
             return;
         }
@@ -228,12 +269,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
 
         if (memberError || !member?.company_id) {
+            if (guardTransient) return; // ready iken geçici üyelik sorgu hatası → mevcut durumu koru
+            hasLoadedOnce.current = false;
             setStatus("unauthorized");
             return;
         }
 
         if (member.is_active === false) {
             setLockReason("inactive_member");
+            hasLoadedOnce.current = true;
             setStatus("locked");
             return;
         }
@@ -242,6 +286,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const activeCompany = rowCompany as CompanyState | null;
 
         if (!activeCompany?.id) {
+            if (guardTransient) return; // ready iken geçici firma sorgu hatası → mevcut durumu koru
+            hasLoadedOnce.current = false;
             setStatus("unauthorized");
             return;
         }
@@ -252,46 +298,141 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (activeCompany.is_active === false || String(activeCompany.plan_status ?? "").toLowerCase() === "suspended") {
             setLockReason("inactive_company");
+            hasLoadedOnce.current = true;
             setStatus("locked");
             return;
         }
 
         if (isTrialExpired(activeCompany)) {
             setLockReason(activeCompany.read_only ? "read_only" : "expired_trial");
+            hasLoadedOnce.current = true;
             setStatus(activeCompany.read_only ? "ready" : "locked");
             return;
         }
 
+        // Sunucu taraflı lisans yoklaması + cihaz kaydı (ilk yükleme ve periyodik olarak).
+        // Arka plan refresh'lerinde (sekme değişimi vb.) cached sonuç kullan — gereksiz ağ isteği yapma.
+        // RPC henüz kurulmadıysa (migration çalıştırılmamış) sessizce geçilir.
+        try {
+            const now = Date.now();
+            const cacheAge = now - licenseCheckTime.current;
+            const shouldRefreshLicense = !isFirstLoad && cacheAge > 5 * 60 * 1000; // 5 dakika sonra yenile
+
+            // Kullanıcı "Tekrar Dene" derse (forceLicense) cache'i baypas edip sunucudan taze sonuç al.
+            if (isFirstLoad || shouldRefreshLicense || opts?.forceLicense) {
+                let { data: licenseCheck, error: licenseErr } = await withTimeout(
+                    supabase.rpc("register_device_and_touch_login", {
+                        p_device_id: getDeviceId(),
+                        p_user_agent: navigator.userAgent.slice(0, 250),
+                        p_device_name: [navigator.platform, navigator.language].filter(Boolean).join(" / ").slice(0, 120),
+                    }),
+                    "Lisans kontrolu",
+                );
+                if (licenseErr && /p_device_name|schema cache|function/i.test(String(licenseErr.message || ""))) {
+                    const retry = await withTimeout(
+                        supabase.rpc("register_device_and_touch_login", {
+                            p_device_id: getDeviceId(),
+                            p_user_agent: navigator.userAgent.slice(0, 250),
+                        }),
+                        "Lisans kontrolu",
+                    );
+                    licenseCheck = retry.data;
+                    licenseErr = retry.error;
+                }
+
+                // Sonucu cache'le
+                if (!licenseErr && typeof licenseCheck === "string") {
+                    licenseCheckCache.current = licenseCheck;
+                    licenseCheckTime.current = now;
+                } else if (licenseErr) {
+                    licenseCheckCache.current = null;
+                }
+            }
+
+            // Cached sonuç varsa kullan
+            const cachedResult = licenseCheckCache.current;
+            if (cachedResult === "suspended") {
+                setLockReason("inactive_company");
+                hasLoadedOnce.current = true;
+                setStatus("locked");
+                return;
+            }
+            if (cachedResult === "expired") {
+                setLockReason("expired_trial");
+                hasLoadedOnce.current = true;
+                setStatus("locked");
+                return;
+            }
+            if (cachedResult === "device_limit") {
+                setLockReason("device_limit");
+                hasLoadedOnce.current = true;
+                setStatus("locked");
+                return;
+            }
+        } catch {
+            // RPC yok ya da ağ hatası — cached sonuç var ise kullan, yoksa mevcut kontroller geçerli kalır
+        }
+
+            hasLoadedOnce.current = true;
             setStatus("ready");
         } catch (error) {
             console.error("Auth load failed:", error);
-            setUser(null);
-            setCompany(null);
-            setRole("unknown");
-            setMemberRole("unknown");
-            setLockReason(null);
-            setAppReadOnlyMode(false);
-            setStatus("unauthenticated");
+            if (isFirstLoad) {
+                setUser(null);
+                setCompany(null);
+                setRole("unknown");
+                setMemberRole("unknown");
+                setLockReason(null);
+                setAppReadOnlyMode(false);
+                hasLoadedOnce.current = false;
+                setStatus("unauthenticated");
+            }
+            // Arka plan auth yenileme hatası (sekme değişimi vb.):
+            // Mevcut oturum durumunu koru, kullanıcıyı login'e yönlendirme.
         }
     };
 
     useEffect(() => {
         let alive = true;
+        let lastAuthRefresh = 0;
+        let isPageVisible = true;
 
         async function run() {
             if (alive) await loadAuth();
         }
 
         run();
+
+        // Sekme görünürlüğü takip et — arka plan yenilemelerini azalt
+        const handleVisibilityChange = () => {
+            isPageVisible = !document.hidden;
+        };
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
         const { data } = supabase.auth.onAuthStateChange((event) => {
-            if (!alive || event === "INITIAL_SESSION") return;
-            window.setTimeout(() => {
-                if (alive) void loadAuth();
-            }, 0);
+            if (!alive) return;
+            // TOKEN_REFRESHED ve INITIAL_SESSION gereksiz — filtrele
+            if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") return;
+            // Yalnızca gerçek kullanıcı değişikliklerinde çalış
+            if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+
+            // Çok sık refresh'leri engelleyelim (debounce: 1 saniye)
+            const now = Date.now();
+            if (now - lastAuthRefresh < 1000) return;
+            lastAuthRefresh = now;
+
+            // Sayfa görünür ise yenile; gerçek çıkış (SIGNED_OUT) görünürlükten bağımsız işlenir.
+            const isSignedOut = event === "SIGNED_OUT";
+            if (isPageVisible || isSignedOut) {
+                window.setTimeout(() => {
+                    if (alive) void loadAuth({ signedOut: isSignedOut });
+                }, 0);
+            }
         });
 
         return () => {
             alive = false;
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
             data.subscription.unsubscribe();
         };
     }, []);
@@ -304,6 +445,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setStatus("ready");
                 return;
             }
+            // Eğer bir kez yüklendi ise arka plan yenilemesindeyiz — state sıfırlamadan loading'i atla
+            if (hasLoadedOnce.current) {
+                setStatus("ready");
+                return;
+            }
+            // İlk yükleme timeout — oturum yok, unauthenticated'e git
             setUser(null);
             setCompany(null);
             setRole("unknown");
@@ -321,16 +468,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const companySubscriptionPlan = company?.subscription_plan;
 
     const enabledModules = useMemo(() => {
-        if (companyEnabledModules?.length) return normalizeEnabledModules(companyEnabledModules);
-        if (companyPackageCode === "solo") return SOLO_MODULES;
-        if (companySubscriptionPlan === "enterprise" || companySubscriptionPlan === "lifetime") {
-            return ENTERPRISE_MODULES;
+        let modules: string[] = [];
+
+        if (companyEnabledModules?.length) {
+            modules = normalizeEnabledModules(companyEnabledModules);
+        } else {
+            const pkg = String(companyPackageCode || companySubscriptionPlan || "").toLowerCase();
+            if (pkg === "solo" || pkg === "solo_perdeci") modules = SOLO_MODULES;
+            else if (pkg === "enterprise" || pkg === "lifetime" || pkg === "ekip") modules = ENTERPRISE_MODULES;
+            else if (pkg === "pro" || pkg === "yonetici") modules = PRO_MODULES;
+            else modules = CORE_MODULES;
         }
-        if (companySubscriptionPlan === "pro") {
-            return PRO_MODULES;
+
+        // Test/demo şirketleri için suppliers ve installation modülünü garanti et
+        const companyName = String(company?.name ?? "").toLowerCase();
+        if (companyName.includes("test") || companyName.includes("demo")) {
+            if (!modules.includes("suppliers")) modules = [...modules, "suppliers"];
+            if (!modules.includes("installation")) modules = [...modules, "installation"];
         }
-        return CORE_MODULES;
-    }, [companyEnabledModules, companyPackageCode, companySubscriptionPlan]);
+
+        return modules;
+    }, [companyEnabledModules, companyPackageCode, companySubscriptionPlan, company?.name]);
 
     const value = useMemo<AuthContextValue>(() => ({
         status,
@@ -349,7 +507,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return aliases.some((item) => enabledModules.includes(item));
         },
         lockReason,
-        refreshAuth: loadAuth,
+        refreshAuth: () => loadAuth({ forceLicense: true }),
     }), [company, enabledModules, lockReason, memberRole, role, status, user]);
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

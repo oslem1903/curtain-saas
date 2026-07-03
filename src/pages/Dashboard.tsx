@@ -1,881 +1,721 @@
-﻿import { useEffect, useState } from "react";
-import { Link, useNavigate, useLocation } from "react-router-dom";
-import { TrendingUp, Users, CreditCard, ClipboardList, CheckCircle2, Calendar } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  AlertTriangle,
+  Banknote,
+  CalendarPlus,
+  CheckCircle2,
+  Clock3,
+  CreditCard,
+  Hammer,
+  PackageCheck,
+  ReceiptText,
+  Ruler,
+  ShoppingCart,
+  Truck,
+  Users,
+} from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { cn } from "../utils/cn";
 
-function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
-}
-
-async function getContext() {
-    return getEffectiveTenantContext();
-}
-
-type CalendarAppt = {
-    id: string;
-    title: string | null;
-    address: string | null;
-    start_at: string | null;
-    scheduled_at: string | null;
-    type: string | null;
-    status: string | null;
-    done?: boolean | null;
-    customer?: { name: string | null } | { name: string | null }[] | null;
-    assigned_to?: string | null;
+type AppointmentRow = {
+  id: string;
+  title: string | null;
+  type: string | null;
+  status: string | null;
+  done?: boolean | null;
+  start_at: string | null;
+  scheduled_at: string | null;
+  address?: string | null;
+  customer?: { name: string | null; phone?: string | null } | Array<{ name: string | null; phone?: string | null }> | null;
 };
 
-type TodayAppt = {
-    id: string;
-    type: string | null;
-    title: string | null;
-    address: string | null;
-    start_at: string | null;
-    scheduled_at: string | null;
-    status: string | null;
-    assigned_to?: string | null;
-    customer?: { name: string | null; phone: string | null } | { name: string | null; phone: string | null }[] | null;
+type InstallationJobRow = {
+  id: string;
+  order_id: string;
+  customer_name: string | null;
+  status: string | null;
+  scheduled_date: string | null;
+  scheduled_time: string | null;
+  total_amount: number | null;
 };
 
-type Upcoming = {
-    id: string;
-    title: string | null;
-    address: string | null;
-    start_at: string | null;
-    scheduled_at: string | null;
-    type: string | null;
-    status?: string | null;
-    customer?: { name: string | null } | { name: string | null }[] | null;
+type DueRow = {
+  id: string;
+  name: string;
+  amount: number;
+  due: string;
+  target: string;
 };
 
-type RecentOrderRow = {
-    id: string;
-    created_at: string;
-    status: string | null;
-    customer_name: string;
-    total: number;
+type SupplierDueRow = {
+  name: string;
+  amount: number;
+  due: string;
 };
 
-function pickOne<T>(v: T | T[] | null | undefined): T | null {
-    if (!v) return null;
-    return Array.isArray(v) ? v[0] ?? null : v;
+type RecentOrder = {
+  id: string;
+  created_at: string | null;
+  status: string | null;
+  customer_name: string;
+  total: number;
+};
+
+type WorkItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  when: Date;
+  target: string;
+  kind: "measurement" | "installation" | "collection" | "supplier";
+};
+
+type DashboardData = {
+  todayMeasurements: AppointmentRow[];
+  todayInstallations: Array<AppointmentRow | InstallationJobRow>;
+  todayCollections: DueRow[];
+  overdueCollections: DueRow[];
+  weekCollections: DueRow[];
+  supplierDue: SupplierDueRow[];
+  supplierOverdue: SupplierDueRow[];
+  upcoming: WorkItem[];
+  recentOrders: RecentOrder[];
+  totalCustomers: number;
+  activeOrders: number;
+  completedInstallations: number;
+  monthSales: number;
+  monthCost: number;
+};
+
+const emptyData: DashboardData = {
+  todayMeasurements: [],
+  todayInstallations: [],
+  todayCollections: [],
+  overdueCollections: [],
+  weekCollections: [],
+  supplierDue: [],
+  supplierOverdue: [],
+  upcoming: [],
+  recentOrders: [],
+  totalCustomers: 0,
+  activeOrders: 0,
+  completedInstallations: 0,
+  monthSales: 0,
+  monthCost: 0,
+};
+
+function pickOne<T>(value: T | T[] | null | undefined): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? value[0] ?? null : value;
 }
 
-function apptIso(a: { start_at?: string | null; scheduled_at?: string | null }) {
-    return a.start_at ?? a.scheduled_at ?? null;
+function money(value: number) {
+  return new Intl.NumberFormat("tr-TR", {
+    style: "currency",
+    currency: "TRY",
+    maximumFractionDigits: 0,
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
-function safeIso(u: { start_at: string | null; scheduled_at: string | null }) {
-    return u.start_at ?? u.scheduled_at ?? null;
+function isoOf(row: { start_at?: string | null; scheduled_at?: string | null }) {
+  return row.start_at || row.scheduled_at || null;
 }
 
-function getTimeKey(u: { start_at: string | null; scheduled_at: string | null }) {
-    const iso = safeIso(u);
-    if (!iso) return 0;
-    const t = new Date(iso).getTime();
-    return Number.isFinite(t) ? t : 0;
+function dateOnly(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
-function isDoneOrCancelled(s?: string | null) {
-    const v = (s ?? "").toLowerCase();
-    return v === "done" || v === "cancelled" || v === "canceled";
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
-function isOverdue(a: {
-    start_at?: string | null;
-    scheduled_at?: string | null;
-    status?: string | null;
-    done?: boolean | null;
-}) {
-    const iso = apptIso(a);
-    if (!iso) return false;
-    if (a.done === true) return false;
-    if (a.status && ["done", "cancelled", "canceled"].includes(a.status.toLowerCase())) {
-        return false;
-    }
-    return new Date(iso).getTime() < Date.now();
+function endOfToday() {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d;
 }
 
-function isDueSoon(a: {
-    start_at?: string | null;
-    scheduled_at?: string | null;
-    status?: string | null;
-    done?: boolean | null;
-}) {
-    const iso = apptIso(a);
-    if (!iso) return false;
-    if (a.done === true) return false;
-    if (a.status && ["done", "cancelled", "canceled"].includes(a.status.toLowerCase())) {
-        return false;
-    }
-
-    const t = new Date(iso).getTime();
-    const now = Date.now();
-    const oneDay = 24 * 60 * 60 * 1000;
-
-    return t >= now && t <= now + oneDay;
+function addDays(date: Date, days: number) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
-function dayKeyTR(iso: string) {
-    return new Date(iso).toLocaleDateString("tr-TR", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-        weekday: "long",
-    });
+function isClosed(status?: string | null, done?: boolean | null) {
+  const s = String(status || "").toLowerCase();
+  return done === true || ["done", "completed", "delivered", "cancelled", "canceled", "paid"].includes(s);
 }
 
-function timeTR(iso: string) {
-    return new Date(iso).toLocaleTimeString("tr-TR", {
-        hour: "2-digit",
-        minute: "2-digit",
-    });
+function isMeasurement(row: AppointmentRow) {
+  const raw = `${row.type || ""} ${row.title || ""}`.toLocaleLowerCase("tr-TR");
+  return raw.includes("measurement") || raw.includes("ölç") || raw.includes("olc");
 }
 
-function formatTime(iso?: string | null) {
-    if (!iso) return "--:--";
-    const d = new Date(iso);
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
+function isInstallation(row: AppointmentRow) {
+  const raw = `${row.type || ""} ${row.title || ""}`.toLocaleLowerCase("tr-TR");
+  return raw.includes("installation") || raw.includes("montaj");
 }
 
-function formatDateTR(iso?: string | null) {
-    if (!iso) return "-";
-    try {
-        return new Date(iso).toLocaleDateString("tr-TR", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-        });
-    } catch {
-        return iso;
-    }
+function customerName(row: AppointmentRow) {
+  return pickOne(row.customer)?.name || "Müşteri";
 }
 
-function formatTL(n: number) {
-    return new Intl.NumberFormat("tr-TR", {
-        style: "currency",
-        currency: "TRY",
-        maximumFractionDigits: 2,
-    }).format(Number.isFinite(n) ? n : 0);
+function relativeTime(target: Date) {
+  const diff = target.getTime() - Date.now();
+  const abs = Math.abs(diff);
+  const min = Math.round(abs / 60000);
+  const hours = Math.round(abs / 3600000);
+  const days = Math.round(abs / 86400000);
+  if (diff < 0) {
+    if (min < 60) return `${min || 1} dk gecikti`;
+    if (hours < 24) return `${hours} saat gecikti`;
+    return `${days} gün gecikti`;
+  }
+  if (min < 60) return `${min || 1} dk kaldı`;
+  if (hours < 24) return `${hours} saat kaldı`;
+  if (days === 1) return "Yarın";
+  return `${days} gün sonra`;
 }
 
-function typeTR(t?: string | null) {
-    return (t ?? "").toLowerCase() === "installation" ? "Montaj" : "Ölçü";
+function toneForDate(date: Date) {
+  const diff = date.getTime() - Date.now();
+  if (diff < 0) return "red";
+  if (diff <= 24 * 60 * 60 * 1000) return "amber";
+  return "blue";
 }
 
-function statusLabel(s?: string | null) {
-    const v = (s ?? "").toLowerCase();
-    if (v === "paid") return "Ödendi";
-    if (v === "partial") return "Kısmi";
-    if (v === "cancelled" || v === "canceled") return "İptal";
-    return "İşleniyor";
+function orderProgress(status?: string | null) {
+  const s = String(status || "").toLowerCase();
+  if (["delivered", "done", "completed", "paid", "teslim_edildi"].includes(s)) return { pct: 100, label: "Teslim Edildi" };
+  if (["installation_ready", "montaja_hazir", "ready"].includes(s)) return { pct: 75, label: "Montaja Hazır" };
+  if (["production", "in_production", "uretimde", "confirmed", "active"].includes(s)) return { pct: 50, label: "Üretimde" };
+  return { pct: 25, label: "Ölçü Alındı" };
 }
 
-function statusBadgeClass(s?: string | null) {
-    const v = (s ?? "").toLowerCase();
-    if (v === "paid") {
-        return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
-    }
-    if (v === "partial") {
-        return "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400";
-    }
-    if (v === "cancelled" || v === "canceled") {
-        return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400";
-    }
-    return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400";
+function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded-2xl bg-slate-200/80 dark:bg-slate-800", className)} />;
 }
 
-const StatCard = ({
-    title,
-    value,
-    change,
-    icon: Icon,
-    trend,
-    colorClass = "from-primary-500 to-primary-600",
-    onClick
+const SummaryCard = memo(function SummaryCard({
+  loading,
+  data,
 }: {
-    title: string;
-    value: string;
-    change: string;
-    icon: any;
-    trend: "up" | "down";
-    colorClass?: string;
-    onClick?: () => void;
-}) => (
-    <div 
-        onClick={onClick}
-        className={cn(
-            "group relative overflow-hidden bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all duration-500 hover:-translate-y-1",
-            onClick && "cursor-pointer active:scale-95"
-        )}
-    >
-        <div className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br ${colorClass} opacity-[0.03] -mr-8 -mt-8 rounded-full blur-2xl group-hover:opacity-10 transition-opacity`}></div>
-        
-        <div className="flex items-start justify-between relative z-10">
-            <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{title}</p>
-                <h3 className="text-2xl font-black mt-2 text-slate-900 dark:text-slate-100">{value}</h3>
-            </div>
-            <div className={`p-4 bg-gradient-to-br ${colorClass} rounded-2xl text-white shadow-lg shadow-primary-500/20 transform group-hover:rotate-12 transition-transform duration-500`}>
-                <Icon className="w-5 h-5" />
-            </div>
-        </div>
+  loading: boolean;
+  data: DashboardData;
+}) {
+  const first = data.upcoming[0];
+  // eslint-disable-next-line react-hooks/purity -- görüntü tonu için anlık zaman; saf-render dışı, davranış aynı
+  const nowMs = Date.now();
+  const overdueCount = data.upcoming.filter((item) => item.when.getTime() < nowMs).length + data.overdueCollections.length + data.supplierOverdue.length;
+  const tone = overdueCount > 0 ? "red" : first && first.when.getTime() - nowMs <= 60 * 60 * 1000 ? "amber" : "blue";
+  const classes = {
+    blue: "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-100",
+    amber: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-100",
+    red: "border-red-200 bg-red-50 text-red-950 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-100",
+  }[tone];
 
-        <div className="mt-6 flex items-center gap-2 relative z-10">
-            <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${trend === "up"
-                    ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                    : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                    }`}
-            >
-                {change}
-            </span>
-            <span className="text-[10px] text-slate-400 font-medium italic">geçen aya göre döküm</span>
-        </div>
-    </div>
-);
+  if (loading) return <Skeleton className="h-32" />;
 
+  return (
+    <section className={cn("rounded-3xl border p-5 shadow-sm sm:p-6", classes)}>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-widest opacity-70">
+            <Clock3 className="h-4 w-4" />
+            Günün Özeti
+          </div>
+          <h2 className="text-xl font-black leading-tight sm:text-2xl">
+            Bugün {data.todayMeasurements.length} ölçü, {data.todayInstallations.length} montaj ve {money(data.todayCollections.reduce((s, r) => s + r.amount, 0))} tahsilatınız bulunuyor.
+          </h2>
+          <p className="mt-3 text-sm font-semibold opacity-80">
+            {overdueCount > 0
+              ? `${overdueCount} geciken iş var. Önce bunları kapatmanız önerilir.`
+              : first
+                ? `${first.when.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })} saatindeki ${first.subtitle} işine ${relativeTime(first.when)}.`
+                : "Bugün için yaklaşan kritik iş görünmüyor."}
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center sm:min-w-[320px]">
+          <div className="rounded-2xl bg-white/60 p-3 dark:bg-white/10">
+            <div className="text-2xl font-black">{data.todayMeasurements.length}</div>
+            <div className="text-[11px] font-bold opacity-70">Ölçü</div>
+          </div>
+          <div className="rounded-2xl bg-white/60 p-3 dark:bg-white/10">
+            <div className="text-2xl font-black">{data.todayInstallations.length}</div>
+            <div className="text-[11px] font-bold opacity-70">Montaj</div>
+          </div>
+          <div className="rounded-2xl bg-white/60 p-3 dark:bg-white/10">
+            <div className="text-2xl font-black">{data.overdueCollections.length + data.supplierOverdue.length}</div>
+            <div className="text-[11px] font-bold opacity-70">Geciken</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+});
+
+const MetricCard = memo(function MetricCard({
+  title,
+  value,
+  note,
+  icon: Icon,
+  tone,
+  onClick,
+}: {
+  title: string;
+  value: string;
+  note: string;
+  icon: any;
+  tone: "blue" | "emerald" | "amber" | "violet";
+  onClick: () => void;
+}) {
+  const tones = {
+    blue: "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-950/20 dark:text-blue-200 dark:border-blue-900/40",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-200 dark:border-emerald-900/40",
+    amber: "bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-950/20 dark:text-amber-200 dark:border-amber-900/40",
+    violet: "bg-violet-50 text-violet-700 border-violet-100 dark:bg-violet-950/20 dark:text-violet-200 dark:border-violet-900/40",
+  }[tone];
+
+  return (
+    <button type="button" onClick={onClick} className="group min-w-0 rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-black uppercase tracking-widest text-slate-400">{title}</div>
+          <div className="mt-2 text-2xl font-black text-slate-950 dark:text-white">{value}</div>
+          <div className="mt-1 text-xs font-semibold text-slate-500">{note}</div>
+        </div>
+        <span className={cn("rounded-2xl border p-3 transition group-hover:scale-105", tones)}>
+          <Icon className="h-5 w-5" />
+        </span>
+      </div>
+    </button>
+  );
+});
+
+const ActionButton = memo(function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex min-h-20 items-center gap-3 rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-primary-200 hover:bg-primary-50/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-primary-950/20">
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-white shadow-lg shadow-primary-600/20">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 text-sm font-black text-slate-900 dark:text-white">{label}</span>
+    </button>
+  );
+});
 
 export const Dashboard = () => {
-    const location = useLocation();
-    const nav = useNavigate();
+  const navigate = useNavigate();
+  const { effectiveRole: role, realRole, viewingUserId } = useRole();
+  const [data, setData] = useState<DashboardData>(emptyData);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const previousRoleRef = useRef<{ role: string; realRole: string; viewingUserId: string | null }>({ role: "unknown", realRole: "unknown", viewingUserId: null });
 
-    const [upcoming, setUpcoming] = useState<Upcoming[]>([]);
-    const [, setUpcomingLoading] = useState(false);
+  const go = useCallback((path: string, state?: object) => {
+    navigate(path, state ? { state } : undefined);
+  }, [navigate]);
 
-    const [recentOrders, setRecentOrders] = useState<RecentOrderRow[]>([]);
-    const [, setRecentLoading] = useState(false);
+  const loadDashboard = useCallback(async (opts?: { silent?: boolean }) => {
+    if (role === "unknown") return;
+    // silent: focus/görünürlük tazelemesinde skeleton gösterme (flicker olmasın); veriler
+    // güncellenince kartlar yerinde değişir. Hesaplama/toplam mantığı aynıdır.
+    if (!opts?.silent) setLoading(true);
+    setError("");
 
-    const [todayAppts, setTodayAppts] = useState<TodayAppt[]>([]);
-    const [todayLoading, setTodayLoading] = useState(false);
-    const [todayErr, setTodayErr] = useState("");
+    try {
+      const ctx = await getEffectiveTenantContext();
+      const todayStart = startOfToday();
+      const todayEnd = endOfToday();
+      const todayStr = dateOnly(todayStart);
+      const weekEnd = dateOnly(addDays(todayStart, 7));
+      const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+      const monthEnd = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+      const workerId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
+      const scopedAppointments = role === "installer" || role === "measurement";
 
-    const [calendarDays, setCalendarDays] = useState<{ day: string; items: CalendarAppt[] }[]>([]);
-    const [overdue, setOverdue] = useState<CalendarAppt[]>([]);
-    const [, setCalLoading] = useState(false);
-    const [, setCalErr] = useState("");
+      let appointmentQuery = supabase
+        .from("appointments")
+        .select("id,title,type,status,done,start_at,scheduled_at,address,assigned_to,customer:customers(name,phone)")
+        .eq("company_id", ctx.company_id)
+        .gte("start_at", todayStart.toISOString())
+        .lte("start_at", addDays(todayStart, 7).toISOString());
+      if (scopedAppointments) appointmentQuery = appointmentQuery.eq("assigned_to", workerId);
 
-    const [refreshKey, setRefreshKey] = useState(0);
-    const refreshAll = () => setRefreshKey((k) => k + 1);
-    const { effectiveRole: role, realRole, viewingUserId } = useRole();
-    const [stats, setStats] = useState({
-        totalRevenue: 0,
-        activeOrders: 0,
-        pendingPayments: 0,
-        draftQuotes: 0,
-        todayAppointments: 0,
-        totalCustomers: 0,
-        completedWorks: 0,
-        waitingPricingCount: 0, 
-        convertedCount: 0       
-    });
-    const [overdueCount, setOverdueCount] = useState(0);
-    const [staffMap, setStaffMap] = useState<Record<string, { full_name: string; role: string }>>({});
+      const [
+        appointmentsRes,
+        jobsRes,
+        ordersRes,
+        dueOrdersRes,
+        suppliersRes,
+        customersRes,
+        incomeRes,
+        completedJobsRes,
+        monthOrdersRes,
+      ] = await Promise.allSettled([
+        appointmentQuery.order("start_at", { ascending: true }),
+        supabase.from("installation_jobs").select("id,order_id,customer_name,status,scheduled_date,scheduled_time,total_amount").eq("company_id", ctx.company_id).gte("scheduled_date", todayStr).lte("scheduled_date", weekEnd).order("scheduled_date", { ascending: true }),
+        supabase.from("orders").select("id,created_at,status,total_amount,paid_amount,remaining_amount,customer:customers(name)").eq("company_id", ctx.company_id).order("created_at", { ascending: false }).limit(8),
+        supabase.from("orders").select("id,remaining_amount,total_amount,paid_amount,payment_due_date,customer:customers(name)").eq("company_id", ctx.company_id).not("payment_due_date", "is", null),
+        supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id),
+        supabase.from("customers").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id),
+        supabase.from("income").select("amount,income_date").eq("company_id", ctx.company_id).gte("income_date", todayStart.toISOString()).lte("income_date", todayEnd.toISOString()),
+        supabase.from("installation_jobs").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id).eq("status", "completed"),
+        supabase.from("orders").select("id,total_amount,created_at").eq("company_id", ctx.company_id).neq("status", "cancelled").gte("created_at", monthStart.toISOString()).lte("created_at", monthEnd.toISOString()),
+      ]);
 
+      const appointments = appointmentsRes.status === "fulfilled" && !appointmentsRes.value.error ? (appointmentsRes.value.data ?? []) as AppointmentRow[] : [];
+      const jobs = jobsRes.status === "fulfilled" && !jobsRes.value.error ? (jobsRes.value.data ?? []) as InstallationJobRow[] : [];
+      const orderRows = ordersRes.status === "fulfilled" && !ordersRes.value.error ? (ordersRes.value.data ?? []) as any[] : [];
+      const dueOrders = dueOrdersRes.status === "fulfilled" && !dueOrdersRes.value.error ? (dueOrdersRes.value.data ?? []) as any[] : [];
+      const supplierRows = suppliersRes.status === "fulfilled" && !suppliersRes.value.error ? (suppliersRes.value.data ?? []) as any[] : [];
+      const monthOrders = monthOrdersRes.status === "fulfilled" && !monthOrdersRes.value.error ? (monthOrdersRes.value.data ?? []) as any[] : [];
+      const monthOrderIds = monthOrders.map((order) => order.id).filter(Boolean);
 
-
-    useEffect(() => {
-        if ((location.state as any)?.refresh) {
-            refreshAll();
+      let monthCost = 0;
+      if (monthOrderIds.length > 0) {
+        const itemsRes = await supabase.from("order_items").select("order_id,supplier_total_cost,supplier_unit_cost,qty,profit,line_total").in("order_id", monthOrderIds);
+        if (!itemsRes.error) {
+          monthCost = (itemsRes.data ?? []).reduce((sum: number, item: any) => {
+            const explicit = Number(item.supplier_total_cost ?? 0);
+            const calculated = Number(item.supplier_unit_cost ?? 0) * Number(item.qty ?? 1);
+            return sum + (explicit || calculated || 0);
+          }, 0);
         }
-    }, [location.state]);
+      }
 
-    useEffect(() => {
-        let channel: ReturnType<typeof supabase.channel> | null = null;
-        let active = true;
+      const todayMeasurements = appointments.filter((a) => {
+        const iso = isoOf(a);
+        if (!iso) return false;
+        const time = new Date(iso).getTime();
+        return time >= todayStart.getTime() && time <= todayEnd.getTime() && isMeasurement(a) && !isClosed(a.status, a.done);
+      });
 
-        async function subscribeAppointments() {
-            try {
-                const ctx = await getContext();
-                if (!active) return;
-                channel = supabase
-                    .channel(`dashboard-appointments-${ctx.company_id}`)
-                    .on(
-                        "postgres_changes",
-                        {
-                            event: "*",
-                            schema: "public",
-                            table: "appointments",
-                            filter: `company_id=eq.${ctx.company_id}`,
-                        },
-                        () => refreshAll(),
-                    )
-                    .subscribe();
-            } catch (e) {
-                console.error("appointments realtime error:", e);
-            }
+      const todayInstallAppts = appointments.filter((a) => {
+        const iso = isoOf(a);
+        if (!iso) return false;
+        const time = new Date(iso).getTime();
+        return time >= todayStart.getTime() && time <= todayEnd.getTime() && isInstallation(a) && !isClosed(a.status, a.done);
+      });
+
+      const todayJobs = jobs.filter((job) => job.scheduled_date === todayStr && !isClosed(job.status));
+      const customerDue: DueRow[] = dueOrders
+        .map((order) => {
+          const paid = Number(order.paid_amount ?? 0);
+          const total = Number(order.total_amount ?? 0);
+          const remaining = Number(order.remaining_amount ?? Math.max(total - paid, 0));
+          const customer = pickOne(order.customer);
+          return {
+            id: order.id,
+            name: customer?.name || "Müşteri",
+            amount: remaining,
+            due: order.payment_due_date,
+            target: "/accounting",
+          };
+        })
+        .filter((row) => row.amount > 0.01 && row.due);
+
+      // Tedarikçi başına NET bakiye (borç - ödeme - iptal) hesapla. Vadeli açık borcu
+      // brüt değil KALAN tutarla göster — ödenmiş/kısmen ödenmiş vadeli borç kartı şişirmesin.
+      const supplierAgg = new Map<string, { name: string; balance: number; earliestDue: string | null }>();
+      for (const row of supplierRows) {
+        const sid = row.supplier_id;
+        if (!sid) continue;
+        const entry = supplierAgg.get(sid) ?? { name: pickOne(row.suppliers)?.name || "Tedarikçi", balance: 0, earliestDue: null };
+        const amt = Number(row.amount ?? 0);
+        if (row.transaction_type === "debt") entry.balance += amt;
+        else if (row.transaction_type === "payment" || row.transaction_type === "cancel") entry.balance -= amt;
+        // Vade yalnızca borç satırında anlamlı — en erken (en acil) vadeyi tut.
+        if (row.transaction_type === "debt" && row.due_date) {
+          if (!entry.earliestDue || row.due_date < entry.earliestDue) entry.earliestDue = row.due_date;
         }
+        supplierAgg.set(sid, entry);
+      }
 
-        function handleFocus() {
-            refreshAll();
-        }
+      const supplierDueRows: SupplierDueRow[] = Array.from(supplierAgg.values())
+        .filter((e) => e.earliestDue && e.balance > 0.01)
+        .map((e) => ({ name: e.name, amount: e.balance, due: e.earliestDue as string }));
 
-        subscribeAppointments();
-        window.addEventListener("focus", handleFocus);
-        document.addEventListener("visibilitychange", handleFocus);
+      const upcoming: WorkItem[] = [
+        ...appointments
+          .filter((a) => !isClosed(a.status, a.done) && isoOf(a))
+          .map((a) => ({
+            id: a.id,
+            title: isInstallation(a) ? "Montaj" : "Ölçü",
+            subtitle: customerName(a),
+            when: new Date(isoOf(a)!),
+            target: `/appointments/${a.id}`,
+            kind: isInstallation(a) ? "installation" as const : "measurement" as const,
+          })),
+        ...jobs
+          .filter((job) => job.scheduled_date && !isClosed(job.status))
+          .map((job) => ({
+            id: job.id,
+            title: "Montaj",
+            subtitle: job.customer_name || "Müşteri",
+            when: new Date(`${job.scheduled_date}T${job.scheduled_time || "09:00"}`),
+            target: "/route/today",
+            kind: "installation" as const,
+          })),
+        ...customerDue
+          .filter((row) => row.due <= weekEnd)
+          .map((row) => ({
+            id: `collection-${row.id}`,
+            title: "Tahsilat",
+            subtitle: `${row.name} - ${money(row.amount)}`,
+            when: new Date(`${row.due}T12:00:00`),
+            target: "/accounting",
+            kind: "collection" as const,
+          })),
+        ...supplierDueRows
+          .filter((row) => row.due <= weekEnd)
+          .map((row, index) => ({
+            id: `supplier-${index}-${row.due}`,
+            title: "Tedarikçi Ödemesi",
+            subtitle: `${row.name} - ${money(row.amount)}`,
+            when: new Date(`${row.due}T12:00:00`),
+            target: "/suppliers",
+            kind: "supplier" as const,
+          })),
+      ].sort((a, b) => a.when.getTime() - b.when.getTime());
 
-        return () => {
-            active = false;
-            window.removeEventListener("focus", handleFocus);
-            document.removeEventListener("visibilitychange", handleFocus);
-            if (channel) supabase.removeChannel(channel);
-        };
-    }, []);
+      const recentOrders = orderRows.map((order) => ({
+        id: order.id,
+        created_at: order.created_at,
+        status: order.status,
+        customer_name: pickOne(order.customer)?.name || "Müşteri",
+        total: Number(order.total_amount ?? 0),
+      }));
 
-    useEffect(() => {
-        let alive = true;
-        if (role === "unknown") return;
+      const incomeToday = incomeRes.status === "fulfilled" && !incomeRes.value.error
+        ? (incomeRes.value.data ?? []).reduce((sum: number, row: any) => sum + Number(row.amount ?? 0), 0)
+        : 0;
+      const todayCollections = customerDue.filter((row) => row.due === todayStr);
+      if (incomeToday > 0 && todayCollections.length === 0) {
+        todayCollections.push({ id: "income-today", name: "Bugünkü tahsilat", amount: incomeToday, due: todayStr, target: "/accounting" });
+      }
 
-        async function loadStaff() {
-            try {
-                const ctx = await getContext();
-                const { data: members } = await supabase
-                    .from("company_members")
-                    .select("user_id")
-                    .eq("company_id", ctx.company_id);
-
-                const ids = (members ?? []).map((m) => m.user_id).filter(Boolean);
-                if (ids.length > 0) {
-                    const { data: profiles } = await supabase
-                        .from("profiles")
-                        .select("user_id, full_name, role")
-                        .in("user_id", ids);
-
-                    const map: Record<string, { full_name: string; role: string }> = {};
-                    (profiles ?? []).forEach((p) => {
-                        map[p.user_id] = {
-                            full_name: p.full_name || "İsimsiz",
-                            role: p.role || "installer",
-                        };
-                    });
-                    setStaffMap(map);
-                }
-            } catch (e) {
-                console.error("Staff load error:", e);
-            }
-        }
-
-        async function loadToday() {
-            setTodayLoading(true);
-            setTodayErr("");
-
-            try {
-                const ctx = await getContext();
-                const start = new Date();
-                start.setHours(0, 0, 0, 0);
-                const end = new Date();
-                end.setHours(23, 59, 59, 999);
-                const startIso = start.toISOString();
-                const endIso = end.toISOString();
-
-                let query = supabase
-                    .from("appointments")
-                    .select(`
-                        id,
-                        title,
-                        address,
-                        start_at,
-                        scheduled_at,
-                        type,
-                        status,
-                        assigned_to,
-                        customer:customers(name, phone)
-                    `)
-                    .eq("company_id", ctx.company_id)
-                    .gte("start_at", startIso)
-                    .lte("start_at", endIso)
-                    .in("status", ["planned", "postponed"]);
-
-                if (role === "installer" || role === "measurement") {
-                    const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
-                    query = query.eq("assigned_to", targetId);
-                }
-
-                const { data, error } = await query.order("start_at", { ascending: true });
-                if (!alive) return;
-                if (error) throw error;
-
-                const rows = ((data ?? []) as TodayAppt[])
-                    .filter((a) => !isDoneOrCancelled(a.status));
-
-                setTodayAppts(rows);
-            } catch (e: any) {
-                if (!alive) return;
-                setTodayErr(e?.message ?? "Bugünün randevuları yüklenemedi");
-                setTodayAppts([]);
-            } finally {
-                if (alive) setTodayLoading(false);
-            }
-        }
-
-        loadStaff();
-        loadToday();
-
-        return () => {
-            alive = false;
-        };
-    }, [refreshKey, role, realRole, viewingUserId]);
-
-    useEffect(() => {
-        let alive = true;
-        if (role === "unknown") return;
-
-        async function loadCalendar() {
-            setCalLoading(true);
-            setCalErr("");
-
-            try {
-                const ctx = await getContext();
-                const from = new Date();
-                from.setDate(from.getDate() - 7);
-                from.setHours(0, 0, 0, 0);
-                const to = new Date();
-                to.setDate(to.getDate() + 4);
-                to.setHours(23, 59, 59, 999);
-                const fromIso = from.toISOString();
-                const toIso = to.toISOString();
-
-                let query = supabase
-                    .from("appointments")
-                    .select(`
-                        id,
-                        title,
-                        address,
-                        start_at,
-                        scheduled_at,
-                        type,
-                        status,
-                        done,
-                        assigned_to,
-                        customer:customers(name)
-                    `)
-                    .eq("company_id", ctx.company_id)
-                    .or(
-                        `and(start_at.gte.${fromIso},start_at.lte.${toIso}),and(scheduled_at.gte.${fromIso},scheduled_at.lte.${toIso})`
-                    );
-
-                if (role === "installer" || role === "measurement") {
-                    const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
-                    query = query.eq("assigned_to", targetId);
-                }
-
-                const { data, error } = await query;
-                if (error) throw error;
-                if (!alive) return;
-
-                const rows = ((data ?? []) as CalendarAppt[])
-                    .filter((a) => !isDoneOrCancelled(a.status))
-                    .slice();
-
-                rows.sort((a, b) => {
-                    const ia = apptIso(a) ?? "";
-                    const ib = apptIso(b) ?? "";
-                    return new Date(ia).getTime() - new Date(ib).getTime();
-                });
-
-                const overdueList = rows.filter((a) => isOverdue(a));
-                const map = new Map<string, CalendarAppt[]>();
-                for (const a of rows) {
-                    const iso = apptIso(a);
-                    if (!iso) continue;
-                    const key = dayKeyTR(iso);
-                    const arr = map.get(key) ?? [];
-                    arr.push(a);
-                    map.set(key, arr);
-                }
-
-                const grouped = Array.from(map.entries()).map(([day, items]) => ({
-                    day,
-                    items: items.sort((x, y) => getTimeKey(x) - getTimeKey(y)),
-                }));
-
-                grouped.sort((a, b) => {
-                    const firstA = apptIso(a.items[0]) ?? "";
-                    const firstB = apptIso(b.items[0]) ?? "";
-                    return new Date(firstA).getTime() - new Date(firstB).getTime();
-                });
-
-                setOverdue(overdueList);
-                setCalendarDays(grouped);
-                setOverdueCount(overdueList.length);
-            } catch (e: any) {
-                if (!alive) return;
-                setCalErr(e?.message ?? "Takvim yüklenemedi");
-                setOverdue([]);
-                setCalendarDays([]);
-            } finally {
-                if (alive) setCalLoading(false);
-            }
-        }
-
-        loadCalendar();
-
-        return () => {
-            alive = false;
-        };
-    }, [refreshKey, role, realRole, viewingUserId]);
-
-    useEffect(() => {
-        let alive = true;
-        if (role === "unknown") return;
-
-        async function loadUpcoming() {
-            setUpcomingLoading(true);
-            try {
-                const ctx = await getContext();
-                const nowIso = new Date().toISOString();
-                let query = supabase
-                    .from("appointments")
-                    .select(`
-                        id,
-                        title,
-                        address,
-                        start_at,
-                        scheduled_at,
-                        type,
-                        status,
-                        assigned_to,
-                        customer:customers(name)
-                    `)
-                    .eq("company_id", ctx.company_id)
-                    .in("type", ["measurement", "installation"])
-                    .in("status", ["planned", "postponed"])
-                    .or(`start_at.gte.${nowIso},scheduled_at.gte.${nowIso}`);
-
-                if (role === "installer" || role === "measurement") {
-                    const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
-                    query = query.eq("assigned_to", targetId);
-                }
-
-                const { data, error } = await query
-                    .order("start_at", { ascending: true, nullsFirst: false })
-                    .order("scheduled_at", { ascending: true, nullsFirst: false })
-                    .limit(20);
-
-                if (!alive) return;
-                if (error) throw error;
-                setUpcoming(data ?? []);
-            } finally {
-                if (alive) setUpcomingLoading(false);
-            }
-        }
-
-        async function loadRecentOrders() {
-            setRecentLoading(true);
-            try {
-                const ctx = await getContext();
-                const ordersQuery = supabase
-                    .from("orders")
-                    .select(`
-                        id,
-                        created_at,
-                        status,
-                        total_amount,
-                        remaining_amount,
-                        assigned_to,
-                        created_by,
-                        customer:customers(name)
-                    `)
-                    .eq("company_id", ctx.company_id)
-                    .order("created_at", { ascending: false })
-                    .limit(5);
-
-                const { data, error } = await ordersQuery;
-                if (!alive) return;
-                if (error) throw error;
-
-                const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
-                const scoped = (role === "installer" || role === "measurement")
-                    ? (data ?? []).filter((o: any) => o.assigned_to === targetId || o.created_by === targetId)
-                    : (data ?? []);
-
-                const mapped: RecentOrderRow[] = scoped.map((o: any) => ({
-                    id: o.id,
-                    created_at: o.created_at,
-                    status: o.status ?? null,
-                    customer_name: pickOne(o.customer)?.name ?? "-",
-                    total: Number(o.total_amount ?? 0),
-                }));
-                setRecentOrders(mapped);
-            } finally {
-                if (alive) setRecentLoading(false);
-            }
-        }
-
-        async function loadStats() {
-            try {
-                const ctx = await getContext();
-                const { data: ordsRaw } = await supabase
-                    .from("orders")
-                    .select("status, total_amount, remaining_amount, customer_id, assigned_to, created_by")
-                    .eq("company_id", ctx.company_id);
-
-                const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
-                const ords = (role === "installer" || role === "measurement")
-                    ? (ordsRaw ?? []).filter((o: any) => o.assigned_to === targetId || o.created_by === targetId)
-                    : (ordsRaw ?? []);
-
-                let totalRevenue = 0;
-                let activeOrders = 0;
-                let pendingPayments = 0;
-                let draftQuotes = 0;
-
-                (ords ?? []).forEach((o) => {
-                    if (o.status !== "cancelled") totalRevenue += Number(o.total_amount || 0);
-                    if (o.status === "open" || o.status === "partial") activeOrders++;
-                    if (o.status === "draft") draftQuotes++;
-                    pendingPayments += Number(o.remaining_amount || 0);
-                });
-
-                const scopedCustomerIds = new Set<string>();
-                (ords ?? []).forEach((o: any) => {
-                    if (o.customer_id) scopedCustomerIds.add(o.customer_id);
-                });
-
-                const { count: customerCount } = (role === "installer" || role === "measurement")
-                    ? { count: scopedCustomerIds.size }
-                    : await supabase
-                        .from("customers")
-                        .select("*", { count: "exact", head: true })
-                        .eq("company_id", ctx.company_id);
-
-                let doneQuery = supabase
-                    .from("appointments")
-                    .select("*", { count: "exact", head: true })
-                    .eq("company_id", ctx.company_id)
-                    .eq("status", "done");
-                if (role === "installer" || role === "measurement") doneQuery = doneQuery.eq("assigned_to", targetId);
-                const { count: doneCount } = await doneQuery;
-
-                let measuredQuery = supabase
-                    .from("appointments")
-                    .select("*", { count: "exact", head: true })
-                    .eq("company_id", ctx.company_id)
-                    .eq("status", "measured");
-                if (role === "installer" || role === "measurement") measuredQuery = measuredQuery.eq("assigned_to", targetId);
-                const { count: measuredCount } = await measuredQuery;
-
-                if (!alive) return;
-                setStats({
-                    totalRevenue,
-                    activeOrders,
-                    pendingPayments,
-                    draftQuotes,
-                    totalCustomers: customerCount || 0,
-                    completedWorks: doneCount || 0,
-                    waitingPricingCount: measuredCount || 0,
-                    todayAppointments: 0, 
-                    convertedCount: 0
-                });
-            } catch (e) {
-                console.error("Stats error:", e);
-            }
-        }
-
-        loadUpcoming();
-        loadRecentOrders();
-        loadStats();
-
-        return () => {
-            alive = false;
-        };
-    }, [refreshKey, role, realRole, viewingUserId]);
-
-    if (role === "unknown") {
-        return <div className="p-6 text-slate-500">Panel hazırlanıyor...</div>;
+      setData({
+        todayMeasurements,
+        todayInstallations: [...todayInstallAppts, ...todayJobs],
+        todayCollections,
+        overdueCollections: customerDue.filter((row) => row.due < todayStr),
+        weekCollections: customerDue.filter((row) => row.due > todayStr && row.due <= weekEnd),
+        supplierDue: supplierDueRows.filter((row) => row.due >= todayStr && row.due <= weekEnd),
+        supplierOverdue: supplierDueRows.filter((row) => row.due < todayStr),
+        upcoming,
+        recentOrders,
+        totalCustomers: customersRes.status === "fulfilled" && !customersRes.value.error ? customersRes.value.count ?? 0 : 0,
+        activeOrders: orderRows.filter((order) => !isClosed(order.status)).length,
+        completedInstallations: completedJobsRes.status === "fulfilled" && !completedJobsRes.value.error ? completedJobsRes.value.count ?? 0 : 0,
+        monthSales: monthOrders.reduce((sum, order) => sum + Number(order.total_amount ?? 0), 0),
+        monthCost,
+      });
+    } catch (e: any) {
+      setError(e?.message || "Panel verileri yüklenemedi.");
+    } finally {
+      setLoading(false);
     }
+  }, [role, realRole, viewingUserId]);
 
-    return (
-        <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-                        {role === "admin" ? "Yönetici Paneli" : role === "accountant" ? "Muhasebe Paneli" : "Montajcı Paneli"}
-                    </h1>
-                    <p className="text-slate-500 dark:text-slate-400 mt-1">
-                        Hoş geldiniz, işte işletmenizin güncel özeti.
-                    </p>
-                </div>
+  useEffect(() => {
+    // Only reload if actual role values changed (not just reference changes)
+    const prevRole = previousRoleRef.current;
+    const roleChanged = prevRole.role !== role || prevRole.realRole !== realRole || prevRole.viewingUserId !== viewingUserId;
 
-                <div className="flex gap-3">
-                    <button onClick={refreshAll} className="px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors">
-                        Yenile
-                    </button>
-                    {(role === "admin" || role === "installer") && (
-                        <Link to="/orders/new" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium shadow-md shadow-primary-600/20 transition-all inline-flex items-center">
-                            + Yeni Sipariş
-                        </Link>
-                    )}
-                </div>
-            </div>
+    if (roleChanged) {
+      previousRoleRef.current = { role, realRole, viewingUserId };
+      void loadDashboard();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnız rol değişiminde yükle (previousRoleRef guard'lı)
+  }, [role, realRole, viewingUserId]);
 
-            {overdueCount > 0 && (
-                <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg mb-4 shadow-sm animate-pulse">
-                    Dikkat: {overdueCount} adet geciken randevu var!
-                </div>
-            )}
+  // Pencere/sekme yeniden odaklandığında paneli SESSİZ tazele: başka ekranda/tabda yapılan
+  // işlem (sipariş/tahsilat/iptal vb.) sonrası kartlar bayat kalmasın. Skeleton göstermez
+  // (silent), debounce'lu (3sn) — gereksiz istek yapmaz. Hesaplama/toplam mantığı değişmez.
+  useEffect(() => {
+    let last = Date.now();
+    const refresh = () => {
+      if (document.hidden) return;
+      const now = Date.now();
+      if (now - last < 3000) return;
+      last = now;
+      void loadDashboard({ silent: true });
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [loadDashboard]);
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
-                {role === "admin" && (
-                    <>
-                        <StatCard title="Yıllık Toplam Gelir" value={formatTL(stats.totalRevenue)} change="+%12.5" icon={TrendingUp} trend="up" colorClass="from-amber-600 to-amber-800" onClick={() => nav("/accounting")} />
-                        <StatCard title="Bekleyen Tahsilatlar" value={formatTL(stats.pendingPayments)} change="Takipte" icon={CreditCard} trend="down" colorClass="from-slate-700 to-slate-900" onClick={() => nav("/accounting")} />
-                        <StatCard title="Fiyat Bekleyen Ölçüler" value={String(stats.waitingPricingCount)} change="Acil İş" icon={ClipboardList} trend="up" colorClass="from-orange-500 to-red-600" onClick={() => nav("/orders")} />
-                        <StatCard title="Müşteri Portföyü" value={String(stats.totalCustomers)} change="+2" icon={Users} trend="up" colorClass="from-blue-600 to-blue-800" onClick={() => nav("/customers")} />
-                    </>
-                )}
-                {role === "accountant" && (
-                    <>
-                        <StatCard title="Tahsilat Listesi" value={formatTL(stats.pendingPayments)} change="Ödeme Bekleyen" icon={CreditCard} trend="up" colorClass="from-emerald-600 to-green-800" onClick={() => nav("/accounting")} />
-                        <StatCard title="Fiyat Girilecek Ölçüler" value={String(stats.waitingPricingCount)} change="Yeni Kayıt" icon={ClipboardList} trend="up" colorClass="from-orange-500 to-orange-700" onClick={() => nav("/orders")} />
-                        <StatCard title="Aktif Sipariş Toplamı" value={formatTL(stats.totalRevenue)} change="Güncel" icon={TrendingUp} trend="up" colorClass="from-blue-500 to-blue-700" onClick={() => nav("/orders")} />
-                        <StatCard title="Tamamlanan İşler" value={String(stats.completedWorks)} change="Biten" icon={CheckCircle2} trend="up" colorClass="from-slate-600 to-slate-800" onClick={() => nav("/orders")} />
-                    </>
-                )}
-                {role === "installer" && (
-                    <>
-                        <StatCard title="Bugünkü Görevlerim" value={String(todayAppts.length)} change="Günün işi" icon={Calendar} trend="up" colorClass="from-indigo-600 to-indigo-800" onClick={() => nav("/route/today")} />
-                        <StatCard title="Tamamlanan İşlerim" value={String(stats.completedWorks)} change="Başarı" icon={CheckCircle2} trend="up" colorClass="from-emerald-600 to-emerald-800" onClick={() => nav("/orders")} />
-                        <StatCard title="Sipariş Bekleyen Ölçülerim" value={String(stats.waitingPricingCount)} change="Süreçte" icon={ClipboardList} trend="up" colorClass="from-amber-500 to-amber-700" onClick={() => nav("/orders")} />
-                        <StatCard title="Toplam Müşteri Portföyüm" value={String(stats.totalCustomers)} change="Aktif" icon={Users} trend="up" colorClass="from-slate-600 to-slate-800" onClick={() => nav("/customers")} />
-                    </>
-                )}
-            </div>
+  const monthProfit = data.monthSales - data.monthCost;
+  const supplierDueTotal = useMemo(() => [...data.supplierDue, ...data.supplierOverdue].reduce((sum, row) => sum + row.amount, 0), [data.supplierDue, data.supplierOverdue]);
+  const collectionTotal = useMemo(() => data.todayCollections.reduce((sum, row) => sum + row.amount, 0), [data.todayCollections]);
 
-            {role === "admin" && (
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                        ["Bugünkü Ölçüler", todayAppts.filter((a) => String(a.type ?? "").toLowerCase() === "measurement").length, "/route/today"],
-                        ["Bugünkü Montajlar", todayAppts.filter((a) => String(a.type ?? "").toLowerCase() === "installation").length, "/route/today"],
-                        ["Bekleyen Siparişler", stats.activeOrders || 0, "/orders"],
-                        ["Tahsilat Bekleyenler", formatTL(stats.pendingPayments), "/accounting"],
-                    ].map(([label, value, target]) => (
-                        <button key={String(label)} type="button" onClick={() => nav(String(target))} className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800">
-                            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</div>
-                            <div className="mt-2 text-xl font-black text-slate-950 dark:text-white">{value}</div>
-                        </button>
-                    ))}
-                </div>
-            )}
+  if (role === "unknown") {
+    return <div className="p-4 text-sm font-bold text-slate-500">Panel hazırlanıyor...</div>;
+  }
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-                        <div className="flex items-center justify-between mb-3">
-                            <h2 className="text-lg font-semibold">Bugünün Randevuları</h2>
-                            {todayLoading && <span className="text-sm text-slate-500">Yükleniyor...</span>}
-                        </div>
-                        {todayErr && <div className="p-3 rounded-lg bg-red-50 text-red-700 border border-red-200">{todayErr}</div>}
-                        {!todayLoading && todayAppts.length === 0 && <div className="text-slate-500">Bugün randevu yok.</div>}
-                        <div className="space-y-2">
-                            {todayAppts.map((a) => (
-                                <button key={a.id} onClick={() => nav(`/appointments/${a.id}`)} className="w-full text-left p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition">
-                                    <div className="flex items-center justify-between">
-                                        <div className="font-medium">
-                                            {a.title ?? typeTR(a.type)}
-                                            <span className="text-sm text-slate-500"> • {pickOne(a.customer)?.name ?? "-"}</span>
-                                            {a.assigned_to && staffMap[a.assigned_to] && (
-                                                <span className="ml-2 text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-500 font-bold uppercase">{staffMap[a.assigned_to].full_name}</span>
-                                            )}
-                                        </div>
-                                        <div className="text-sm text-slate-500">{apptIso(a) ? timeTR(apptIso(a)!) : ""}</div>
-                                    </div>
-                                    <div className="text-sm text-slate-500 mt-1">{a.address ?? ""}</div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-                        <h2 className="text-lg font-semibold mb-3">Geciken Randevular</h2>
-                        {overdue.length === 0 && <div className="text-slate-500">Geciken randevu yok</div>}
-                        <div className="space-y-2">
-                            {overdue.map((a) => (
-                                <button key={a.id} onClick={() => nav(`/appointments/${a.id}`)} className="w-full text-left p-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 transition">
-                                    <div className="flex items-center justify-between">
-                                        <div className="font-medium">{a.title ?? typeTR(a.type)} <span className="text-sm text-slate-600">({pickOne(a.customer)?.name ?? "-"})</span></div>
-                                        <div className="text-sm text-slate-600">{apptIso(a) ? timeTR(apptIso(a)!) : ""}</div>
-                                    </div>
-                                    <div className="text-sm text-slate-600 mt-1">{apptIso(a) ? dayKeyTR(apptIso(a)!) : ""} • {a.address ?? ""}</div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-                        <h2 className="text-lg font-semibold mb-3">Takvim</h2>
-                        <div className="space-y-5">
-                            {calendarDays.map((g) => (
-                                <div key={g.day}>
-                                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">{g.day}</div>
-                                    <div className="space-y-2">
-                                        {g.items.map((a) => (
-                                            <button key={a.id} onClick={() => nav(`/appointments/${a.id}`)} className={cn("w-full text-left p-3 rounded-xl border transition-colors", isOverdue(a) ? "border-red-300 bg-red-50 hover:bg-red-100" : isDueSoon(a) ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : "border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800")}>
-                                                <div className="flex items-center justify-between">
-                                                    <div className="font-medium">
-                                                        {apptIso(a) ? timeTR(apptIso(a)!) : ""} • {typeTR(a.type)} • {a.title ?? ""}
-                                                        <span className="text-sm text-slate-500"> • {pickOne(a.customer)?.name ?? "-"}</span>
-                                                    </div>
-                                                    <div className="text-xs text-slate-500">{a.status ?? "planned"}</div>
-                                                </div>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="space-y-6">
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                        <h3 className="font-semibold text-slate-900 dark:text-white mb-4">Son Siparişler</h3>
-                        <div className="space-y-3">
-                            {recentOrders.map((o) => (
-                                <button key={o.id} onClick={() => nav(`/orders/${o.id}`)} className="w-full text-left p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border border-transparent hover:border-slate-200">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <div className="font-medium">#{o.id.slice(0, 8)}</div>
-                                            <div className="text-xs text-slate-500">{o.customer_name}</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="font-bold">{formatTL(o.total)}</div>
-                                            <div className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase", statusBadgeClass(o.status))}>{statusLabel(o.status)}</div>
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                        <h3 className="font-semibold text-slate-900 dark:text-white mb-4">Yaklaşan İşler</h3>
-                        <div className="space-y-3">
-                            {upcoming.slice(0, 5).map((u) => (
-                                <button key={u.id} onClick={() => nav(`/appointments/${u.id}`)} className="w-full text-left p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                                    <div className="flex items-center gap-3">
-                                        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center font-bold text-xs", u.type === "installation" ? "bg-green-100 text-green-700" : "bg-primary-100 text-primary-600")}>
-                                            {formatTime(apptIso(u))}
-                                        </div>
-                                        <div>
-                                            <div className="text-sm font-medium">{pickOne(u.customer)?.name || "İsimsiz"}</div>
-                                            <div className="text-[10px] text-slate-500">{formatDateTR(apptIso(u))} • {typeTR(u.type)}</div>
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
+  return (
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 overflow-x-clip">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white sm:text-3xl">
+            {role === "accountant" ? "Muhasebe Paneli" : role === "installer" ? "Saha Paneli" : "Yönetici Paneli"}
+          </h1>
+          <p className="mt-1 text-sm font-medium text-slate-500">Bugünkü işleri, tahsilatları ve kârlılığı tek ekrandan yönetin.</p>
         </div>
-    );
+        <button type="button" onClick={() => void loadDashboard()} className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+          Yenile
+        </button>
+      </div>
+
+      {error ? <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{error}</div> : null}
+
+      <SummaryCard loading={loading} data={data} />
+
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {loading ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />) : (
+          <>
+            <MetricCard title="Ölçüler" value={String(data.todayMeasurements.length)} note="Bugünkü ölçü adedi" icon={Ruler} tone="blue" onClick={() => go("/appointments/new")} />
+            <MetricCard title="Montajlar" value={String(data.todayInstallations.length)} note="Bugünkü montaj adedi" icon={Hammer} tone="emerald" onClick={() => go("/route/today")} />
+            <MetricCard title="Tahsilatlar" value={money(collectionTotal)} note={`${data.todayCollections.length} müşteri bekliyor`} icon={CreditCard} tone="amber" onClick={() => go("/accounting")} />
+            <MetricCard title="Tedarikçi Ödemeleri" value={money(supplierDueTotal)} note={`${data.supplierOverdue.length} geciken, ${data.supplierDue.length} vadesi gelen`} icon={Truck} tone="violet" onClick={() => go("/suppliers")} />
+          </>
+        )}
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-black text-slate-950 dark:text-white">Hızlı İşlemler</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <ActionButton label="Yeni Ölçü" icon={Ruler} onClick={() => go("/measurements/new")} />
+          <ActionButton label="Yeni Sipariş" icon={ShoppingCart} onClick={() => go("/orders/new")} />
+          <ActionButton label="Tahsilat Yap" icon={Banknote} onClick={() => go("/accounting")} />
+          <ActionButton label="Ödeme Yap" icon={ReceiptText} onClick={() => go("/suppliers")} />
+          <ActionButton label="Randevu Oluştur" icon={CalendarPlus} onClick={() => go("/appointments/new")} />
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-black text-slate-950 dark:text-white">Yaklaşan İşler</h2>
+            <span className="text-xs font-bold text-slate-400">{data.upcoming.length} kayıt</span>
+          </div>
+          {loading ? (
+            <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
+          ) : data.upcoming.length === 0 ? (
+            <div className="rounded-2xl bg-slate-50 p-6 text-sm font-bold text-slate-500 dark:bg-slate-800/50">Yaklaşan iş yok.</div>
+          ) : (
+            <div className="space-y-3">
+              {data.upcoming.slice(0, 8).map((item) => {
+                const tone = toneForDate(item.when);
+                return (
+                  <button key={item.id} type="button" onClick={() => go(item.target)} className={cn("w-full rounded-2xl border p-4 text-left transition hover:shadow-md", tone === "red" && "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/20", tone === "amber" && "border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/20", tone === "blue" && "border-blue-100 bg-blue-50/50 dark:border-blue-900/40 dark:bg-blue-950/10")}>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-black text-slate-950 dark:text-white">{item.title}</div>
+                        <div className="mt-1 text-xs font-semibold text-slate-600 dark:text-slate-300">{item.subtitle}</div>
+                      </div>
+                      <div className={cn("shrink-0 rounded-full px-3 py-1 text-xs font-black", tone === "red" && "bg-red-600 text-white", tone === "amber" && "bg-amber-500 text-white", tone === "blue" && "bg-blue-600 text-white")}>
+                        {relativeTime(item.when)}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <h2 className="text-lg font-black text-slate-950 dark:text-white">Bu Ay Kârınız</h2>
+          {loading ? <Skeleton className="mt-4 h-48" /> : (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
+                <span className="text-sm font-bold text-slate-500">Toplam Satış</span>
+                <span className="font-black text-slate-950 dark:text-white">{money(data.monthSales)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
+                <span className="text-sm font-bold text-slate-500">Toplam Maliyet</span>
+                <span className="font-black text-slate-950 dark:text-white">{money(data.monthCost)}</span>
+              </div>
+              <div className={cn("flex items-center justify-between rounded-2xl p-4", monthProfit >= 0 ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200" : "bg-red-50 text-red-800 dark:bg-red-950/20 dark:text-red-200")}>
+                <span className="text-sm font-black">Net Kâr</span>
+                <span className="text-2xl font-black">{money(monthProfit)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.55fr)]">
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-black text-slate-950 dark:text-white">Son Siparişler</h2>
+            <button type="button" onClick={() => go("/orders")} className="text-xs font-black text-primary-600">Tümünü Gör</button>
+          </div>
+          {loading ? (
+            <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+          ) : (
+            <div className="space-y-3">
+              {data.recentOrders.map((order) => {
+                const progress = orderProgress(order.status);
+                return (
+                  <button key={order.id} type="button" onClick={() => go(`/orders/${order.id}`)} className="w-full rounded-2xl border border-slate-100 p-4 text-left transition hover:border-primary-200 hover:bg-primary-50/40 dark:border-slate-800 dark:hover:bg-primary-950/10">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="font-black text-slate-950 dark:text-white">#{order.id.slice(0, 8).toUpperCase()} - {order.customer_name}</div>
+                        <div className="mt-1 text-xs font-semibold text-slate-500">{money(order.total)}</div>
+                      </div>
+                      <div className="w-full sm:w-48">
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                          <div className="h-full rounded-full bg-primary-600" style={{ width: `${progress.pct}%` }} />
+                        </div>
+                        <div className="mt-1 text-right text-xs font-black text-slate-500">{progress.label} (%{progress.pct})</div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+              {data.recentOrders.length === 0 ? <div className="rounded-2xl bg-slate-50 p-6 text-sm font-bold text-slate-500 dark:bg-slate-800/50">Henüz sipariş yok.</div> : null}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <h2 className="text-lg font-black text-slate-950 dark:text-white">İşletme Nabzı</h2>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button type="button" onClick={() => go("/customers")} className="rounded-2xl bg-slate-50 p-4 text-left dark:bg-slate-800/50">
+              <Users className="mb-2 h-5 w-5 text-blue-600" />
+              <div className="text-xl font-black">{data.totalCustomers}</div>
+              <div className="text-xs font-bold text-slate-500">Müşteri</div>
+            </button>
+            <button type="button" onClick={() => go("/orders")} className="rounded-2xl bg-slate-50 p-4 text-left dark:bg-slate-800/50">
+              <PackageCheck className="mb-2 h-5 w-5 text-emerald-600" />
+              <div className="text-xl font-black">{data.activeOrders}</div>
+              <div className="text-xs font-bold text-slate-500">Aktif Sipariş</div>
+            </button>
+            <button type="button" onClick={() => go("/route/today")} className="rounded-2xl bg-slate-50 p-4 text-left dark:bg-slate-800/50">
+              <CheckCircle2 className="mb-2 h-5 w-5 text-violet-600" />
+              <div className="text-xl font-black">{data.completedInstallations}</div>
+              <div className="text-xs font-bold text-slate-500">Biten Montaj</div>
+            </button>
+            <button type="button" onClick={() => go("/accounting")} className="rounded-2xl bg-slate-50 p-4 text-left dark:bg-slate-800/50">
+              <AlertTriangle className="mb-2 h-5 w-5 text-red-600" />
+              <div className="text-xl font-black">{data.overdueCollections.length + data.supplierOverdue.length}</div>
+              <div className="text-xs font-bold text-slate-500">Geciken</div>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 };
-
-
-
-
