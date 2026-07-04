@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, UserCog, Wallet, X, Printer, FileSpreadsheet, Download, Briefcase, CalendarCheck, Phone, CheckCircle2, TrendingUp, Users, HandCoins } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 
 type Employee = {
     id: string;
@@ -415,38 +418,25 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             const periodLabel = payStart && payEnd ? `${formatDate(payStart)} - ${formatDate(payEnd)}` : formatDate(new Date().toISOString());
             const desc = `${emp.full_name || "Montajcı"} ödemesi (${periodLabel}, ${empJobs.length} iş)${payNote ? ` - ${payNote}` : ""}`;
 
-            // 1. Gider kaydı (Giderler ekranıyla senkron)
-            const { data: expData } = await supabase.from("expenses").insert({
-                company_id: companyId,
+            const result = await financeService.installerPayments.recordPayment({
+                companyId,
+                installerId: emp.id,
                 amount,
-                expense_date: new Date().toISOString(),
-                category: "Montajcı Ödemesi",
-                status: "paid",
+                method: payMethod,
+                periodStart: payStart || null,
+                periodEnd: payEnd || null,
                 note: desc,
-            }).select("id").single();
-
-            // 2. Montajcı cari hareketi
-            const { error: txErr } = await supabase.from("installer_transactions").insert({
-                company_id: companyId,
-                installer_id: emp.id,
-                transaction_date: new Date().toISOString(),
-                transaction_type: "payment",
-                amount,
-                description: desc,
-                payment_method: payMethod,
-                period_start: payStart || null,
-                period_end: payEnd || null,
-                expense_id: expData?.id ?? null,
+                idempotencyKey: crypto.randomUUID(),
             });
-            if (txErr) throw txErr;
+            if (result.status === "error") throw result.error;
 
             setPayModalId(null);
             setPayAmount(""); setPayNote(""); setPayStart(""); setPayEnd("");
             await load();
         } catch (e: any) {
             const msg = String(e?.message || "");
-            setErr(msg.includes("installer_transactions")
-                ? "Montajcı cari tablosu bulunamadı. supabase_installer_ledger.sql dosyasını SQL Editor'da çalıştırın."
+            setErr(msg.includes("installer_record_payment")
+                ? "Montajcı ödeme servisi bulunamadı. supabase_installer_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
                 : "Ödeme kaydedilemedi. Lütfen tekrar deneyin.");
         } finally {
             setSaving(false);
@@ -454,22 +444,15 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
     }
 
     async function cancelPayment(tx: InstallerTx) {
-        if (!window.confirm(`${formatTL(Number(tx.amount))} tutarındaki ödeme iptal edilsin mi? Bağlı gider kaydı da silinecek.`)) return;
+        if (!window.confirm(`${formatTL(Number(tx.amount))} tutarındaki ödeme iptal edilsin mi? Bağlı gider kaydı silinmez; yerine ters (iptal) kaydı oluşturulur.`)) return;
         setSaving(true);
         try {
-            // Cari tutarlılığı: iptal kaydı + bağlı giderin silinmesi
-            const { error } = await supabase.from("installer_transactions").insert({
-                company_id: companyId,
-                installer_id: tx.installer_id,
-                transaction_date: new Date().toISOString(),
-                transaction_type: "cancel",
-                amount: Number(tx.amount),
-                description: `İptal: ${tx.description || "ödeme"}`,
+            const result = await financeService.installerPayments.cancelPayment({
+                companyId,
+                transactionId: tx.id,
+                idempotencyKey: crypto.randomUUID(),
             });
-            if (error) throw error;
-            if (tx.expense_id) {
-                await supabase.from("expenses").delete().eq("id", tx.expense_id).eq("company_id", companyId);
-            }
+            if (result.status === "error") throw result.error;
             await load();
         } catch {
             setErr("Ödeme iptal edilemedi. Lütfen tekrar deneyin.");
