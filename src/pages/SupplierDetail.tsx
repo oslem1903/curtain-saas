@@ -14,7 +14,7 @@ type Supplier = {
 type Transaction = {
     id: string;
     transaction_date: string;
-    transaction_type: "debt" | "payment" | "cancel";
+    transaction_type: "debt" | "payment" | "cancel" | "payment_reversal";
     amount: number;
     description: string | null;
     reference_no: string | null;
@@ -38,7 +38,7 @@ export default function SupplierDetail() {
     const [supplier, setSupplier] = useState<Supplier | null>(null);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     // Özet bakiye toplamları TÜM hareketlerden gelir (ekstre listesi 100 ile sınırlı olsa da).
-    const [balanceTotals, setBalanceTotals] = useState({ debt: 0, paid: 0, cancel: 0 });
+    const [balanceTotals, setBalanceTotals] = useState({ debt: 0, paid: 0, cancel: 0, paymentReversal: 0 });
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [success, setSuccess] = useState("");
@@ -135,12 +135,16 @@ export default function SupplierDetail() {
                 .eq("supplier_id", id);
             // Aggregate başarısızsa elimizdeki (limitli) listeden hesaba düş — 0 gösterme.
             const sumSource = (!aggErr && aggRows ? aggRows : txList) as Array<{ transaction_type: string | null; amount: number | null }>;
-            const totals = { debt: 0, paid: 0, cancel: 0 };
+            const totals = { debt: 0, paid: 0, cancel: 0, paymentReversal: 0 };
             for (const t of sumSource) {
                 const amt = Number(t.amount ?? 0);
                 if (t.transaction_type === "debt") totals.debt += amt;
                 else if (t.transaction_type === "payment") totals.paid += amt;
                 else if (t.transaction_type === "cancel") totals.cancel += amt;
+                // 'payment_reversal' = odeme iptali (bkz. supplier_cancel_payment RPC).
+                // Bakiyeye 'cancel'in tersi yonde etki eder: iptal edilen odeme
+                // borcu tekrar acar, bu yuzden ayri toplanip asagida balance'a +eklenir.
+                else if (t.transaction_type === "payment_reversal") totals.paymentReversal += amt;
             }
             setBalanceTotals(totals);
         } catch (e: any) {
@@ -173,10 +177,11 @@ export default function SupplierDetail() {
     }
 
     // Özet bakiye TÜM hareketlerden (balanceTotals); ekstre listesi (transactions) son 100 ile sınırlı.
-    const totalDebt   = balanceTotals.debt;
-    const totalPaid   = balanceTotals.paid;
-    const totalCancel = balanceTotals.cancel;
-    const balance     = totalDebt - totalPaid - totalCancel;
+    const totalDebt           = balanceTotals.debt;
+    const totalPaid           = balanceTotals.paid;
+    const totalCancel         = balanceTotals.cancel;
+    const totalPaymentReversal = balanceTotals.paymentReversal;
+    const balance             = totalDebt - totalPaid - totalCancel + totalPaymentReversal;
 
     const lastPaymentDate = useMemo(() => {
         const payments = transactions.filter(t => t.transaction_type === "payment" || t.transaction_type === "cancel");
@@ -249,7 +254,10 @@ export default function SupplierDetail() {
         const sorted = [...transactions].sort((a, b) => a.transaction_date.localeCompare(b.transaction_date));
         let running = 0;
         return sorted.map((tx) => {
-            if (tx.transaction_type === "debt") running += tx.amount;
+            // 'payment_reversal' bir odeme iptalidir; borcu debt gibi GERI ACAR
+            // (bkz. supplier_cancel_payment RPC) — bu yuzden 'debt' ile ayni
+            // yonde (+) islenir, 'payment'/'cancel' gibi (-) degil.
+            if (tx.transaction_type === "debt" || tx.transaction_type === "payment_reversal") running += tx.amount;
             else running -= tx.amount;
             return { tx, balance: running };
         });
@@ -263,7 +271,9 @@ export default function SupplierDetail() {
             formatDate(tx.transaction_date),
             tx.description || "",
             tx.reference_no || "",
-            tx.transaction_type === "debt" ? tx.amount.toFixed(2) : "0.00",
+            // 'payment_reversal' borcu geri actigi icin 'debt' ile ayni sutunda (+) gosterilir;
+            // "Aciklama" sutunundaki mevcut "Iptal: ..." metni (RPC tarafindan yazilir) ayrimi saglar.
+            tx.transaction_type === "debt" || tx.transaction_type === "payment_reversal" ? tx.amount.toFixed(2) : "0.00",
             tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? tx.amount.toFixed(2) : "0.00",
             bal.toFixed(2)
         ]);
@@ -293,7 +303,13 @@ export default function SupplierDetail() {
                         <td>${formatDate(tx.transaction_date)}</td>
                         <td>${tx.description || ""}</td>
                         <td>${tx.reference_no || "—"}</td>
-                        <td style="text-align: right; color: #dc2626;">${tx.transaction_type === "debt" ? `+ ${formatTL(tx.amount)}` : "—"}</td>
+                        <td style="text-align: right; color: #dc2626;">${
+                            tx.transaction_type === "debt"
+                                ? `+ ${formatTL(tx.amount)}`
+                                : tx.transaction_type === "payment_reversal"
+                                    ? `+ ${formatTL(tx.amount)} (iptal)`
+                                    : "—"
+                        }</td>
                         <td style="text-align: right; color: #16a34a;">${tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? `− ${formatTL(tx.amount)}` : "—"}</td>
                         <td style="text-align: right; font-weight: bold; color: ${bal > 0 ? "#b91c1c" : "#15803d"};">
                             ${formatTL(bal)}
@@ -345,7 +361,7 @@ export default function SupplierDetail() {
                         </div>
                         <div class="summary-card">
                             <div class="label">Toplam Ödenen</div>
-                            <div class="val" style="color: #16a34a;">${formatTL(totalPaid + totalCancel)}</div>
+                            <div class="val" style="color: #16a34a;">${formatTL(totalPaid + totalCancel - totalPaymentReversal)}</div>
                         </div>
                         <div class="summary-card">
                             <div class="label">Kalan Bakiye</div>
@@ -419,7 +435,7 @@ export default function SupplierDetail() {
                     <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
                         <TrendingUp className="h-4 w-4" /> Toplam Ödenen
                     </div>
-                    <div className="mt-2 text-xl font-black text-emerald-800 dark:text-emerald-200">{formatTL(totalPaid + totalCancel)}</div>
+                    <div className="mt-2 text-xl font-black text-emerald-800 dark:text-emerald-200">{formatTL(totalPaid + totalCancel - totalPaymentReversal)}</div>
                 </div>
 
                 {/* Kalan Bakiye */}
@@ -601,7 +617,11 @@ export default function SupplierDetail() {
                                                 )}
                                             </td>
                                             <td className="px-4 py-3 text-right font-bold text-red-600">
-                                                {tx.transaction_type === "debt" ? `+ ${formatTL(tx.amount)}` : "—"}
+                                                {tx.transaction_type === "debt"
+                                                    ? `+ ${formatTL(tx.amount)}`
+                                                    : tx.transaction_type === "payment_reversal"
+                                                        ? `+ ${formatTL(tx.amount)} (iptal)`
+                                                        : "—"}
                                             </td>
                                             <td className="px-4 py-3 text-right font-bold text-emerald-600">
                                                 {tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? `− ${formatTL(tx.amount)}` : "—"}
@@ -617,7 +637,7 @@ export default function SupplierDetail() {
                                 <tr className="border-t-2 border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
                                     <td colSpan={4} className="px-4 py-3 text-xs font-black uppercase text-slate-500">Toplam</td>
                                     <td className="px-4 py-3 text-right font-black text-red-700">{formatTL(totalDebt)}</td>
-                                    <td className="px-4 py-3 text-right font-black text-emerald-700">{formatTL(totalPaid + totalCancel)}</td>
+                                    <td className="px-4 py-3 text-right font-black text-emerald-700">{formatTL(totalPaid + totalCancel - totalPaymentReversal)}</td>
                                     <td className={`px-4 py-3 text-right font-black ${balance > 0 ? "text-red-700" : "text-emerald-700"}`}>{formatTL(balance)}</td>
                                 </tr>
                             </tfoot>
