@@ -16,6 +16,9 @@ import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 
 
 function startOfDay(d: Date) {
@@ -1056,48 +1059,39 @@ export const Accounting = () => {
                     ? `${customerName} perde satisi`
                     : incomeDescription || "Diğer gelir";
             const source = incomeSourceType === "order" ? "order_payment" : "other";
-            const orderId = incomeSourceType === "order" ? selectedIncomeOrder?.id ?? null : null;
-
-            const { error } = await supabase.from("income").insert({
-                company_id: companyId,
-                income_date: nowIso,
-                amount,
-                payment_method: incomePaymentMethod || null,
-                description: incomeDescription || orderDescription,
-                note: incomeNote || null,
-                source,
-                order_id: orderId,
-            });
-
-            if (error) throw error;
 
             if (incomeSourceType === "order" && selectedIncomeOrder) {
-                const nextPaid = Number(selectedIncomeOrder.paid_amount ?? 0) + amount;
-                const total = Number(selectedIncomeOrder.total_amount ?? 0);
-                const nextRemaining = Math.max(total - nextPaid, 0);
-                const nextStatus = nextRemaining <= 0 ? "paid" : nextPaid > 0 ? "partial" : "open";
-
-                const paymentRes = await supabase.from("payments").insert({
-                    company_id: companyId,
-                    order_id: selectedIncomeOrder.id,
-                    payment_date: nowIso,
+                // income + payments + orders.paid_amount/remaining_amount tek atomik
+                // RPC cagrisinda yapiliyor (asagidaki "other" dalindaki manuel
+                // income.insert'in yerine gecer — iki kez income kaydi olusmasin).
+                // orders.status ARTIK BU AKISTAN GUNCELLENMIYOR: bu kolon ayni zamanda
+                // is akisi durumu (order.ts::ORDER_STATUS) icin de kullanildigindan,
+                // RPC bilincli olarak status'a dokunmuyor (bkz. customerCollectionService.ts
+                // basindaki arastirma notu — cakisma riski).
+                const result = await financeService.customerCollections.recordCollection({
+                    companyId,
+                    orderId: selectedIncomeOrder.id,
                     amount,
-                    method: incomePaymentMethod || null,
-                    note: incomeNote || incomeDescription || null,
+                    method: incomePaymentMethod,
+                    note: incomeNote || incomeDescription || undefined,
+                    idempotencyKey: crypto.randomUUID(),
+                });
+                if (result.status !== "success") {
+                    throw result.status === "error" ? result.error : new Error(result.reason);
+                }
+            } else {
+                const { error } = await supabase.from("income").insert({
+                    company_id: companyId,
+                    income_date: nowIso,
+                    amount,
+                    payment_method: incomePaymentMethod || null,
+                    description: incomeDescription || orderDescription,
+                    note: incomeNote || null,
+                    source,
+                    order_id: null,
                 });
 
-                if (paymentRes.error) throw paymentRes.error;
-
-                const orderUpdateRes = await supabase
-                    .from("orders")
-                    .update({
-                        paid_amount: nextPaid,
-                        remaining_amount: nextRemaining,
-                        status: nextStatus,
-                    })
-                    .eq("id", selectedIncomeOrder.id);
-
-                if (orderUpdateRes.error) throw orderUpdateRes.error;
+                if (error) throw error;
             }
 
             await insertTransaction({
@@ -1119,7 +1113,10 @@ export const Accounting = () => {
 
             await loadData();
         } catch (e: any) {
-            alert(e?.message ?? "Gelir kaydedilemedi.");
+            const msg = String(e?.message || "");
+            alert(msg.includes("customer_record_collection")
+                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Gelir kaydedilemedi."));
         } finally {
             setSaving(false);
         }
@@ -1248,16 +1245,29 @@ export const Accounting = () => {
             const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
             const customerName = customer?.name || "Müşteri";
             const collDateIso = new Date(collectionDate + "T12:00:00").toISOString();
-            const newPaid = paid + amount;
-            const newRemaining = Math.max(remaining - amount, 0);
+            const desc = `${customerName} - Sipariş tahsilatı${collectionNote ? ` (${collectionNote})` : ""}`;
 
-            // 1. Siparişi güncelle
-            await supabase.from("orders").update({
-                paid_amount: newPaid,
-                remaining_amount: newRemaining,
-            }).eq("id", collectionOrderId).eq("company_id", companyId);
+            // income + orders.paid_amount/remaining_amount tek atomik RPC cagrisinda
+            // yapiliyor (eski 2 ayri yazimin — orders.update + income.insert — yerine
+            // gecer). orders.status ARTIK BU AKISTAN GUNCELLENMIYOR (zaten bu akis
+            // status'a hic dokunmuyordu, degisiklik yok).
+            const result = await financeService.customerCollections.recordCollection({
+                companyId,
+                orderId: collectionOrderId,
+                amount,
+                method: collectionMethod,
+                date: collDateIso,
+                note: desc,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
 
-            // Kalan tutar için vade tarihi (kolon yoksa sessizce geçer)
+            const newRemaining = result.data.newRemainingAmount;
+
+            // Kalan tutar için vade tarihi (kolon yoksa sessizce geçer) — RPC'nin
+            // kapsamında değil, ayrı bir direkt yazım olarak korunuyor.
             if (newRemaining > 0 && collectionDueDate) {
                 await supabase.from("orders").update({ payment_due_date: collectionDueDate })
                     .eq("id", collectionOrderId).eq("company_id", companyId);
@@ -1265,18 +1275,6 @@ export const Accounting = () => {
                 await supabase.from("orders").update({ payment_due_date: null })
                     .eq("id", collectionOrderId).eq("company_id", companyId).then(() => {}, () => {});
             }
-
-            // 2. income tablosuna gelir kaydı
-            const desc = `${customerName} - Sipariş tahsilatı${collectionNote ? ` (${collectionNote})` : ""}`;
-            await supabase.from("income").insert({
-                company_id: companyId,
-                amount,
-                income_date: collDateIso,
-                payment_method: collectionMethod,
-                description: desc,
-                source: "order_payment",
-                order_id: collectionOrderId,
-            });
 
             setCollectionOrderId("");
             setCollectionAmount("");
@@ -1286,7 +1284,10 @@ export const Accounting = () => {
             setCollectionDate(new Date().toISOString().slice(0, 10));
             await loadData();
         } catch (e: any) {
-            alert(e?.message ?? "Tahsilat kaydedilemedi.");
+            const msg = String(e?.message || "");
+            alert(msg.includes("customer_record_collection")
+                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Tahsilat kaydedilemedi."));
         } finally {
             setSaving(false);
         }

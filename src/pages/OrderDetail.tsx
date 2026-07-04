@@ -8,6 +8,9 @@ import FieldInfoGallery from "../components/FieldInfoGallery";
 import { parseFieldInfo } from "../utils/fieldInfo";
 import { normalizeOrderStatus, ORDER_STATUS } from "../utils/order";
 import { postSupplierDebt } from "../utils/supplierCari";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 import { 
     Plus, 
     Trash2, 
@@ -1318,57 +1321,48 @@ export default function OrderDetail() {
         setPaymentError("");
         setPaymentSuccess("");
         try {
-            const currentPaid = Number(order.paid_amount ?? order.deposit_amount ?? 0);
-            const orderTotal = Number(order.total_amount ?? salesTotal ?? 0);
-            const nextPaid = currentPaid + amount;
-            const nextRemaining = Math.max(orderTotal - nextPaid, 0);
-            const overpayment = Math.max(nextPaid - orderTotal, 0);
-            // Ödeme durumu paid_amount / remaining_amount kolonlarından hesaplanır.
-            // orders.status iş akışı durumunu tutar; ödeme sırasında override edilmez.
-            const nowIso = new Date().toISOString();
-            const overNote = overpayment > 0 ? ` Fazla tahsilat / müşteri alacağı: ${fmtTL(overpayment)}.` : "";
-
-            const paymentRes = await supabase.from("payments").insert({
-                company_id: order.company_id,
-                order_id: id,
-                payment_date: nowIso,
+            // paid_amount/remaining_amount artik customer_record_collection RPC
+            // tarafindan payments ledger'indan yeniden turetilerek yaziliyor.
+            // orders.status ARTIK BU AKISTAN GUNCELLENMIYOR: bu kolon ayni zamanda
+            // is akisi durumu (order.ts::ORDER_STATUS) icin de kullanildigindan,
+            // RPC bilincli olarak status'a dokunmuyor (bkz. customerCollectionService.ts
+            // basindaki arastirma notu — cakisma riski).
+            const result = await financeService.customerCollections.recordCollection({
+                companyId: order.company_id!,
+                orderId: id,
                 amount,
-                method: paymentMethod || null,
-                note: `${paymentNote || "Sipariş tahsilatı"}.${overNote}`.trim(),
+                method: paymentMethod,
+                note: paymentNote || "Sipariş tahsilatı",
+                idempotencyKey: crypto.randomUUID(),
             });
-            if (paymentRes.error) throw paymentRes.error;
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
 
-            const incomeRes = await supabase.from("income").insert({
-                company_id: order.company_id,
-                income_date: nowIso,
-                amount,
-                payment_method: paymentMethod || null,
-                description: `Sipariş tahsilatı - ${order.customers?.name || "Müşteri"}`,
-                note: paymentNote || (overpayment > 0 ? `Fazla tahsilat: ${fmtTL(overpayment)}` : null),
-                source: "order_payment",
-                order_id: id,
-            });
-            if (incomeRes.error) throw incomeRes.error;
+            const { isOverpayment, overpaymentAmount } = result.data;
 
-            const updateRes = await supabase
-                .from("orders")
-                .update({
-                    paid_amount: nextPaid,
-                    remaining_amount: nextRemaining,
-                    note: overpayment > 0
-                        ? [order.note, `Fazla tahsilat / müşteri alacağı: ${fmtTL(overpayment)}`].filter(Boolean).join("\n")
-                        : order.note,
-                })
-                .eq("id", id);
-            if (updateRes.error) throw updateRes.error;
+            // Fazla tahsilat notu RPC'nin kapsamında degil (RPC yalnizca bilgi olarak
+            // isOverpayment/overpaymentAmount doner) — mevcut davranisi korumak icin
+            // ayri bir direkt yazim olarak burada tutuluyor.
+            if (isOverpayment) {
+                await supabase
+                    .from("orders")
+                    .update({
+                        note: [order.note, `Fazla tahsilat / müşteri alacağı: ${fmtTL(overpaymentAmount)}`].filter(Boolean).join("\n"),
+                    })
+                    .eq("id", id);
+            }
 
             setPaymentAmount("");
             setPaymentNote("");
             setShowPaymentForm(false);
-            setPaymentSuccess(overpayment > 0 ? `Ödeme kaydedildi. Müşteri alacaklı: ${fmtTL(overpayment)}` : "Ödeme kaydedildi.");
+            setPaymentSuccess(isOverpayment ? `Ödeme kaydedildi. Müşteri alacaklı: ${fmtTL(overpaymentAmount)}` : "Ödeme kaydedildi.");
             await loadData();
         } catch (e: any) {
-            setPaymentError(e?.message ?? "Ödeme kaydedilemedi.");
+            const msg = String(e?.message || "");
+            setPaymentError(msg.includes("customer_record_collection")
+                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Ödeme kaydedilemedi."));
         } finally {
             setSaving(false);
         }
