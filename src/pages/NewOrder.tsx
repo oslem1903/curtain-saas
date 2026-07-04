@@ -874,9 +874,6 @@ export default function NewOrder() {
                     }
                 }
             }
-            const firstSupplierId = fabricSupplierId || itemsComputed.find((it) => it.supplier_id)?.supplier_id || "";
-            const supplierExpenseAmount = itemsComputed.reduce((acc, it) => acc + safeNumber(it.supplier_total_cost), 0);
-            if (supplierExpenseAmount > 0 && firstSupplierId) await createSupplierExpense({ company_id: companyId, amount: supplierExpenseAmount, category: "Kumaş / Ürün", supplier_id: firstSupplierId, orderId, customerName });
             await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
             const cariWarnings: string[] = [];
             // Tedarikçi bazında TOPLAM borç: aynı siparişte aynı tedarikçiye ait birden çok
@@ -892,7 +889,14 @@ export default function NewOrder() {
                 if (cost <= 0) { cariWarnings.push(`"${it.product_name || it.product_type}" ürününde alış maliyeti girilmemiş.`); continue; }
                 debtBySupplier.set(suppId, (debtBySupplier.get(suppId) ?? 0) + cost);
             }
+            // debtBySupplier TEK gerçek kaynaktır: hem expenses hem supplier_transactions
+            // aynı (tedarikçi, tutar) çiftlerinden yazılır. Eski davranış (tüm maliyeti
+            // yalnızca ilk tedarikçiye atfeden tek expenses kaydı) kaldırıldı — çoklu
+            // tedarikçili siparişlerde expenses artık supplier_transactions ile birebir
+            // aynı dağılımı kullanıyor.
             for (const [suppId, totalCost] of debtBySupplier) {
+                await createSupplierExpense({ company_id: companyId, amount: totalCost, category: "Kumaş / Ürün", supplier_id: suppId, orderId, customerName });
+
                 const cariResult = await postSupplierDebt({
                     companyId,
                     orderId,
