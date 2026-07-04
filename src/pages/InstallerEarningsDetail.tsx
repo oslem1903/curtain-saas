@@ -19,7 +19,7 @@ type InstallerSummary = {
 type LedgerEntry = {
     id: string;
     transaction_date: string;
-    transaction_type: "earning" | "payment" | "adjustment";
+    transaction_type: "earning" | "payment" | "cancel";
     amount: number;
     description: string;
     order_id: string | null;
@@ -100,28 +100,123 @@ export default function InstallerEarningsDetail() {
             if (installerError) throw installerError;
             setInstaller(installerData as InstallerProfile);
 
-            // Get cari summary using RPC
-            const { data: summaryData, error: summaryError } = await supabase
-                .rpc("get_installer_cari_summary", {
-                    p_installer_id: installerId,
-                    p_company_id: companyId,
+            // Hakediş (tamamlanan işler) ve montajcı cari hareketleri (ödeme/iptal)
+            // doğrudan okunur. get_installer_cari_summary / get_installer_ledger
+            // RPC'leri ARTIK KULLANILMIYOR — bu RPC'ler yalnızca eski, kaldırılmış
+            // "earning/payment/adjustment" komisyon sistemine ait 'earning' ve
+            // 'adjustment' tiplerini tanıyordu; installer_cancel_payment RPC'sinin
+            // ürettiği 'cancel' (ödeme iptali) satırlarını hiç tanımadığı için
+            // iptal edilen ödemeler bakiyeden sessizce düşmüyordu. Aşağıdaki
+            // hesap InstallerLedger.tsx'teki formülle BİREBİR AYNIDIR:
+            //   Hakediş = tamamlanan işlerin installer_fee toplamı
+            //   Ödenen  = ödemeler − iptaller
+            //   Kalan   = max(Hakediş − Ödenen, 0)
+            //   Avans   = max(Ödenen − Hakediş, 0)
+            const { data: jobsData, error: jobsError } = await supabase
+                .from("installation_jobs")
+                .select("id, order_id, installer_fee, scheduled_date, customer_name, product_type, status")
+                .eq("assigned_staff_id", installerId)
+                .eq("company_id", companyId);
+            if (jobsError) throw jobsError;
+
+            const { data: txData, error: txError } = await supabase
+                .from("installer_transactions")
+                .select("id, transaction_date, transaction_type, amount, description")
+                .eq("installer_id", installerId)
+                .eq("company_id", companyId);
+            if (txError) throw txError;
+
+            const completedJobs = (jobsData ?? []).filter((j) => j.status === "completed");
+            const earned = completedJobs.reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+            const paid = (txData ?? []).reduce(
+                (a, t) => a + (t.transaction_type === "payment" ? Number(t.amount) : -Number(t.amount)),
+                0,
+            );
+            const remaining = Math.max(Math.round((earned - paid) * 100) / 100, 0);
+            const advance = Math.max(Math.round((paid - earned) * 100) / 100, 0);
+
+            const lastEarningDate = completedJobs.reduce<string | null>((latest, j) => {
+                if (!j.scheduled_date) return latest;
+                return !latest || j.scheduled_date > latest ? j.scheduled_date : latest;
+            }, null);
+            const lastPaymentDate = (txData ?? [])
+                .filter((t) => t.transaction_type === "payment")
+                .reduce<string | null>((latest, t) => {
+                    if (!t.transaction_date) return latest;
+                    return !latest || t.transaction_date > latest ? t.transaction_date : latest;
+                }, null);
+
+            setSummary({
+                total_earnings: earned,
+                total_paid: paid,
+                total_adjustments: advance,
+                balance: remaining,
+                last_earning_date: lastEarningDate,
+                last_payment_date: lastPaymentDate,
+                transaction_count: (txData ?? []).length,
+            });
+
+            // Hareket geçmişi: hakediş (iş) + ödeme/iptal (installer_transactions)
+            // tek kronolojik listede birleştirilir — InstallerLedger.tsx'teki
+            // ekstre mantığıyla aynı (running balance = debit − credit kümülatif).
+            type RawLine = {
+                id: string;
+                date: string;
+                desc: string;
+                debit: number;
+                credit: number;
+                type: "earning" | "payment" | "cancel";
+                orderId: string | null;
+                customerName: string | null;
+            };
+            const rawLines: RawLine[] = [];
+
+            completedJobs.forEach((j) => {
+                rawLines.push({
+                    id: j.id,
+                    date: j.scheduled_date || "",
+                    desc: `Hakediş: ${j.customer_name || "Müşteri"}${j.product_type ? ` — ${j.product_type}` : ""}`,
+                    debit: Number(j.installer_fee ?? 0),
+                    credit: 0,
+                    type: "earning",
+                    orderId: j.order_id ?? null,
+                    customerName: j.customer_name ?? null,
                 });
+            });
 
-            if (summaryError) throw summaryError;
-            if (summaryData && summaryData.length > 0) {
-                setSummary(summaryData[0]);
-            }
-
-            // Get ledger using RPC
-            const { data: ledgerData, error: ledgerError } = await supabase
-                .rpc("get_installer_ledger", {
-                    p_installer_id: installerId,
-                    p_company_id: companyId,
-                    p_limit: 100,
+            (txData ?? []).forEach((t) => {
+                const amt = Number(t.amount ?? 0);
+                const isCancel = t.transaction_type !== "payment";
+                rawLines.push({
+                    id: t.id,
+                    date: t.transaction_date?.slice(0, 10) || "",
+                    desc: t.description || (isCancel ? "Ödeme İptali" : "Ödeme"),
+                    debit: isCancel ? amt : 0,
+                    credit: isCancel ? 0 : amt,
+                    type: isCancel ? "cancel" : "payment",
+                    orderId: null,
+                    customerName: null,
                 });
+            });
 
-            if (ledgerError) throw ledgerError;
-            setLedger(ledgerData || []);
+            rawLines.sort((a, b) => a.date.localeCompare(b.date) || (a.type === "earning" ? -1 : 1));
+
+            let running = 0;
+            const ledgerRows: LedgerEntry[] = rawLines.map((l) => {
+                running = Math.round((running + l.debit - l.credit) * 100) / 100;
+                return {
+                    id: l.id,
+                    transaction_date: l.date,
+                    transaction_type: l.type,
+                    amount: l.debit || l.credit,
+                    description: l.desc,
+                    order_id: l.orderId,
+                    customer_name: l.customerName,
+                    running_balance: running,
+                };
+            });
+
+            setLedger(ledgerRows.slice().reverse());
         } catch (e: any) {
             setError(e?.message || "Veri yüklenirken hata oluştu");
             console.error("Load error:", e);
@@ -230,7 +325,7 @@ export default function InstallerEarningsDetail() {
                     <div className="rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-4">
                         <div className="flex items-start justify-between">
                             <div>
-                                <p className="text-xs text-slate-500 dark:text-slate-400">Düzeltmeler</p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">Avans</p>
                                 <p className={`text-2xl font-bold mt-1 ${summary.total_adjustments >= 0 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400"}`}>
                                     {formatMoney(summary.total_adjustments)}
                                 </p>
@@ -323,7 +418,7 @@ export default function InstallerEarningsDetail() {
                                             }`}>
                                                 {entry.transaction_type === "earning" && "Hakediş"}
                                                 {entry.transaction_type === "payment" && "Ödeme"}
-                                                {entry.transaction_type === "adjustment" && "Düzeltme"}
+                                                {entry.transaction_type === "cancel" && "İptal"}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4">{entry.description}</td>

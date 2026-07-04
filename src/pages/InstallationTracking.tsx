@@ -120,15 +120,43 @@ export default function InstallationTracking() {
   const loadInstallerEarnings = useCallback(async (installerId: string) => {
     try {
       const ctx = await getEffectiveTenantContext();
-      const { data, error } = await supabase.rpc("get_installer_cari_summary", {
-        p_installer_id: installerId,
-        p_company_id: ctx.company_id,
-      });
 
-      if (error) throw error;
-      if (data && data.length > 0) {
-        setInstallerEarnings(data[0]);
-      }
+      // get_installer_cari_summary RPC'si ARTIK KULLANILMIYOR — bu RPC yalnızca
+      // eski, kaldırılmış "earning/payment/adjustment" komisyon sistemine ait
+      // tipleri tanıyordu ve installer_cancel_payment RPC'sinin ürettiği 'cancel'
+      // (ödeme iptali) satırlarını hiç tanımıyordu; iptal edilen ödemeler bakiyeden
+      // sessizce düşmüyordu. Aşağıdaki hesap InstallerLedger.tsx'teki formülle
+      // BİREBİR AYNIDIR: Hakediş − (Ödeme − İptal) = Kalan.
+      const [jobsRes, txRes] = await Promise.all([
+        supabase
+          .from("installation_jobs")
+          .select("installer_fee, status")
+          .eq("assigned_staff_id", installerId)
+          .eq("company_id", ctx.company_id),
+        supabase
+          .from("installer_transactions")
+          .select("transaction_type, amount")
+          .eq("installer_id", installerId)
+          .eq("company_id", ctx.company_id),
+      ]);
+      if (jobsRes.error) throw jobsRes.error;
+      if (txRes.error) throw txRes.error;
+
+      const earned = (jobsRes.data ?? [])
+        .filter((j) => j.status === "completed")
+        .reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+      const paid = (txRes.data ?? []).reduce(
+        (a, t) => a + (t.transaction_type === "payment" ? Number(t.amount) : -Number(t.amount)),
+        0,
+      );
+      const remaining = Math.max(Math.round((earned - paid) * 100) / 100, 0);
+
+      setInstallerEarnings({
+        total_earnings: earned,
+        total_paid: paid,
+        balance: remaining,
+        transaction_count: (txRes.data ?? []).length,
+      });
     } catch (e) {
       console.error("Failed to load earnings:", e);
       setInstallerEarnings(null);
