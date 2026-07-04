@@ -4,6 +4,9 @@ import {
     TrendingUp, X, Edit3, AlertCircle, Search, Package
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 
 type Supplier = {
     id: string;
@@ -420,19 +423,41 @@ export const Suppliers = () => {
 
     async function handleDeleteTransaction(txId: string) {
         if (!selectedSupplier) return;
-        try {
-            const { error } = await supabase
-                .from("supplier_transactions")
-                .delete()
-                .eq("id", txId);
-            if (error) throw error;
+        const tx = transactions.find((t) => t.id === txId);
+        if (!tx) return;
 
-            setSuccess("Cari işlemi silindi");
+        // Hard delete KALDIRILDI: supplier_transactions satırları burada artık
+        // silinmiyor (ters kayıt / hard-delete-yok mimarisini bozuyordu ve
+        // bağlı expense kaydı orphan kalabiliyordu — expense_id bu ekranda hiç
+        // okunmuyordu). Yalnızca 'payment' türü kayıtlar
+        // SupplierPaymentService.cancelPayment (reverse-entry) ile iptal
+        // edilebilir. Diğer türler (debt/cancel/payment_reversal) için bu
+        // ekranda bir servis/RPC yok — bu yüzden silme işlemi engellenir.
+        if (tx.transaction_type !== "payment") {
+            alert("Bu işlem türü silinemez. Yalnızca ödeme kayıtları iptal edilebilir.");
+            return;
+        }
+
+        try {
+            const ctx = await getContext();
+            const result = await financeService.supplierPayments.cancelPayment({
+                companyId: ctx.company_id,
+                transactionId: txId,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
+
+            setSuccess("Ödeme iptal edildi");
             await loadSupplierTransactions(selectedSupplier.id);
             await loadSuppliers();
             setTimeout(() => setSuccess(""), 3000);
         } catch (e: any) {
-            alert(e?.message ?? "Cari işlem silinemedi");
+            const msg = String(e?.message || "");
+            alert(msg.includes("supplier_cancel_payment")
+                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Ödeme iptal edilemedi"));
         }
     }
 
