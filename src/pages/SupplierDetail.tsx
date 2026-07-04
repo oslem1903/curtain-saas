@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, Plus, TrendingDown, TrendingUp, Wallet, X, ChevronDown, Download, Printer, FileSpreadsheet } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 
 type Supplier = {
     id: string;
@@ -206,37 +209,16 @@ export default function SupplierDetail() {
             const ctx = await getEffectiveTenantContext();
             if (ctx.readOnly) throw new Error("Firma lisansı aktif değil.");
 
-            const { error } = await supabase.from("supplier_transactions").insert({
-                company_id: ctx.company_id,
-                supplier_id: id,
-                transaction_date: new Date(payDate).toISOString(),
-                transaction_type: "payment",
+            const result = await financeService.supplierPayments.recordPayment({
+                companyId: ctx.company_id,
+                supplierId: id!,
                 amount,
-                description: payNote.trim() || `${payMethod} ödemesi`,
-                payment_method: payMethod,
+                method: payMethod,
+                date: new Date(payDate).toISOString(),
+                note: payNote.trim() || `${payMethod} ödemesi`,
+                idempotencyKey: crypto.randomUUID(),
             });
-
-            if (error) throw error;
-
-            await supabase.from("supplier_payments").insert({
-                company_id: ctx.company_id,
-                supplier_id: id,
-                payment_date: new Date(payDate).toISOString(),
-                amount,
-                payment_method: payMethod,
-                note: payNote.trim() || null,
-            });
-
-            // Gider kaydı — Muhasebe "Toplam Gider" ile senkron
-            await supabase.from("expenses").insert({
-                company_id: ctx.company_id,
-                supplier_id: id,
-                amount,
-                expense_date: new Date(payDate).toISOString(),
-                category: "Tedarik",
-                status: "paid",
-                note: payNote.trim() || `${supplier?.name || "Tedarikçi"} ödemesi`,
-            });
+            if (result.status === "error") throw result.error;
 
             setSuccess("Ödeme kaydedildi.");
             setPayAmount("");
@@ -244,7 +226,10 @@ export default function SupplierDetail() {
             setShowPaymentForm(false);
             await load();
         } catch (e: any) {
-            setErr(e?.message ?? "Ödeme kaydedilemedi.");
+            const msg = String(e?.message || "");
+            setErr(msg.includes("supplier_record_payment")
+                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Ödeme kaydedilemedi."));
         } finally {
             setSaving(false);
         }

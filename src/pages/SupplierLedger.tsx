@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { createFinanceService } from "../services/finance";
+
+const financeService = createFinanceService();
 
 type SupplierRow = {
     id: string;
@@ -180,44 +183,18 @@ export default function SupplierLedger() {
         try {
             setSaving(true);
 
-            const payDateIso = new Date().toISOString();
-            const method = quickPaymentMethod || null;
             const note = quickPaymentNote.trim();
             const txDesc = note || `${selectedSupplierName} ödemesi`;
 
-            // 1) Cari hareket — SupplierDetail/Accounting ile aynı: bakiyeyi düşüren "payment".
-            //    Bu kayıt eksikti; Dashboard/NotificationBell/SupplierDetail bakiyesi bunu okur.
-            const { error: txError } = await supabase.from("supplier_transactions").insert({
-                company_id: companyId,
-                supplier_id: selectedSupplierId,
-                transaction_date: payDateIso,
-                transaction_type: "payment",
+            const result = await financeService.supplierPayments.recordPayment({
+                companyId,
+                supplierId: selectedSupplierId,
                 amount,
-                description: txDesc,
-                payment_method: method,
-            });
-            if (txError) throw txError;
-
-            // 2) Denetim/görüntü kaydı (mevcut davranış korunur).
-            await supabase.from("supplier_payments").insert({
-                company_id: companyId,
-                supplier_id: selectedSupplierId,
-                payment_date: payDateIso,
-                amount,
-                payment_method: method,
-                note: note || null,
-            });
-
-            // 3) Gider kaydı — "Toplam Gider" senkronu; SupplierDetail/Accounting ödeme akışıyla birebir.
-            await supabase.from("expenses").insert({
-                company_id: companyId,
-                supplier_id: selectedSupplierId,
-                amount,
-                expense_date: payDateIso,
-                category: "Tedarik",
-                status: "paid",
+                method: quickPaymentMethod,
                 note: txDesc,
+                idempotencyKey: crypto.randomUUID(),
             });
+            if (result.status === "error") throw result.error;
 
             setQuickPaymentAmount("");
             setQuickPaymentMethod("");
@@ -226,7 +203,10 @@ export default function SupplierLedger() {
 
             await loadLedger();
         } catch (e: any) {
-            alert(e?.message ?? "Tedarikçi ödemesi kaydedilemedi.");
+            const msg = String(e?.message || "");
+            alert(msg.includes("supplier_record_payment")
+                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Tedarikçi ödemesi kaydedilemedi."));
         } finally {
             setSaving(false);
         }
