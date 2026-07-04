@@ -59,6 +59,8 @@ type PaymentRow = {
     method: string | null;
     note: string | null;
     order_id: string | null;
+    /** Doluysa bu satır bir tahsilat iptalidir (bkz. customer_cancel_collection RPC) — normal tahsilat gibi gösterilmez. */
+    reverses_payment_id?: string | null;
 };
 
 type IncomeRow = {
@@ -584,18 +586,34 @@ export const Accounting = () => {
                 setRecent((tx.data ?? []) as TxRow[]);
             }
 
-            const pay = await supabase
+            const payRes = await supabase
                 .from("payments")
-                .select("id, payment_date, amount, method, note, order_id")
+                .select("id, payment_date, amount, method, note, order_id, reverses_payment_id")
                 .eq("company_id", cid)
                 .order("payment_date", { ascending: false })
                 .limit(8);
 
-            if (pay.error) {
-                console.error("payments fetch error:", pay.error);
+            let payRows = payRes.data;
+            let payErr = payRes.error;
+
+            if (payErr) {
+                // reverses_payment_id kolonu henüz yoksa (migration uygulanmadan
+                // önce) eski sorguya düş — mevcut davranış korunur.
+                const payFb = await supabase
+                    .from("payments")
+                    .select("id, payment_date, amount, method, note, order_id")
+                    .eq("company_id", cid)
+                    .order("payment_date", { ascending: false })
+                    .limit(8);
+                payErr = payFb.error;
+                payRows = (payFb.data ?? []).map((r: any) => ({ ...r, reverses_payment_id: null }));
+            }
+
+            if (payErr) {
+                console.error("payments fetch error:", payErr);
                 setRecentPayments([]);
             } else {
-                setRecentPayments((pay.data ?? []) as PaymentRow[]);
+                setRecentPayments((payRows ?? []) as PaymentRow[]);
             }
 
             const sup = await supabase
@@ -1990,7 +2008,7 @@ export const Accounting = () => {
                                 >
                                     <div className="min-w-0">
                                         <div className="text-sm font-medium text-slate-900 dark:text-white">
-                                            {p.method || "Tahsilat"}
+                                            {p.reverses_payment_id ? "Tahsilat İptali" : (p.method || "Tahsilat")}
                                             {p.note ? <span className="text-slate-500"> — {p.note}</span> : null}
                                         </div>
                                         <div className="text-xs text-slate-500">
@@ -1998,9 +2016,15 @@ export const Accounting = () => {
                                         </div>
                                     </div>
 
-                                    <div className="text-sm font-semibold text-green-600">
-                                        + {formatTL(Number(p.amount ?? 0))}
-                                    </div>
+                                    {p.reverses_payment_id ? (
+                                        <div className="text-sm font-semibold text-red-600">
+                                            − {formatTL(Number(p.amount ?? 0))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-sm font-semibold text-green-600">
+                                            + {formatTL(Number(p.amount ?? 0))}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

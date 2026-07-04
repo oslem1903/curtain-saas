@@ -37,6 +37,8 @@ type OrderSyncRow = {
     status: string | null;
     note: string | null;
     total_amount: number | null;
+    paid_amount: number | null;
+    remaining_amount: number | null;
     customer_id: string | null;
     customers: { name: string | null } | Array<{ name: string | null }> | null;
     order_items: Array<{
@@ -146,7 +148,7 @@ async function syncOrdersToInvoices(companyId: string) {
 
     const { data: orders, error: orderErr } = await supabase
         .from("orders")
-        .select("id, created_at, status, note, total_amount, customer_id, customers(name), order_items(product_type, width_cm, height_cm, qty, unit_price, line_total)")
+        .select("id, created_at, status, note, total_amount, paid_amount, remaining_amount, customer_id, customers(name), order_items(product_type, width_cm, height_cm, qty, unit_price, line_total)")
         .eq("company_id", companyId)
         .not("status", "eq", "draft")
         .not("status", "eq", "cancelled")
@@ -164,6 +166,15 @@ async function syncOrdersToInvoices(companyId: string) {
         const taxExclusive = Number((Number(order.total_amount) / divisor).toFixed(2));
         const taxAmount = Number((Number(order.total_amount) - taxExclusive).toFixed(2));
 
+        // Gercek odeme durumu paid_amount/remaining_amount'tan belirlenir —
+        // orders.status'un "paid" degeri (Accounting.tsx::saveIncome tarafindan
+        // yazilir) iptal edilen bir tahsilattan sonra bayat kalabilir; bu yuzden
+        // status alanina GUVENILMEZ. Tahsilati iptal edilmis bir siparis
+        // (remaining_amount tekrar > 0 oldugunda) hicbir zaman "paid" sayilmaz.
+        const remaining = order.remaining_amount != null
+            ? Number(order.remaining_amount)
+            : Math.max(Number(order.total_amount ?? 0) - Number(order.paid_amount ?? 0), 0);
+
         const { data: invoiceRow, error: invoiceErr } = await supabase
             .from("invoices")
             .insert([
@@ -177,7 +188,7 @@ async function syncOrdersToInvoices(companyId: string) {
                     total_tax_exclusive: taxExclusive,
                     total_tax_amount: taxAmount,
                     total_tax_inclusive: order.total_amount,
-                    status: order.status === "paid" ? "paid" : "sent",
+                    status: remaining <= 0 ? "paid" : "sent",
                     notes: order.note || `Siparis faturasi - ${getPartyName(order.customers) || "Musteri"}`,
                 },
             ])
