@@ -609,6 +609,10 @@ export default function Customers() {
 
         setCollectSaving(true);
         setCollectError("");
+        // income.insert basarili olduktan sonra id burada tutulur ki sonraki
+        // adimlardan biri basarisiz olursa telafi (rollback) icin silinebilsin —
+        // hayalet (yetim) gelir kaydi kalmasin.
+        let insertedIncomeId: string | null = null;
         try {
             const customer = collectCustomer;
             const dateIso = new Date(`${collectDate || todayStr()}T12:00:00`).toISOString();
@@ -628,17 +632,22 @@ export default function Customers() {
 
             // Kasaya giren toplam tutarı önce gelir (income) olarak kaydet — en kısıt-riskli adım.
             // Başarısız olursa hiçbir sipariş bakiyesi değiştirilmeden hata gösterilir.
-            const incomeRes = await supabase.from("income").insert({
-                company_id: companyId,
-                income_date: dateIso,
-                amount,
-                payment_method: collectMethod || null,
-                description: `Tahsilat - ${customer.name || "Müşteri"}`,
-                note: baseNote || null,
-                source: "order_payment",
-                order_id: null,
-            });
+            const incomeRes = await supabase
+                .from("income")
+                .insert({
+                    company_id: companyId,
+                    income_date: dateIso,
+                    amount,
+                    payment_method: collectMethod || null,
+                    description: `Tahsilat - ${customer.name || "Müşteri"}`,
+                    note: baseNote || null,
+                    source: "order_payment",
+                    order_id: null,
+                })
+                .select("id")
+                .single();
             if (incomeRes.error) throw incomeRes.error;
+            insertedIncomeId = incomeRes.data?.id ?? null;
 
             let remainingToApply = amount;
 
@@ -662,7 +671,9 @@ export default function Customers() {
                     .eq("company_id", companyId);
                 if (upd.error) throw upd.error;
 
-                await insertPaymentRow({
+                // Dönüş değeri artık kontrol ediliyor — insert sessizce başarısız
+                // olamaz; hata varsa fırlatılır ve kullanıcıya gösterilir.
+                const payErr = await insertPaymentRow({
                     company_id: companyId,
                     customer_id: customer.id,
                     order_id: order.id,
@@ -671,6 +682,7 @@ export default function Customers() {
                     method: collectMethod || null,
                     note: baseNote || "Müşteri tahsilatı",
                 });
+                if (payErr) throw new Error(payErr);
 
                 remainingToApply -= applied;
             }
@@ -679,7 +691,7 @@ export default function Customers() {
 
             // Fazla ödeme (avans) — herhangi bir siparişe sığmayan kısım müşteri alacağı olarak işlenir.
             if (overpayment > 0.005) {
-                await insertPaymentRow({
+                const overpayErr = await insertPaymentRow({
                     company_id: companyId,
                     customer_id: customer.id,
                     order_id: null,
@@ -688,6 +700,7 @@ export default function Customers() {
                     method: collectMethod || null,
                     note: [baseNote, "Fazla ödeme / Avans"].filter(Boolean).join(" — "),
                 });
+                if (overpayErr) throw new Error(overpayErr);
             }
 
             const newRemaining = Math.max(prevRemaining - amount, 0);
@@ -703,7 +716,22 @@ export default function Customers() {
 
             await loadData();
         } catch (e: any) {
-            setCollectError(e?.message ? `Tahsilat kaydedilemedi: ${e.message}` : "Tahsilat kaydedilemedi. Lütfen tekrar deneyin.");
+            let message = e?.message ? `Tahsilat kaydedilemedi: ${e.message}` : "Tahsilat kaydedilemedi. Lütfen tekrar deneyin.";
+            // Telafi (rollback): income kaydı zaten oluşturulduysa ama sonraki
+            // adımlardan biri başarısız olduysa, hayalet gelir kaydı kalmasın
+            // diye silinmeye çalışılır. Silme de başarısız olursa kullanıcıya
+            // açıkça bildirilir (sessizce geçilmez).
+            if (insertedIncomeId) {
+                const { error: cleanupErr } = await supabase
+                    .from("income")
+                    .delete()
+                    .eq("id", insertedIncomeId)
+                    .eq("company_id", companyId);
+                if (cleanupErr) {
+                    message += ` UYARI: Oluşturulan gelir kaydı otomatik olarak temizlenemedi (id: ${insertedIncomeId}), lütfen Muhasebe ekranından kontrol edin.`;
+                }
+            }
+            setCollectError(message);
         } finally {
             setCollectSaving(false);
         }
