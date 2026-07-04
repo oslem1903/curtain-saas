@@ -1317,21 +1317,28 @@ export const Accounting = () => {
             const supplierName =
                 suppliers.find((s) => s.id === supplierPaymentSupplierId)?.name || "Tedarikçi";
             const payDateIso = new Date(supplierPaymentDate + "T12:00:00").toISOString();
-
-            // 1. supplier_transactions — SupplierDetail ile aynı sistem, "payment" türü
             const txDesc = `${supplierName} ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`;
-            const { error: txError } = await supabase.from("supplier_transactions").insert({
-                company_id: companyId,
-                supplier_id: supplierPaymentSupplierId,
-                transaction_date: payDateIso,
-                transaction_type: "payment",
-                amount,
-                description: txDesc,
-                payment_method: supplierPaymentMethod || null,
-            }).select("id").single();
-            if (txError) throw txError;
 
-            // Kalan borç için vade tarihi — en yeni açık borç kaydına işle (kolon yoksa sessizce geçer)
+            // supplier_transactions + expenses tek atomik RPC çağrısında yazılıyor
+            // (eski 2 ayrı insert'in yerine geçer). supplier_payments "yedek kayıt"
+            // tablosuna artık yazılmıyor — RPC'nin kapsamında değil (SupplierDetail/
+            // SupplierLedger entegrasyonlarında da aynı şekilde bırakıldı).
+            const result = await financeService.supplierPayments.recordPayment({
+                companyId,
+                supplierId: supplierPaymentSupplierId,
+                amount,
+                method: supplierPaymentMethod,
+                date: payDateIso,
+                note: txDesc,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
+
+            // Kalan borç için vade tarihi — RPC'nin kapsamında değil, ayrı bir
+            // direkt yazım olarak korunuyor (en yeni açık borç kaydına işlenir;
+            // kolon yoksa sessizce geçer).
             if (supplierPaymentDueDate) {
                 try {
                     const { data: lastDebt } = await supabase
@@ -1353,28 +1360,9 @@ export const Accounting = () => {
                 }
             }
 
-            // 2. supplier_payments — muhasebe paneli için yedek kayıt
-            await supabase.from("supplier_payments").insert({
-                company_id: companyId,
-                supplier_id: supplierPaymentSupplierId,
-                payment_date: payDateIso,
-                amount,
-                payment_method: supplierPaymentMethod || null,
-                note: supplierPaymentNote || null,
-            });
-
-            // 3. Gider kaydı — "Toplam Gider" kartı bu tabloyu okur
-            await supabase.from("expenses").insert({
-                company_id: companyId,
-                supplier_id: supplierPaymentSupplierId,
-                amount,
-                expense_date: payDateIso,
-                category: "Tedarik",
-                status: "paid",
-                note: txDesc,
-            });
-
-            // 4. Genel muhasebe hareket kaydı
+            // Genel muhasebe hareket kaydı — Dashboard "Son Hareketler" akışı için
+            // korunuyor (RPC'nin kapsamında değil, CustomerCollectionService
+            // entegrasyonundaki insertTransaction desenin aynısı).
             await insertTransaction({
                 company_id: companyId,
                 tx_date: payDateIso,
@@ -1394,7 +1382,10 @@ export const Accounting = () => {
 
             await loadData();
         } catch (e: any) {
-            alert(e?.message ?? "Tedarikçi ödemesi kaydedilemedi.");
+            const msg = String(e?.message || "");
+            alert(msg.includes("supplier_record_payment")
+                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Tedarikçi ödemesi kaydedilemedi."));
         } finally {
             setSaving(false);
         }
