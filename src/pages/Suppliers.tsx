@@ -472,22 +472,21 @@ export const Suppliers = () => {
             const ctx = await getContext();
             const amount = Number(paymentAmount);
 
-            const { error } = await supabase
-                .from("supplier_transactions")
-                .insert([{
-                    company_id: ctx.company_id,
-                    supplier_id: selectedSupplier.id,
-                    transaction_type: "payment",
-                    amount,
-                    description: paymentNote || `${paymentMethod} ile ödeme`,
-                    transaction_date: new Date(paymentDate).toISOString(),
-                    payment_method: paymentMethod,
-                    reference_no: null,
-                    order_id: null,
-                    order_item_id: null
-                }]);
-
-            if (error) throw error;
+            // supplier_transactions + expenses tek atomik RPC çağrısında yazılıyor
+            // (eski, expenses'e hiç yazmayan doğrudan insert'in yerine geçer) —
+            // SupplierDetail/SupplierLedger/Accounting ile aynı mekanizma.
+            const result = await financeService.supplierPayments.recordPayment({
+                companyId: ctx.company_id,
+                supplierId: selectedSupplier.id,
+                amount,
+                method: paymentMethod,
+                date: new Date(paymentDate).toISOString(),
+                note: paymentNote || `${paymentMethod} ile ödeme`,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
 
             setSuccess("Ödeme kaydedildi!");
             setPaymentAmount("");
@@ -501,7 +500,10 @@ export const Suppliers = () => {
 
             setTimeout(() => setSuccess(""), 3000);
         } catch (e: any) {
-            alert(e?.message ?? "Ödeme kaydedilemedi");
+            const msg = String(e?.message || "");
+            alert(msg.includes("supplier_record_payment")
+                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Ödeme kaydedilemedi"));
         } finally {
             setPaymentSaving(false);
         }
