@@ -252,18 +252,21 @@ export async function exportBackupWorkbook(opts: BackupOptions): Promise<BackupR
     }));
 
   // ── 8) Ödemeler (giden: tedarikçi + montajcı ödemeleri) ──────────────────────
-  const supPayRaw = await safeSelect("supplier_payments", companyId, { supplier_id: supplierId });
+  // supplier_payments artık legacy/write-orphan (bkz. supplier_record_payment RPC —
+  // yalnızca supplier_transactions + expenses'e yazar). Gerçek kaynak: supTxRaw
+  // (madde 5'te zaten çekildi) içindeki 'payment'/'credit' türü — Accounting.tsx'teki
+  // aynı modelle ('payment_reversal' bilinçli olarak dışarıda bırakılır).
   const payments: any[] = [];
-  supPayRaw
-    .filter((p) => inRange(p.payment_date))
+  supTxRaw
+    .filter((p) => (String(p.transaction_type) === "payment" || String(p.transaction_type) === "credit") && inRange(p.transaction_date))
     .forEach((p) =>
       payments.push({
-        Tarih: fmtDate(p.payment_date),
+        Tarih: fmtDate(p.transaction_date),
         Tür: "Tedarikçi",
         Alıcı: supplierName.get(p.supplier_id) || "",
         Tutar: num(p.amount),
         Yöntem: p.payment_method || "",
-        Not: p.note || "",
+        Not: p.description || "",
       }),
     );
   instTxRaw

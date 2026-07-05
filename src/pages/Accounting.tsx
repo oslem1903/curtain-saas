@@ -480,7 +480,7 @@ export const Accounting = () => {
                         if (String(r.status ?? "").toLowerCase() === "cancelled") return false;
                         // Accrual esas: ödeme anında oluşan tedarikçi nakit gideri (category='Tedarik')
                         // Toplam Gider'e DAHİL EDİLMEZ — aynı maliyet sipariş accrual'ında zaten sayıldı.
-                        // Nakit çıkış ayrıca "Tedarikçi Ödemeleri" (supplier_payments) tarafında görünür.
+                        // Nakit çıkış ayrıca "Tedarikçi Ödemeleri" (supplier_transactions 'payment') tarafında görünür.
                         if (String(r.category ?? "").trim().toLowerCase() === "tedarik") return false;
                         const d = r.expense_date ? new Date(r.expense_date).toISOString() : null;
                         return d && d >= fromRange && d <= toRange;
@@ -768,18 +768,32 @@ export const Accounting = () => {
                 setEmployeeBonusTotal(nextEmployeeLedgers.reduce((sum, x) => sum + x.bonus, 0));
             }
 
+            // supplier_payments artık legacy/write-orphan (bkz. supplier_record_payment RPC —
+            // yalnızca supplier_transactions + expenses'e yazar). Gerçek kaynak: supplier_transactions
+            // 'payment'/'credit' türü (aşağıdaki debtMap ile aynı model; payment_reversal
+            // bilinçli olarak listeden dışarıda bırakılır — bkz. satır ~845).
             const supplierPaymentsRes = await supabase
-                .from("supplier_payments")
-                .select("id, supplier_id, amount, payment_method, note, payment_date")
+                .from("supplier_transactions")
+                .select("id, supplier_id, amount, payment_method, description, transaction_date")
                 .eq("company_id", cid)
-                .order("payment_date", { ascending: false })
+                .in("transaction_type", ["payment", "credit"])
+                .order("transaction_date", { ascending: false })
                 .limit(8);
 
             if (supplierPaymentsRes.error) {
-                console.error("supplier_payments fetch error:", supplierPaymentsRes.error);
+                console.error("supplier_transactions (payment) fetch error:", supplierPaymentsRes.error);
                 setRecentSupplierPayments([]);
             } else {
-                setRecentSupplierPayments((supplierPaymentsRes.data ?? []) as SupplierPaymentRow[]);
+                setRecentSupplierPayments(
+                    (supplierPaymentsRes.data ?? []).map((r: any) => ({
+                        id: r.id,
+                        supplier_id: r.supplier_id,
+                        amount: r.amount,
+                        payment_method: r.payment_method,
+                        note: r.description,
+                        payment_date: r.transaction_date,
+                    })) as SupplierPaymentRow[],
+                );
             }
 
             // Tedarikçi borç/ödeme hesabı: supplier_transactions tablosundan
@@ -942,7 +956,13 @@ export const Accounting = () => {
         // Tüm gelirleri ve giderleri çek
         const { data: incomes } = await supabase.from("income").select("*").eq("company_id", companyId);
         const { data: expenses } = await supabase.from("expenses").select("*").eq("company_id", companyId);
-        const { data: supPayments } = await supabase.from("supplier_payments").select("*").eq("company_id", companyId);
+        // supplier_payments artık legacy/write-orphan — gerçek kaynak supplier_transactions
+        // 'payment'/'credit' türü (Accounting.tsx'in kendi debtMap modeliyle aynı).
+        const { data: supPayments } = await supabase
+            .from("supplier_transactions")
+            .select("amount, transaction_date, transaction_type")
+            .eq("company_id", companyId)
+            .in("transaction_type", ["payment", "credit"]);
 
         const summary: Record<string, any> = {};
 
@@ -962,7 +982,7 @@ export const Accounting = () => {
             // (monthExpenseSum) ile birebir aynı: iptal hayalet gider bırakmasın.
             if (String(it.status ?? "").toLowerCase() === "cancelled") return;
             // Accrual esas: tedarikçi nakit ödeme gideri (category='Tedarik') Toplam Gider'e girmez;
-            // nakit çıkış zaten ayrı "Tedarikçi Ödemeleri" kolonunda (supplier_payments) gösterilir.
+            // nakit çıkış zaten ayrı "Tedarikçi Ödemeleri" kolonunda (supplier_transactions 'payment') gösterilir.
             if (String(it.category ?? "").trim().toLowerCase() === "tedarik") return;
             const key = getMonthKey(it.expense_date);
             if (!summary[key]) summary[key] = { income: 0, expense: 0, staff: 0, supplier: 0 };
@@ -977,7 +997,7 @@ export const Accounting = () => {
         });
 
         (supPayments || []).forEach(it => {
-            const key = getMonthKey(it.payment_date);
+            const key = getMonthKey(it.transaction_date);
             if (!summary[key]) summary[key] = { income: 0, expense: 0, staff: 0, supplier: 0 };
             summary[key].supplier += Number(it.amount || 0);
         });

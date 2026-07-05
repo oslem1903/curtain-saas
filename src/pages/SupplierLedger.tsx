@@ -9,22 +9,15 @@ type SupplierRow = {
     name: string | null;
 };
 
-type ExpenseLedgerRow = {
+// Gerçek kaynak: supplier_transactions (Accounting.tsx'teki hesaplama modeliyle aynı).
+// supplier_payments artık yalnızca legacy tablo — buradan okunmaz.
+type SupplierTxRow = {
     id: string;
-    expense_date: string | null;
+    transaction_date: string | null;
+    transaction_type: string | null;
     amount: number | null;
-    category: string | null;
-    note: string | null;
-    status: string | null;
-    vendor: string | null;
-};
-
-type SupplierPaymentRow = {
-    id: string;
-    payment_date: string | null;
-    amount: number | null;
+    description: string | null;
     payment_method: string | null;
-    note: string | null;
 };
 
 type LedgerRow = {
@@ -75,8 +68,11 @@ export default function SupplierLedger() {
     const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
     const [selectedSupplierId, setSelectedSupplierId] = useState("");
 
-    const [expenseRows, setExpenseRows] = useState<ExpenseLedgerRow[]>([]);
-    const [paymentRows, setPaymentRows] = useState<SupplierPaymentRow[]>([]);
+    const [expenseRows, setExpenseRows] = useState<SupplierTxRow[]>([]);
+    const [paymentRows, setPaymentRows] = useState<SupplierTxRow[]>([]);
+    // 'payment_reversal' (ödeme iptali) satırları listede gösterilmez (Accounting.tsx ile
+    // aynı karar), ama Kalan Bakiye'ye geri eklenmesi gerekir — bu yüzden ayrı tutulur.
+    const [totalPaymentReversal, setTotalPaymentReversal] = useState(0);
 
     const [showQuickPaymentModal, setShowQuickPaymentModal] = useState(false);
     const [showQuickExpenseModal, setShowQuickExpenseModal] = useState(false);
@@ -132,40 +128,35 @@ export default function SupplierLedger() {
         if (!companyId || !selectedSupplierId) {
             setExpenseRows([]);
             setPaymentRows([]);
+            setTotalPaymentReversal(0);
             return;
         }
 
         setLoading(true);
         setErr(null);
 
-        const exp = await supabase
-            .from("expenses")
-            .select("id, expense_date, amount, category, note, status, vendor")
+        const tx = await supabase
+            .from("supplier_transactions")
+            .select("id, transaction_date, transaction_type, amount, description, payment_method")
             .eq("company_id", companyId)
             .eq("supplier_id", selectedSupplierId)
-            .order("expense_date", { ascending: false });
+            .order("transaction_date", { ascending: false });
 
-        const pay = await supabase
-            .from("supplier_payments")
-            .select("id, payment_date, amount, payment_method, note")
-            .eq("company_id", companyId)
-            .eq("supplier_id", selectedSupplierId)
-            .order("payment_date", { ascending: false });
-
-        if (exp.error) {
-            console.error("expenses ledger fetch error:", exp.error);
-            setErr("Tedarikçi giderleri okunamadı.");
+        if (tx.error) {
+            console.error("supplier_transactions ledger fetch error:", tx.error);
+            setErr("Tedarikçi cari hareketleri okunamadı.");
             setExpenseRows([]);
-        } else {
-            setExpenseRows((exp.data ?? []) as ExpenseLedgerRow[]);
-        }
-
-        if (pay.error) {
-            console.error("supplier payments ledger fetch error:", pay.error);
-            setErr((prev) => prev ?? "Tedarikçi ödemeleri okunamadı.");
             setPaymentRows([]);
+            setTotalPaymentReversal(0);
         } else {
-            setPaymentRows((pay.data ?? []) as SupplierPaymentRow[]);
+            const rows = (tx.data ?? []) as SupplierTxRow[];
+            setExpenseRows(rows.filter((r) => r.transaction_type === "debt"));
+            // 'cancel' ve 'credit' de borç azaltan hareketlerdir (bkz. Accounting.tsx
+            // totalPaid modeli); 'payment_reversal' bilinçli olarak dışarıda bırakılır.
+            setPaymentRows(rows.filter((r) => r.transaction_type === "payment" || r.transaction_type === "cancel" || r.transaction_type === "credit"));
+            setTotalPaymentReversal(
+                rows.filter((r) => r.transaction_type === "payment_reversal").reduce((sum, r) => sum + Number(r.amount ?? 0), 0),
+            );
         }
 
         setLoading(false);
@@ -223,11 +214,14 @@ export default function SupplierLedger() {
         try {
             setSaving(true);
 
+            const amount = Number(quickExpenseAmount);
+            const nowIso = new Date().toISOString();
+
             const { error } = await supabase.from("expenses").insert({
                 company_id: companyId,
                 supplier_id: selectedSupplierId,
-                expense_date: new Date().toISOString(),
-                amount: Number(quickExpenseAmount),
+                expense_date: nowIso,
+                amount,
                 category: quickExpenseCategory || null,
                 note: quickExpenseNote || null,
                 status: quickExpenseStatus || "unpaid",
@@ -235,6 +229,23 @@ export default function SupplierLedger() {
             });
 
             if (error) throw error;
+
+            // NewOrder.tsx / OrderDetail.tsx ile aynı mantık: expenses ile birlikte
+            // supplier_transactions'a da 'debt' kaydı açılır — tek doğruluk kaynağı
+            // supplier_transactions olsun diye (SupplierDetail/Accounting bakiyesi
+            // buradan hesaplanıyor). postSupplierDebt() burada kullanılmaz çünkü bu
+            // hızlı gider bir siparişe bağlı değildir (orderId gerektirir).
+            const { error: debtErr } = await supabase.from("supplier_transactions").insert({
+                company_id: companyId,
+                supplier_id: selectedSupplierId,
+                order_id: null,
+                transaction_date: nowIso,
+                transaction_type: "debt",
+                amount,
+                description: `Hızlı gider: ${quickExpenseCategory || "Genel"}${quickExpenseNote ? ` - ${quickExpenseNote}` : ""}`,
+            });
+
+            if (debtErr) throw debtErr;
 
             setQuickExpenseAmount("");
             setQuickExpenseCategory("");
@@ -275,19 +286,21 @@ export default function SupplierLedger() {
     }, [paymentRows]);
 
     const remaining = useMemo(() => {
-        return Math.max(totalDebt - totalPayment, 0);
-    }, [totalDebt, totalPayment]);
+        // Accounting.tsx'teki model: payment_reversal (ödeme iptali) borcu tekrar
+        // açtığı için totalPayment'tan değil, ayrı toplanıp burada geri eklenir.
+        return Math.max(totalDebt - totalPayment + totalPaymentReversal, 0);
+    }, [totalDebt, totalPayment, totalPaymentReversal]);
 
     const lastPaymentDate = useMemo(() => {
         if (paymentRows.length === 0) return null;
 
         const sorted = [...paymentRows].sort((a, b) => {
-            const da = a.payment_date ? new Date(a.payment_date).getTime() : 0;
-            const db = b.payment_date ? new Date(b.payment_date).getTime() : 0;
+            const da = a.transaction_date ? new Date(a.transaction_date).getTime() : 0;
+            const db = b.transaction_date ? new Date(b.transaction_date).getTime() : 0;
             return db - da;
         });
 
-        return sorted[0]?.payment_date ?? null;
+        return sorted[0]?.transaction_date ?? null;
     }, [paymentRows]);
 
     const totalMovementCount = useMemo(() => {
@@ -298,8 +311,8 @@ export default function SupplierLedger() {
         const debts: LedgerRow[] = expenseRows.map((r) => ({
             id: `debt-${r.id}`,
             row_type: "debt",
-            date: r.expense_date,
-            description: r.category || r.vendor || r.note || "Borç kaydı",
+            date: r.transaction_date,
+            description: r.description || "Borç kaydı",
             debt: Number(r.amount ?? 0),
             payment: 0,
         }));
@@ -307,10 +320,10 @@ export default function SupplierLedger() {
         const payments: LedgerRow[] = paymentRows.map((r) => ({
             id: `payment-${r.id}`,
             row_type: "payment",
-            date: r.payment_date,
+            date: r.transaction_date,
             description: r.payment_method
-                ? `${r.payment_method}${r.note ? ` - ${r.note}` : ""}`
-                : r.note || "Ödeme",
+                ? `${r.payment_method}${r.description ? ` - ${r.description}` : ""}`
+                : r.description || "Ödeme",
             debt: 0,
             payment: Number(r.amount ?? 0),
         }));
