@@ -125,6 +125,7 @@ type PaymentRow = {
     amount: number | null;
     method: string | null;
     note: string | null;
+    reverses_payment_id?: string | null;
 };
 
 type InstallationJobRow = {
@@ -316,6 +317,7 @@ export default function OrderDetail() {
     const [paymentNote, setPaymentNote] = useState("");
     const [paymentError, setPaymentError] = useState("");
     const [paymentSuccess, setPaymentSuccess] = useState("");
+    const [cancellingPaymentId, setCancellingPaymentId] = useState<string | null>(null);
     const [installationJob, setInstallationJob] = useState<InstallationJobRow | null>(null);
     const [workflowMessage, setWorkflowMessage] = useState("");
     const [workflowError, setWorkflowError] = useState("");
@@ -450,17 +452,28 @@ export default function OrderDetail() {
                 .select("id, preview_image_url, original_photo_url, note, selected_catalog_variant_id, catalog_variant:catalog_variants(variant_code, color_name, price_per_m2, texture_image_url, series:catalog_series(product_type, series_code, model_name))")
                 .eq("order_id", id)
                 .order("created_at", { ascending: false });
-            const { data: paymentRows } = await supabase
+            const paymentRes = await supabase
                 .from("payments")
-                .select("id,payment_date,amount,method,note")
+                .select("id,payment_date,amount,method,note,reverses_payment_id")
                 .eq("order_id", id)
                 .order("payment_date", { ascending: false });
+            let paymentRows = paymentRes.data;
+            if (paymentRes.error) {
+                // reverses_payment_id kolonu henüz yoksa (migration uygulanmadan önce)
+                // eski sorguya düş — mevcut davranış korunur (bkz. Accounting.tsx aynı desen).
+                const paymentFb = await supabase
+                    .from("payments")
+                    .select("id,payment_date,amount,method,note")
+                    .eq("order_id", id)
+                    .order("payment_date", { ascending: false });
+                paymentRows = (paymentFb.data ?? []).map((r: any) => ({ ...r, reverses_payment_id: null }));
+            }
             const { data: jobRow } = await supabase
                 .from("installation_jobs")
                 .select("id,status,assigned_staff_id,created_at,updated_at,scheduled_date")
                 .eq("order_id", id)
                 .maybeSingle();
-            
+
             setOrder(o);
             setItems(i ?? []);
             setVisualPreviews((previews ?? []) as VisualPreviewRow[]);
@@ -1432,6 +1445,33 @@ export default function OrderDetail() {
         }
     }
 
+    async function handleCancelPayment(payment: PaymentRow) {
+        if (!order) return;
+        setCancellingPaymentId(payment.id);
+        setPaymentError("");
+        setPaymentSuccess("");
+        try {
+            const result = await financeService.customerCollections.cancelCollection({
+                companyId: order.company_id!,
+                paymentId: payment.id,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status !== "success") {
+                throw result.status === "error" ? result.error : new Error(result.reason);
+            }
+
+            setPaymentSuccess("Tahsilat iptal edildi.");
+            await loadData();
+        } catch (e: any) {
+            const msg = String(e?.message || "");
+            setPaymentError(msg.includes("customer_cancel_collection")
+                ? "Tahsilat iptal servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
+                : (e?.message ?? "Tahsilat iptal edilemedi."));
+        } finally {
+            setCancellingPaymentId(null);
+        }
+    }
+
     if (loading) return <div className="p-10 text-center font-bold">Yükleniyor...</div>;
     if (!order) return <div className="p-10 ">Sipariş bulunamadı.</div>;
 
@@ -2052,15 +2092,41 @@ export default function OrderDetail() {
                     <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                         <div className="text-xs font-black uppercase tracking-widest text-slate-400">Tahsilat Geçmişi</div>
                         <div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">
-                            {payments.map((payment) => (
-                                <div key={payment.id} className="flex flex-col gap-1 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <div className="font-black">{fmtTL(payment.amount)}</div>
-                                        <div className="text-xs text-slate-500">{payment.method || "Ödeme"} - {payment.note || "Açıklama yok"}</div>
-                                    </div>
-                                    <div className="text-xs font-bold text-slate-500">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString("tr-TR") : "-"}</div>
-                                </div>
-                            ))}
+                            {(() => {
+                                // Zaten iptal edilmiş (başka bir satırın reverses_payment_id'siyle
+                                // işaret edilen) orijinal tahsilatları bulmak için kullanılır —
+                                // bu satırlara ve iptal (reversal) satırlarının kendisine "İptal Et"
+                                // butonu gösterilmez.
+                                const reversedPaymentIds = new Set(
+                                    payments.map((p) => p.reverses_payment_id).filter((v): v is string => !!v)
+                                );
+                                return payments.map((payment) => {
+                                    const isReversal = !!payment.reverses_payment_id;
+                                    const canCancel = !isReversal && !reversedPaymentIds.has(payment.id);
+                                    return (
+                                        <div key={payment.id} className="flex flex-col gap-1 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                                            <div>
+                                                <div className="font-black">{fmtTL(payment.amount)}</div>
+                                                <div className="text-xs text-slate-500">{payment.method || "Ödeme"} - {payment.note || "Açıklama yok"}</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="text-xs font-bold text-slate-500">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString("tr-TR") : "-"}</div>
+                                                {canCancel ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleCancelPayment(payment)}
+                                                        disabled={cancellingPaymentId === payment.id}
+                                                        className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900/40 dark:text-rose-400"
+                                                        title="Tahsilatı İptal Et"
+                                                    >
+                                                        {cancellingPaymentId === payment.id ? "İptal ediliyor..." : "İptal Et"}
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                    );
+                                });
+                            })()}
                         </div>
                     </div>
                 ) : null}

@@ -146,6 +146,7 @@ export const Suppliers = () => {
     const [productFormSaving, setProductFormSaving] = useState(false);
 
     const [transactions, setTransactions] = useState<SupplierTransaction[]>([]);
+    const [cancellingTxId, setCancellingTxId] = useState<string | null>(null);
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentAmount, setPaymentAmount] = useState("");
@@ -438,6 +439,7 @@ export const Suppliers = () => {
             return;
         }
 
+        setCancellingTxId(txId);
         try {
             const ctx = await getContext();
             const result = await financeService.supplierPayments.cancelPayment({
@@ -458,6 +460,8 @@ export const Suppliers = () => {
             alert(msg.includes("supplier_cancel_payment")
                 ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
                 : (e?.message ?? "Ödeme iptal edilemedi"));
+        } finally {
+            setCancellingTxId(null);
         }
     }
 
@@ -1237,7 +1241,7 @@ export const Suppliers = () => {
                                                             <p className={`font-black text-lg ${tx.transaction_type === "debt" ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                                                                 {tx.transaction_type === "debt" ? "+" : "-"}{formatTL(tx.amount)}
                                                             </p>
-                                                            <button type="button" onClick={() => handleDeleteTransaction(tx.id)} className="p-2 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/50 dark:hover:text-red-400 rounded-lg transition" title="İşlemi Sil">
+                                                            <button type="button" onClick={() => handleDeleteTransaction(tx.id)} disabled={cancellingTxId === tx.id} className="p-2 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/50 dark:hover:text-red-400 rounded-lg transition disabled:opacity-60" title="İşlemi Sil">
                                                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                                             </button>
                                                         </div>
@@ -1293,7 +1297,18 @@ export const Suppliers = () => {
                                                     {transactions.filter(t => t.transaction_type === "payment").map(tx => (
                                                         <div key={tx.id} className="flex items-center justify-between text-sm">
                                                             <span className="text-slate-600 dark:text-slate-400">{new Date(tx.created_at).toLocaleDateString("tr-TR")}</span>
-                                                            <span className="font-bold text-emerald-600 dark:text-emerald-400">-{formatTL(tx.amount)}</span>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-bold text-emerald-600 dark:text-emerald-400">-{formatTL(tx.amount)}</span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteTransaction(tx.id)}
+                                                                    disabled={cancellingTxId === tx.id}
+                                                                    className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900/40 dark:text-rose-400"
+                                                                    title="Ödemeyi İptal Et"
+                                                                >
+                                                                    {cancellingTxId === tx.id ? "İptal ediliyor..." : "İptal Et"}
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
