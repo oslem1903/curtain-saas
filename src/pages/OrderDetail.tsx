@@ -904,6 +904,52 @@ export default function OrderDetail() {
         }
     }
 
+    // Tedarikçi bazlı expenses kaydını supplier_transactions ile AYNI delta ile senkron
+    // tutar (Madde 3 düzeltmesi): sipariş düzenlendikten sonra expenses stale kalmasın.
+    // Mevcut kayıt varsa amount delta kadar güncellenir (0'ın altına düşmez); yoksa
+    // (yalnızca delta>0 iken) NewOrder.tsx::createSupplierExpense ile birebir aynı
+    // şekilde yeni bir kayıt oluşturulur.
+    async function syncSupplierExpenseForLine(params: {
+        companyId: string;
+        orderId: string;
+        supplierId: string;
+        delta: number;
+        customerName: string;
+    }) {
+        const { companyId, orderId, supplierId, delta, customerName } = params;
+        if (!supplierId || delta === 0) return;
+        const { data: existing, error: findErr } = await supabase
+            .from("expenses")
+            .select("id, amount")
+            .eq("company_id", companyId)
+            .eq("order_id", orderId)
+            .eq("supplier_id", supplierId)
+            .eq("category", "Kumaş / Ürün")
+            .maybeSingle();
+        if (findErr) {
+            console.warn("Tedarikçi gider kaydı senkronize edilemedi:", findErr.message);
+            return;
+        }
+        if (existing) {
+            const nextAmount = Math.max(safeNumber(existing.amount) + delta, 0);
+            const { error: updErr } = await supabase.from("expenses").update({ amount: nextAmount }).eq("id", existing.id);
+            if (updErr) console.warn("Tedarikçi gider kaydı güncellenemedi:", updErr.message);
+        } else if (delta > 0) {
+            const { error: insErr } = await supabase.from("expenses").insert({
+                company_id: companyId,
+                expense_date: new Date().toISOString(),
+                amount: delta,
+                category: "Kumaş / Ürün",
+                vendor: supplierNameById(supplierId),
+                supplier_id: supplierId,
+                order_id: orderId,
+                status: "unpaid",
+                note: `Sipariş maliyeti - Kumaş / Ürün - Müşteri: ${customerName}`,
+            });
+            if (insErr) console.warn("Tedarikçi gider kaydı oluşturulamadı:", insErr.message);
+        }
+    }
+
     function supplierNameById(sid: string) {
         return suppliers.find((s) => s.id === sid)?.name || "Tedarikçi";
     }
@@ -1000,7 +1046,6 @@ export default function OrderDetail() {
                 // tedarikçiye ödeme yapılmış olabilir. Bunun yerine eski tedarikçiye
                 // "iptal" (cancel) hareketi, yeni tedarikçiye temiz bir "borç" atarız.
                 const oldItem = items.find((item) => item.id === editingItemId);
-                const oldTxId = oldItem?.supplier_transaction_id;
                 const oldSupplierId = oldItem?.supplier_id || "";
                 const oldCost = safeNumber(oldItem?.supplier_total_cost);
                 const newSupplierId = payload.supplier_id || "";
@@ -1011,50 +1056,39 @@ export default function OrderDetail() {
                 const nowIso = new Date().toISOString();
 
                 if (oldSupplierId && newSupplierId && oldSupplierId === newSupplierId) {
-                    // Aynı tedarikçi — yalnızca borç tutarını güncelle
-                    if (oldTxId) {
-                        // Mevcut borç korunur; tutar/açıklama ile birlikte yalnızca vade
-                        // (due_date) metadata'sı güncellenir. Boşaltıldıysa null yazılır.
-                        await supabase.from("supplier_transactions").update({
-                            amount: newCost,
-                            description: `Sipariş ürün güncellendi: ${custName} - ${lineLabel}`,
-                            due_date: manualDueDate,
-                        }).eq("id", oldTxId);
-                    } else {
-                        // Kalem cari harekete bağlı DEĞİL (ör. NewOrder'dan gelen toplu borç,
-                        // order seviyesinde tek 'debt' olarak yazılır; kaleme bağlanmaz).
-                        // Yeni TAM borç yaratmak çift sayım olur (toplu borç bu kalemi zaten içerir).
-                        // Bunun yerine yalnız net farkı (delta) işleriz: artış → 'debt', azalış → 'cancel'.
-                        // Mevcut borç mutasyona uğratılmaz (ödeme yapılmış olabilir).
-                        const delta = newCost - oldCost;
-                        if (delta > 0) {
-                            await supabase.from("supplier_transactions").insert({
-                                company_id: companyId,
-                                supplier_id: newSupplierId,
-                                order_id: id,
-                                order_item_id: editingItemId,
-                                transaction_date: nowIso,
-                                transaction_type: "debt",
-                                amount: delta,
-                                description: `Sipariş ürün maliyeti arttı: ${custName} - ${lineLabel}`,
-                                reference_no: refNo,
-                                ...(manualDueDate ? { due_date: manualDueDate } : {}),
-                            });
-                        } else if (delta < 0) {
-                            await supabase.from("supplier_transactions").insert({
-                                company_id: companyId,
-                                supplier_id: newSupplierId,
-                                order_id: id,
-                                order_item_id: editingItemId,
-                                transaction_date: nowIso,
-                                transaction_type: "cancel",
-                                amount: -delta,
-                                description: `Sipariş ürün maliyeti azaldı: ${custName} - ${lineLabel}`,
-                                reference_no: refNo,
-                            });
-                        }
-                        // delta === 0 → cari hareket gerekmez
+                    // Aynı tedarikçi — mevcut borç hareketi MUTASYONA UĞRATILMAZ (reverse-entry
+                    // ilkesi: ödeme yapılmış olabilir). Kalem cari harekete bağlı olsun ya da
+                    // olmasın TEK modelle işlenir: yalnız net farkı (delta) işleriz —
+                    // artış → yeni 'debt' hareketi, azalış → 'cancel' hareketi.
+                    const delta = newCost - oldCost;
+                    if (delta > 0) {
+                        await supabase.from("supplier_transactions").insert({
+                            company_id: companyId,
+                            supplier_id: newSupplierId,
+                            order_id: id,
+                            order_item_id: editingItemId,
+                            transaction_date: nowIso,
+                            transaction_type: "debt",
+                            amount: delta,
+                            description: `Sipariş ürün maliyeti arttı: ${custName} - ${lineLabel}`,
+                            reference_no: refNo,
+                            ...(manualDueDate ? { due_date: manualDueDate } : {}),
+                        });
+                    } else if (delta < 0) {
+                        await supabase.from("supplier_transactions").insert({
+                            company_id: companyId,
+                            supplier_id: newSupplierId,
+                            order_id: id,
+                            order_item_id: editingItemId,
+                            transaction_date: nowIso,
+                            transaction_type: "cancel",
+                            amount: -delta,
+                            description: `Sipariş ürün maliyeti azaldı: ${custName} - ${lineLabel}`,
+                            reference_no: refNo,
+                        });
                     }
+                    // delta === 0 → cari hareket gerekmez
+                    await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: newSupplierId, delta, customerName: custName });
                 } else if (oldSupplierId !== newSupplierId) {
                     // Tedarikçi değişti / kaldırıldı / yeni eklendi
                     // 1) Eski tedarikçinin borcunu iptal et (ödeme yapılmışsa bakiye düzeltme hareketi)
@@ -1072,6 +1106,7 @@ export default function OrderDetail() {
                                 : `Tedarikçi kaldırıldı: ${custName} - ${lineLabel}`,
                             reference_no: refNo,
                         });
+                        await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: oldSupplierId, delta: -oldCost, customerName: custName });
                     }
                     // 2) Yeni tedarikçiye borç işle (ya da tedarikçi kaldırıldıysa bağlantıyı temizle)
                     if (newSupplierId && newCost > 0) {
@@ -1083,6 +1118,7 @@ export default function OrderDetail() {
                                 : `Sipariş ürün eklendi: ${custName} - ${lineLabel}`,
                             dueDate: manualDueDate,
                         });
+                        await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: newSupplierId, delta: newCost, customerName: custName });
                     } else {
                         await supabase.from("order_items").update({ supplier_transaction_id: null }).eq("id", editingItemId);
                     }
@@ -1104,6 +1140,13 @@ export default function OrderDetail() {
                         amount: payload.supplier_total_cost,
                         description: `Sipariş ürün eklendi: ${order.customers?.name || "Müşteri"} - ${productLabel(payload.product_type)} (${payload.room || "Alan"})`,
                         dueDate: manualDueDate,
+                    });
+                    await syncSupplierExpenseForLine({
+                        companyId,
+                        orderId: id,
+                        supplierId: payload.supplier_id,
+                        delta: payload.supplier_total_cost,
+                        customerName: order.customers?.name || "Müşteri",
                     });
                 }
             }
@@ -1128,11 +1171,15 @@ export default function OrderDetail() {
         setSaving(true);
         setItemFormError("");
         try {
-            // Silinmeden önce tedarikçi cari iptal kaydı oluştur
+            const companyId = order.company_id;
+            if (!companyId) throw new Error("Şirket bilgisi bulunamadı.");
+            // Silinmeden önce tedarikçi cari iptal kaydı oluştur — sonucu MUTLAKA kontrol
+            // edilir; insert başarısız olursa fail-fast: order_items SİLİNMEZ (orphan
+            // tedarikçi borcu bırakılmasın diye).
             const itemToDelete = items.find((item) => item.id === itemId);
             if (itemToDelete?.supplier_id && safeNumber(itemToDelete.supplier_total_cost) > 0) {
-                await supabase.from("supplier_transactions").insert({
-                    company_id: order.company_id,
+                const { error: cancelErr } = await supabase.from("supplier_transactions").insert({
+                    company_id: companyId,
                     supplier_id: itemToDelete.supplier_id,
                     order_id: id,
                     order_item_id: itemId,
@@ -1141,6 +1188,16 @@ export default function OrderDetail() {
                     amount: safeNumber(itemToDelete.supplier_total_cost),
                     description: `Sipariş satırı silindi: ${order.customers?.name || "Müşteri"} - ${productLabel(itemToDelete.product_type)} (${itemToDelete.room || "Alan"})`,
                     reference_no: id.slice(0, 8).toUpperCase(),
+                });
+                if (cancelErr) {
+                    throw new Error(`Tedarikçi cari iptal kaydı oluşturulamadı, ürün silinmedi: ${cancelErr.message}`);
+                }
+                await syncSupplierExpenseForLine({
+                    companyId,
+                    orderId: id,
+                    supplierId: itemToDelete.supplier_id,
+                    delta: -safeNumber(itemToDelete.supplier_total_cost),
+                    customerName: order.customers?.name || "Müşteri",
                 });
             }
 
