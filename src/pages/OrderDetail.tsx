@@ -863,8 +863,15 @@ export default function OrderDetail() {
         const salesTotal = nextItems.reduce((s, x) => s + safeNumber(x.line_total), 0);
         const purchaseTotal = nextItems.reduce((s, x) => s + safeNumber(x.supplier_total_cost), 0);
         const lineProfit = nextItems.reduce((s, x) => s + safeNumber(x.profit), 0);
-        const paid = safeNumber(order.paid_amount ?? order.deposit_amount);
-        const remaining = Math.max(salesTotal - paid, 0);
+        // paid_amount taze okunur (React state'teki order bayat olabilir — bkz. Adım 7 Madde 1/2).
+        const { data: freshOrder } = await supabase
+            .from("orders")
+            .select("paid_amount, deposit_amount")
+            .eq("id", id)
+            .maybeSingle();
+        const paid = safeNumber(freshOrder?.paid_amount ?? freshOrder?.deposit_amount ?? order.paid_amount ?? order.deposit_amount);
+        // Fazla ödeme/kredi durumunda negatif remaining_amount korunur (Math.max ile 0'a kırpılmaz).
+        const remaining = salesTotal - paid;
 
         const { error } = await supabase.from("orders").update({
             total_amount: salesTotal,
@@ -2266,7 +2273,7 @@ export default function OrderDetail() {
                                                         <button type="button" onClick={() => startEditItem(it)} className="p-2 text-primary-600 hover:bg-primary-50 rounded-xl" title="Düzenle">
                                                             <Pencil className="w-4 h-4" />
                                                         </button>
-                                                        <button type="button" onClick={() => handleDeleteItem(it.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
+                                                        <button type="button" onClick={() => handleDeleteItem(it.id)} disabled={saving} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
                                                     </div>
