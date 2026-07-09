@@ -16,9 +16,7 @@ import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
-import { createFinanceService } from "../services/finance";
-
-const financeService = createFinanceService();
+import { logAction } from "../utils/audit";
 
 
 function startOfDay(d: Date) {
@@ -62,8 +60,6 @@ type PaymentRow = {
     method: string | null;
     note: string | null;
     order_id: string | null;
-    /** Doluysa bu satır bir tahsilat iptalidir (bkz. customer_cancel_collection RPC) — normal tahsilat gibi gösterilmez. */
-    reverses_payment_id?: string | null;
 };
 
 type IncomeRow = {
@@ -364,29 +360,6 @@ export const Accounting = () => {
         selectedIncomeOrder?.remaining_amount != null
             ? Number(selectedIncomeOrder.remaining_amount ?? 0)
             : Math.max(selectedIncomeOrderTotal - selectedIncomeOrderPaid, 0);
-
-    async function insertTransaction(payload: {
-        company_id: string;
-        tx_date?: string;
-        type: string;
-        direction: "in" | "out";
-        amount: number;
-        description?: string | null;
-    }) {
-        const { error } = await supabase.from("transactions").insert({
-            company_id: payload.company_id,
-            tx_date: payload.tx_date ?? new Date().toISOString(),
-            type: payload.type,
-            direction: payload.direction,
-            amount: payload.amount,
-            description: payload.description ?? null,
-        });
-
-        if (error) {
-            console.error("transaction insert error:", error);
-        }
-    }
-
     async function loadData() {
         setLoading(true);
         setErr(null);
@@ -456,7 +429,7 @@ export const Accounting = () => {
 
             let exp: any = await supabase
                 .from("expenses")
-                .select("amount, expense_date, status, supplier_id, category, note, due_date, order_id")
+                .select("amount, expense_date, status, supplier_id, category, note, due_date")
                 .eq("company_id", cid);
 
             if (exp.error) {
@@ -474,14 +447,6 @@ export const Accounting = () => {
 
                 const monthExpenseSum = rows
                     .filter((r: any) => {
-                        // İptal edilen siparişin gider accrual'ı (status='cancelled') Toplam Gider'e
-                        // GİRMEZ — sipariş iptalinde hayalet gider bırakmamak için. (Mevcut veride
-                        // gider 'cancelled' olmaz; yalnız iptal edilen sipariş accrual'ını dışlar.)
-                        if (String(r.status ?? "").toLowerCase() === "cancelled") return false;
-                        // Accrual esas: ödeme anında oluşan tedarikçi nakit gideri (category='Tedarik')
-                        // Toplam Gider'e DAHİL EDİLMEZ — aynı maliyet sipariş accrual'ında zaten sayıldı.
-                        // Nakit çıkış ayrıca "Tedarikçi Ödemeleri" (supplier_transactions 'payment') tarafında görünür.
-                        if (String(r.category ?? "").trim().toLowerCase() === "tedarik") return false;
                         const d = r.expense_date ? new Date(r.expense_date).toISOString() : null;
                         return d && d >= fromRange && d <= toRange;
                     })
@@ -489,13 +454,7 @@ export const Accounting = () => {
 
 
                 const unpaidSum = rows
-                    .filter((r: any) => {
-                        // Sipariş tedarikçi accrual'ı (order_id dolu) "Bekleyen Gider"e girmez:
-                        // tedarikçi borcunun ödenmiş/kalan durumu cari'de (supplier_transactions)
-                        // tutulur; accrual'ın expense.status'u güncellenmediğinden buraya katılmaz.
-                        if (r.order_id) return false;
-                        return (r.status ?? "paid").toLowerCase() !== "paid";
-                    })
+                    .filter((r: any) => (r.status ?? "paid").toLowerCase() !== "paid")
                     .reduce((a: number, r: any) => a + Number(r.amount ?? 0), 0);
 
                 const soon = new Date();
@@ -589,34 +548,18 @@ export const Accounting = () => {
                 setRecent((tx.data ?? []) as TxRow[]);
             }
 
-            const payRes = await supabase
+            const pay = await supabase
                 .from("payments")
-                .select("id, payment_date, amount, method, note, order_id, reverses_payment_id")
+                .select("id, payment_date, amount, method, note, order_id")
                 .eq("company_id", cid)
                 .order("payment_date", { ascending: false })
                 .limit(8);
 
-            let payRows = payRes.data;
-            let payErr = payRes.error;
-
-            if (payErr) {
-                // reverses_payment_id kolonu henüz yoksa (migration uygulanmadan
-                // önce) eski sorguya düş — mevcut davranış korunur.
-                const payFb = await supabase
-                    .from("payments")
-                    .select("id, payment_date, amount, method, note, order_id")
-                    .eq("company_id", cid)
-                    .order("payment_date", { ascending: false })
-                    .limit(8);
-                payErr = payFb.error;
-                payRows = (payFb.data ?? []).map((r: any) => ({ ...r, reverses_payment_id: null }));
-            }
-
-            if (payErr) {
-                console.error("payments fetch error:", payErr);
+            if (pay.error) {
+                console.error("payments fetch error:", pay.error);
                 setRecentPayments([]);
             } else {
-                setRecentPayments((payRows ?? []) as PaymentRow[]);
+                setRecentPayments((pay.data ?? []) as PaymentRow[]);
             }
 
             const sup = await supabase
@@ -768,32 +711,18 @@ export const Accounting = () => {
                 setEmployeeBonusTotal(nextEmployeeLedgers.reduce((sum, x) => sum + x.bonus, 0));
             }
 
-            // supplier_payments artık legacy/write-orphan (bkz. supplier_record_payment RPC —
-            // yalnızca supplier_transactions + expenses'e yazar). Gerçek kaynak: supplier_transactions
-            // 'payment'/'credit' türü (aşağıdaki debtMap ile aynı model; payment_reversal
-            // bilinçli olarak listeden dışarıda bırakılır — bkz. satır ~845).
             const supplierPaymentsRes = await supabase
-                .from("supplier_transactions")
-                .select("id, supplier_id, amount, payment_method, description, transaction_date")
+                .from("supplier_payments")
+                .select("id, supplier_id, amount, payment_method, note, payment_date")
                 .eq("company_id", cid)
-                .in("transaction_type", ["payment", "credit"])
-                .order("transaction_date", { ascending: false })
+                .order("payment_date", { ascending: false })
                 .limit(8);
 
             if (supplierPaymentsRes.error) {
-                console.error("supplier_transactions (payment) fetch error:", supplierPaymentsRes.error);
+                console.error("supplier_payments fetch error:", supplierPaymentsRes.error);
                 setRecentSupplierPayments([]);
             } else {
-                setRecentSupplierPayments(
-                    (supplierPaymentsRes.data ?? []).map((r: any) => ({
-                        id: r.id,
-                        supplier_id: r.supplier_id,
-                        amount: r.amount,
-                        payment_method: r.payment_method,
-                        note: r.description,
-                        payment_date: r.transaction_date,
-                    })) as SupplierPaymentRow[],
-                );
+                setRecentSupplierPayments((supplierPaymentsRes.data ?? []) as SupplierPaymentRow[]);
             }
 
             // Tedarikçi borç/ödeme hesabı: supplier_transactions tablosundan
@@ -817,7 +746,7 @@ export const Accounting = () => {
 
                 const debtMap: Record<
                     string,
-                    { name: string; totalDebt: number; totalPaid: number; totalPaymentReversal: number; supplier_id: string }
+                    { name: string; totalDebt: number; totalPaid: number; supplier_id: string }
                 > = {};
 
                 (supplierTxQuery.data ?? []).forEach((r: any) => {
@@ -829,16 +758,11 @@ export const Accounting = () => {
                             name: supplierNameMap[key] || "Tedarikçi",
                             totalDebt: 0,
                             totalPaid: 0,
-                            totalPaymentReversal: 0,
                         };
                     }
                     const amt = Number(r.amount ?? 0);
                     if (r.transaction_type === "debt") debtMap[key].totalDebt += amt;
                     else if (r.transaction_type === "payment" || r.transaction_type === "cancel" || r.transaction_type === "credit") debtMap[key].totalPaid += amt;
-                    // 'payment_reversal' = odeme iptali (bkz. supplier_cancel_payment RPC).
-                    // Iptal edilen odeme borcu tekrar actigi icin totalPaid'ten degil,
-                    // ayri toplanip asagida remaining'e geri eklenir.
-                    else if (r.transaction_type === "payment_reversal") debtMap[key].totalPaymentReversal += amt;
                 });
 
                 const debtRows: SupplierDebtRow[] = Object.values(debtMap)
@@ -847,7 +771,7 @@ export const Accounting = () => {
                         name: x.name,
                         totalDebt: x.totalDebt,
                         totalPaid: x.totalPaid,
-                        remaining: Math.max(x.totalDebt - x.totalPaid + x.totalPaymentReversal, 0),
+                        remaining: Math.max(x.totalDebt - x.totalPaid, 0),
                     }))
                     .filter((x) => x.totalDebt > 0 || x.totalPaid > 0)
                     .sort((a, b) => b.remaining - a.remaining);
@@ -855,15 +779,7 @@ export const Accounting = () => {
                 setSupplierDebts(debtRows);
                 setSupplierDebtTotal(debtRows.reduce((sum, x) => sum + x.remaining, 0));
 
-                // Tedarikçi ödemeleri listesi (Toplam Gider modalı için).
-                // BİLİNÇLİ OLARAK 'payment_reversal' DAHİL EDİLMEZ: bu modal "Tedarikçilere
-                // yapılan ödemeler" listesidir (satırlar tek renkte/işaretsiz gösterilir,
-                // ayrı bir görsel işaretleme yok — bkz. JSX altında). Bir ödeme iptalini
-                // aynı listede aynı biçimde göstermek, iptali sanki yeni bir ödemeymiş gibi
-                // yanıltıcı gösterirdi. Ayrı işaretleme UI tasarım değişikliği gerektireceği
-                // için (bu görevin kapsamı dışında), 'payment_reversal' bu listeden dışarıda
-                // bırakılır; bakiye hesapları (supplierDebts/remaining, yukarıda) ise doğru
-                // şekilde hesaba katar.
+                // Tedarikçi ödemeleri listesi (Toplam Gider modalı için)
                 setSupplierPaymentRows(
                     (supplierTxQuery.data ?? []).filter(
                         (r: any) => r.transaction_type === "payment" || r.transaction_type === "credit"
@@ -956,13 +872,7 @@ export const Accounting = () => {
         // Tüm gelirleri ve giderleri çek
         const { data: incomes } = await supabase.from("income").select("*").eq("company_id", companyId);
         const { data: expenses } = await supabase.from("expenses").select("*").eq("company_id", companyId);
-        // supplier_payments artık legacy/write-orphan — gerçek kaynak supplier_transactions
-        // 'payment'/'credit' türü (Accounting.tsx'in kendi debtMap modeliyle aynı).
-        const { data: supPayments } = await supabase
-            .from("supplier_transactions")
-            .select("amount, transaction_date, transaction_type")
-            .eq("company_id", companyId)
-            .in("transaction_type", ["payment", "credit"]);
+        const { data: supPayments } = await supabase.from("supplier_payments").select("*").eq("company_id", companyId);
 
         const summary: Record<string, any> = {};
 
@@ -978,12 +888,6 @@ export const Accounting = () => {
         });
 
         (expenses || []).forEach(it => {
-            // İptal edilen siparişin gider accrual'ı (status='cancelled') sayılmaz — kart
-            // (monthExpenseSum) ile birebir aynı: iptal hayalet gider bırakmasın.
-            if (String(it.status ?? "").toLowerCase() === "cancelled") return;
-            // Accrual esas: tedarikçi nakit ödeme gideri (category='Tedarik') Toplam Gider'e girmez;
-            // nakit çıkış zaten ayrı "Tedarikçi Ödemeleri" kolonunda (supplier_transactions 'payment') gösterilir.
-            if (String(it.category ?? "").trim().toLowerCase() === "tedarik") return;
             const key = getMonthKey(it.expense_date);
             if (!summary[key]) summary[key] = { income: 0, expense: 0, staff: 0, supplier: 0 };
             const amount = Number(it.amount || 0);
@@ -997,7 +901,7 @@ export const Accounting = () => {
         });
 
         (supPayments || []).forEach(it => {
-            const key = getMonthKey(it.transaction_date);
+            const key = getMonthKey(it.payment_date);
             if (!summary[key]) summary[key] = { income: 0, expense: 0, staff: 0, supplier: 0 };
             summary[key].supplier += Number(it.amount || 0);
         });
@@ -1080,48 +984,51 @@ export const Accounting = () => {
                     : incomeDescription || "Diğer gelir";
             const source = incomeSourceType === "order" ? "order_payment" : "other";
 
+            // Use atomic RPC function for income entry with optional order payment
             if (incomeSourceType === "order" && selectedIncomeOrder) {
-                // income + payments + orders.paid_amount/remaining_amount tek atomik
-                // RPC cagrisinda yapiliyor (asagidaki "other" dalindaki manuel
-                // income.insert'in yerine gecer — iki kez income kaydi olusmasin).
-                // orders.status ARTIK BU AKISTAN GUNCELLENMIYOR: bu kolon ayni zamanda
-                // is akisi durumu (order.ts::ORDER_STATUS) icin de kullanildigindan,
-                // RPC bilincli olarak status'a dokunmuyor (bkz. customerCollectionService.ts
-                // basindaki arastirma notu — cakisma riski).
-                const result = await financeService.customerCollections.recordCollection({
-                    companyId,
-                    orderId: selectedIncomeOrder.id,
-                    amount,
-                    method: incomePaymentMethod,
-                    note: incomeNote || incomeDescription || undefined,
-                    idempotencyKey: crypto.randomUUID(),
-                });
-                if (result.status !== "success") {
-                    throw result.status === "error" ? result.error : new Error(result.reason);
-                }
-            } else {
-                const { error } = await supabase.from("income").insert({
-                    company_id: companyId,
-                    income_date: nowIso,
-                    amount,
-                    payment_method: incomePaymentMethod || null,
-                    description: incomeDescription || orderDescription,
-                    note: incomeNote || null,
-                    source,
-                    order_id: null,
+                // Use the record_order_payment RPC for order payments
+                const { data, error } = await supabase.rpc("record_order_payment", {
+                    p_company_id: companyId,
+                    p_order_id: selectedIncomeOrder.id,
+                    p_amount: amount,
+                    p_payment_method: incomePaymentMethod || null,
+                    p_note: incomeNote || incomeDescription || null,
                 });
 
                 if (error) throw error;
-            }
+                if (!data?.success) throw new Error(data?.error || "Gelir kaydedilemedi.");
 
-            await insertTransaction({
-                company_id: companyId,
-                tx_date: nowIso,
-                type: source,
-                direction: "in",
-                amount,
-                description: incomeDescription || incomeNote || "Gelir kaydı",
-            });
+                // Log audit trail (fire-and-forget)
+                logAction("payment_created", "payment", data.payment_id || "", {
+                    amount,
+                    payment_method: incomePaymentMethod,
+                    order_id: selectedIncomeOrder.id,
+                    timestamp: new Date().toISOString()
+                }).catch(err => console.error("Audit log failed:", err));
+            } else {
+                // Use the record_income_entry RPC for other income
+                const { data, error } = await supabase.rpc("record_income_entry", {
+                    p_company_id: companyId,
+                    p_income_date: nowIso,
+                    p_amount: amount,
+                    p_payment_method: incomePaymentMethod || null,
+                    p_description: incomeDescription || orderDescription,
+                    p_note: incomeNote || null,
+                    p_source: source,
+                    p_create_transaction: true,
+                });
+
+                if (error) throw error;
+                if (!data?.success) throw new Error(data?.error || "Gelir kaydedilemedi.");
+
+                // Log audit trail (fire-and-forget)
+                logAction("income_created", "income", data.income_id || "", {
+                    amount,
+                    payment_method: incomePaymentMethod,
+                    source,
+                    timestamp: new Date().toISOString()
+                }).catch(err => console.error("Audit log failed:", err));
+            }
 
             setIncomeAmount("");
             setIncomeSourceType("order");
@@ -1133,10 +1040,7 @@ export const Accounting = () => {
 
             await loadData();
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            alert(msg.includes("customer_record_collection")
-                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Gelir kaydedilemedi."));
+            alert(e?.message ?? "Gelir kaydedilemedi.");
         } finally {
             setSaving(false);
         }
@@ -1154,7 +1058,6 @@ export const Accounting = () => {
 
             const amount = Number(expenseAmount);
             const expenseDateIso = expenseDate ? new Date(`${expenseDate}T12:00:00`).toISOString() : new Date().toISOString();
-            const dueDateIso = expenseDueDate ? new Date(`${expenseDueDate}T12:00:00`).toISOString() : null;
 
             const selectedSupplier =
                 suppliers.find((s) => s.id === expenseSupplierId)?.name ?? null;
@@ -1169,52 +1072,30 @@ export const Accounting = () => {
                 expenseNote || null,
             ].filter(Boolean);
 
-            const expensePayload = {
-                company_id: companyId,
-                expense_date: expenseDateIso,
-                amount,
-                category: expenseCategory || null,
-                vendor: vendorText,
-                supplier_id: expenseSupplierId || null,
-                payment_method: expensePaymentMethod || null,
-                note: noteParts.join("\n") || null,
-                status: expenseStatus || "paid",
-                due_date: dueDateIso,
-                document_no: expenseDocumentNo || null,
-                is_installment: expenseIsInstallment,
-                installment_count: expenseIsInstallment ? Number(expenseInstallmentCount || 1) : null,
-                is_recurring: expenseIsRecurring,
-            };
-
-            let { error } = await supabase.from("expenses").insert(expensePayload);
-
-            if (error && /(due_date|document_no|is_installment|installment_count|is_recurring)/i.test(error.message || "")) {
-                const legacyPayload: Record<string, unknown> = { ...expensePayload };
-                delete legacyPayload.due_date;
-                delete legacyPayload.document_no;
-                delete legacyPayload.is_installment;
-                delete legacyPayload.installment_count;
-                delete legacyPayload.is_recurring;
-                const retry = await supabase.from("expenses").insert(legacyPayload);
-                error = retry.error;
-            }
+            // Use atomic RPC function for expense entry with transaction log
+            const { data, error } = await supabase.rpc("record_expense_entry", {
+                p_company_id: companyId,
+                p_expense_date: expenseDateIso,
+                p_amount: amount,
+                p_category: expenseCategory || null,
+                p_description: expenseCategory || vendorText || expenseNote || "Gider kaydı",
+                p_note: noteParts.join("\n") || null,
+                p_payment_method: expensePaymentMethod || null,
+                p_status: expenseStatus || "paid",
+                p_supplier_id: expenseSupplierId || null,
+                p_create_transaction: (expenseStatus || "paid") === "paid",
+            });
 
             if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Gider kaydedilemedi.");
 
-            if ((expenseStatus || "paid") === "paid") {
-                await insertTransaction({
-                    company_id: companyId,
-                    tx_date: expenseDateIso,
-                    type: "expense",
-                    direction: "out",
-                    amount,
-                    description:
-                        expenseCategory ||
-                        vendorText ||
-                        expenseNote ||
-                        "Gider kaydı",
-                });
-            }
+            // Log audit trail (fire-and-forget)
+            logAction("expense_created", "expense", data.expense_id || "", {
+                amount,
+                category: expenseCategory,
+                payment_method: expensePaymentMethod,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
 
             setExpenseAmount("");
             setExpenseDate(new Date().toISOString().slice(0, 10));
@@ -1262,39 +1143,26 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
-            const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
-            const customerName = customer?.name || "Müşteri";
-            const collDateIso = new Date(collectionDate + "T12:00:00").toISOString();
-            const desc = `${customerName} - Sipariş tahsilatı${collectionNote ? ` (${collectionNote})` : ""}`;
 
-            // income + orders.paid_amount/remaining_amount tek atomik RPC cagrisinda
-            // yapiliyor (eski 2 ayri yazimin — orders.update + income.insert — yerine
-            // gecer). orders.status ARTIK BU AKISTAN GUNCELLENMIYOR (zaten bu akis
-            // status'a hic dokunmuyordu, degisiklik yok).
-            const result = await financeService.customerCollections.recordCollection({
-                companyId,
-                orderId: collectionOrderId,
-                amount,
-                method: collectionMethod,
-                date: collDateIso,
-                note: desc,
-                idempotencyKey: crypto.randomUUID(),
+            // Use atomic RPC function for order payment
+            const { data, error } = await supabase.rpc("record_order_payment", {
+                p_company_id: companyId,
+                p_order_id: collectionOrderId,
+                p_amount: amount,
+                p_payment_method: collectionMethod || null,
+                p_note: collectionNote || "Sipariş tahsilatı",
             });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
 
-            const newRemaining = result.data.newRemainingAmount;
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Tahsilat kaydedilemedi.");
 
-            // Kalan tutar için vade tarihi (kolon yoksa sessizce geçer) — RPC'nin
-            // kapsamında değil, ayrı bir direkt yazım olarak korunuyor.
-            if (newRemaining > 0 && collectionDueDate) {
-                await supabase.from("orders").update({ payment_due_date: collectionDueDate })
-                    .eq("id", collectionOrderId).eq("company_id", companyId);
-            } else if (newRemaining <= 0) {
-                await supabase.from("orders").update({ payment_due_date: null })
-                    .eq("id", collectionOrderId).eq("company_id", companyId).then(() => {}, () => {});
-            }
+            // Log audit trail (fire-and-forget)
+            logAction("payment_created", "payment", data.payment_id || "", {
+                amount,
+                payment_method: collectionMethod,
+                order_id: collectionOrderId,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
 
             setCollectionOrderId("");
             setCollectionAmount("");
@@ -1304,10 +1172,7 @@ export const Accounting = () => {
             setCollectionDate(new Date().toISOString().slice(0, 10));
             await loadData();
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            alert(msg.includes("customer_record_collection")
-                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Tahsilat kaydedilemedi."));
+            alert(e?.message ?? "Tahsilat kaydedilemedi.");
         } finally {
             setSaving(false);
         }
@@ -1334,63 +1199,30 @@ export const Accounting = () => {
         try {
             setSaving(true);
 
-            const supplierName =
-                suppliers.find((s) => s.id === supplierPaymentSupplierId)?.name || "Tedarikçi";
             const payDateIso = new Date(supplierPaymentDate + "T12:00:00").toISOString();
-            const txDesc = `${supplierName} ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`;
 
-            // supplier_transactions + expenses tek atomik RPC çağrısında yazılıyor
-            // (eski 2 ayrı insert'in yerine geçer). supplier_payments "yedek kayıt"
-            // tablosuna artık yazılmıyor — RPC'nin kapsamında değil (SupplierDetail/
-            // SupplierLedger entegrasyonlarında da aynı şekilde bırakıldı).
-            const result = await financeService.supplierPayments.recordPayment({
-                companyId,
-                supplierId: supplierPaymentSupplierId,
-                amount,
-                method: supplierPaymentMethod,
-                date: payDateIso,
-                note: txDesc,
-                idempotencyKey: crypto.randomUUID(),
+            // Use atomic RPC function for supplier payment
+            const { data, error } = await supabase.rpc("record_supplier_payment", {
+                p_company_id: companyId,
+                p_supplier_id: supplierPaymentSupplierId,
+                p_amount: amount,
+                p_payment_method: supplierPaymentMethod || null,
+                p_description: `Tedarikçi ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`,
+                p_payment_date: payDateIso,
+                p_update_due_date: Boolean(supplierPaymentDueDate),
+                p_new_due_date: supplierPaymentDueDate ? payDateIso : null,
             });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
 
-            // Kalan borç için vade tarihi — RPC'nin kapsamında değil, ayrı bir
-            // direkt yazım olarak korunuyor (en yeni açık borç kaydına işlenir;
-            // kolon yoksa sessizce geçer).
-            if (supplierPaymentDueDate) {
-                try {
-                    const { data: lastDebt } = await supabase
-                        .from("supplier_transactions")
-                        .select("id")
-                        .eq("company_id", companyId)
-                        .eq("supplier_id", supplierPaymentSupplierId)
-                        .eq("transaction_type", "debt")
-                        .order("transaction_date", { ascending: false })
-                        .limit(1)
-                        .maybeSingle();
-                    if (lastDebt?.id) {
-                        await supabase.from("supplier_transactions")
-                            .update({ due_date: supplierPaymentDueDate })
-                            .eq("id", lastDebt.id);
-                    }
-                } catch {
-                    // due_date kolonu yok — migration sonrası aktifleşir
-                }
-            }
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Tedarikçi ödemesi kaydedilemedi.");
 
-            // Genel muhasebe hareket kaydı — Dashboard "Son Hareketler" akışı için
-            // korunuyor (RPC'nin kapsamında değil, CustomerCollectionService
-            // entegrasyonundaki insertTransaction desenin aynısı).
-            await insertTransaction({
-                company_id: companyId,
-                tx_date: payDateIso,
-                type: "supplier_payment",
-                direction: "out",
+            // Log audit trail (fire-and-forget)
+            logAction("payment_created", "supplier_payment", data.payment_id || "", {
                 amount,
-                description: txDesc,
-            });
+                payment_method: supplierPaymentMethod,
+                supplier_id: supplierPaymentSupplierId,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
 
             setSupplierPaymentSupplierId("");
             setSupplierPaymentAmount("");
@@ -1402,10 +1234,7 @@ export const Accounting = () => {
 
             await loadData();
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            alert(msg.includes("supplier_record_payment")
-                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Tedarikçi ödemesi kaydedilemedi."));
+            alert(e?.message ?? "Tedarikçi ödemesi kaydedilemedi.");
         } finally {
             setSaving(false);
         }
@@ -2020,7 +1849,7 @@ export const Accounting = () => {
                                 >
                                     <div className="min-w-0">
                                         <div className="text-sm font-medium text-slate-900 dark:text-white">
-                                            {p.reverses_payment_id ? "Tahsilat İptali" : (p.method || "Tahsilat")}
+                                            {p.method || "Tahsilat"}
                                             {p.note ? <span className="text-slate-500"> — {p.note}</span> : null}
                                         </div>
                                         <div className="text-xs text-slate-500">
@@ -2028,15 +1857,9 @@ export const Accounting = () => {
                                         </div>
                                     </div>
 
-                                    {p.reverses_payment_id ? (
-                                        <div className="text-sm font-semibold text-red-600">
-                                            − {formatTL(Number(p.amount ?? 0))}
-                                        </div>
-                                    ) : (
-                                        <div className="text-sm font-semibold text-green-600">
-                                            + {formatTL(Number(p.amount ?? 0))}
-                                        </div>
-                                    )}
+                                    <div className="text-sm font-semibold text-green-600">
+                                        + {formatTL(Number(p.amount ?? 0))}
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -2162,8 +1985,8 @@ export const Accounting = () => {
             ) : null}
 
             {showIncomeModal && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-                    <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 pb-safe sm:pb-6 space-y-4">
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+                    <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">Gelir Ekle</h2>
                             <button

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Eye, Plus, Printer, Save, Send, ShoppingCart, Trash2 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { logAction } from "../utils/audit";
+import { notifyInvoiceCreated } from "../services/notificationManager";
 
 type InvoiceItem = {
     id?: string;
@@ -14,6 +16,7 @@ type InvoiceItem = {
 type PartyOption = {
     id: string;
     name: string;
+    email?: string | null;
 };
 
 type OrderOption = {
@@ -132,11 +135,11 @@ export default function InvoiceDetail() {
         }
 
         const [custs, sups, ords] = await Promise.all([
-            supabase.from("customers").select("id, name").eq("company_id", currentCompanyId).order("name"),
+            supabase.from("customers").select("id, name, email").eq("company_id", currentCompanyId).order("name"),
             supabase.from("suppliers").select("id, name").eq("company_id", currentCompanyId).order("name"),
             supabase
                 .from("orders")
-                .select("id, total_amount, customer_id, customers(name)")
+                .select("id, total_amount, customer_id, customers(id, name, email)")
                 .eq("company_id", currentCompanyId)
                 .order("created_at", { ascending: false })
                 .limit(20),
@@ -228,81 +231,76 @@ export default function InvoiceDetail() {
         if (!companyId) return;
 
         setSaving(true);
-        const invoiceData = {
-            company_id: companyId,
-            order_id: orderId || null,
-            invoice_type: type,
-            invoice_no: no,
-            date,
-            due_date: dueDate || null,
-            customer_id: customerId || null,
-            supplier_id: supplierId || null,
-            status,
-            paid_amount: paidAmount,
-            remaining_amount: remainingAmount,
-            payment_method: paymentMethod || null,
-            notes,
-            total_tax_exclusive: subTotal,
-            total_tax_amount: taxTotal,
-            total_tax_inclusive: grandTotal,
-        };
+        try {
+            const invoiceData = {
+                company_id: companyId,
+                order_id: orderId || null,
+                invoice_type: type,
+                invoice_no: no,
+                date: new Date(date).toISOString(),
+                due_date: dueDate ? new Date(dueDate).toISOString() : null,
+                customer_id: customerId || null,
+                supplier_id: supplierId || null,
+                status,
+                paid_amount: paidAmount,
+                remaining_amount: remainingAmount,
+                payment_method: paymentMethod || null,
+                notes,
+                total_tax_exclusive: subTotal,
+                total_tax_amount: taxTotal,
+                total_tax_inclusive: grandTotal,
+            };
 
-        let invoiceId = id;
-        if (id === "new") {
-            let { data, error } = await supabase.from("invoices").insert([invoiceData]).select("id").single();
-            if (error) {
-                const baseInvoiceData = { ...invoiceData } as any;
-                delete baseInvoiceData.due_date;
-                delete baseInvoiceData.paid_amount;
-                delete baseInvoiceData.remaining_amount;
-                delete baseInvoiceData.payment_method;
-                const retry = await supabase.from("invoices").insert([baseInvoiceData]).select("id").single();
-                data = retry.data;
-                error = retry.error;
+            const itemsToSave = items.map((item) => ({
+                description: item.description || "Urun/Hizmet",
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                tax_rate: item.tax_rate,
+                line_total: item.quantity * item.unit_price * (1 + item.tax_rate / 100),
+            }));
+
+            // Use atomic RPC function for invoice save
+            const invoiceId = id === "new" ? null : id;
+            const { data, error } = await supabase.rpc("record_invoice_save", {
+                p_company_id: companyId,
+                p_invoice_id: invoiceId,
+                p_invoice_data: invoiceData,
+                p_items_data: itemsToSave,
+            });
+
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Fatura kaydedilemedi.");
+
+            // Log audit trail (fire-and-forget, don't block if it fails)
+            logAction("invoice_saved", "invoice", data.invoice_id || invoiceId || "", {
+                invoice_type: invoiceData.invoice_type,
+                total: invoiceData.total_tax_inclusive,
+                items_count: items.length,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
+
+            // Send invoice notification email to customer (fire-and-forget)
+            if (type === "sales" && customerId) {
+              const customer = contacts.find(c => c.id === customerId);
+              if (customer?.email) {
+                notifyInvoiceCreated({
+                  customerEmail: customer.email,
+                  customerName: customer.name || "Müşteri",
+                  invoiceNumber: no,
+                  invoiceId: data.invoice_id || invoiceId || "",
+                  totalAmount: invoiceData.total_tax_inclusive,
+                  dueDate: dueDate,
+                  itemsCount: items.length,
+                }).catch(err => console.error("Invoice notification failed:", err));
+              }
             }
-            if (error) {
-                alert(error.message);
-                setSaving(false);
-                return;
-            }
-            if (!data) {
-                alert("Fatura kaydı olusturulamadi.");
-                setSaving(false);
-                return;
-            }
-            invoiceId = data.id;
-        } else {
-            let { error } = await supabase.from("invoices").update(invoiceData).eq("id", id);
-            if (error) {
-                const baseInvoiceData = { ...invoiceData } as any;
-                delete baseInvoiceData.due_date;
-                delete baseInvoiceData.paid_amount;
-                delete baseInvoiceData.remaining_amount;
-                delete baseInvoiceData.payment_method;
-                const retry = await supabase.from("invoices").update(baseInvoiceData).eq("id", id);
-                error = retry.error;
-            }
-            if (error) {
-                alert(error.message);
-                setSaving(false);
-                return;
-            }
+
+            nav("/invoices");
+        } catch (e: any) {
+            alert(e?.message ?? "Fatura kaydedilemedi.");
+        } finally {
+            setSaving(false);
         }
-
-        await supabase.from("invoice_items").delete().eq("invoice_id", invoiceId);
-        const itemsToSave = items.map((item) => ({
-            invoice_id: invoiceId,
-            company_id: companyId,
-            description: item.description || "Urun/Hizmet",
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            tax_rate: item.tax_rate,
-            line_total: item.quantity * item.unit_price * (1 + item.tax_rate / 100),
-        }));
-        await supabase.from("invoice_items").insert(itemsToSave);
-
-        setSaving(false);
-        nav("/invoices");
     }
 
     function handlePdfPreview() {

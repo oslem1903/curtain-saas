@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useNavigate } from "react-router-dom";
-import { usePersistedState } from "../hooks/usePersistedState";
+import { PAGE_SIZE } from "../constants/pagination";
+import { Pagination } from "../components/Pagination";
 import {
     Edit3,
     Plus,
@@ -32,10 +33,12 @@ import {
     AlertCircle,
     FileText,
     FileSignature,
-    ClipboardCheck
+    ClipboardCheck,
+    HelpCircle
 } from "lucide-react";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
+import { withoutDeleted } from "../utils/softDelete";
 
 type Customer = {
     id: string;
@@ -138,7 +141,7 @@ function parseCrmNotes(noteField: string | null): CrmNote[] {
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
         try {
             return JSON.parse(trimmed) as CrmNote[];
-        } catch {
+        } catch (e) {
             // Fallback
         }
     }
@@ -261,6 +264,8 @@ export default function Customers() {
     const [role, setRole] = useState<RoleState>("unknown");
     const [customers, setCustomers] = useState<Customer[]>([]);
     const [loading, setLoading] = useState(false);
+    const [page, setPage] = useState(0);
+    const [totalPages, setTotalPages] = useState(0);
     const [form, setForm] = useState<CustomerForm>(emptyForm);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editForm, setEditForm] = useState<CustomerForm>(emptyForm);
@@ -272,12 +277,11 @@ export default function Customers() {
     const [allOrders, setAllOrders] = useState<any[]>([]);
     const [allPayments, setAllPayments] = useState<any[]>([]);
     const [showAddForm, setShowAddForm] = useState(false);
-    const [activeFilter, setActiveFilter] = usePersistedState("perdepro.customers.active", "all");
+    const [activeFilter, setActiveFilter] = useState("all");
     const [detailTab, setDetailTab] = useState("general");
     const [newCrmNote, setNewCrmNote] = useState("");
     const [searchQuery, setSearchQuery] = useState("");
     const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-    const [visibleCount, setVisibleCount] = useState(10);
     const [collectSuccessState, setCollectSuccessState] = useState<{
         show: boolean;
         prevRemaining: number;
@@ -294,13 +298,12 @@ export default function Customers() {
     const [collectNote, setCollectNote] = useState("");
     const [collectSaving, setCollectSaving] = useState(false);
     const [collectError, setCollectError] = useState("");
-    const [toast] = useState("");
+    const [toast, setToast] = useState("");
 
     // Debounce search query
     useEffect(() => {
         const timer = setTimeout(() => {
             setDebouncedSearchQuery(searchQuery);
-            setVisibleCount(10); // Reset pagination on search
         }, 300);
         return () => clearTimeout(timer);
     }, [searchQuery]);
@@ -322,26 +325,29 @@ export default function Customers() {
 
             // Fetch everything we need in one phase
             const [custRes, ordersRes, apptsRes, paymentsRes] = await Promise.all([
-                supabase
+                withoutDeleted(supabase
                     .from("customers")
-                    .select("*")
-                    .eq("company_id", ctx.company_id)
-                    .order("created_at", { ascending: false }),
-                supabase
+                    .select("*", { count: 'exact' })
+                    .eq("company_id", ctx.company_id))
+                    .order("created_at", { ascending: false })
+                    .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1),
+                withoutDeleted(supabase
                     .from("orders")
                     .select("id, created_at, customer_id, total_amount, paid_amount, remaining_amount, status")
-                    .eq("company_id", ctx.company_id),
-                supabase
+                    .eq("company_id", ctx.company_id)),
+                withoutDeleted(supabase
                     .from("appointments")
                     .select("id, created_at, customer_id, title, type, status, start_at, address, note, assigned_to, created_by")
-                    .eq("company_id", ctx.company_id),
-                supabase
+                    .eq("company_id", ctx.company_id)),
+                withoutDeleted(supabase
                     .from("payments")
-                    .select("id, customer_id, order_id, amount, payment_date, method, note")
-                    .eq("company_id", ctx.company_id)
+                    .select("id, created_at, customer_id, order_id, amount, payment_date, method, note")
+                    .eq("company_id", ctx.company_id))
             ]);
 
             if (custRes.error) throw custRes.error;
+
+            setTotalPages(Math.ceil((custRes.count || 0) / PAGE_SIZE));
 
             const orders = ordersRes.data ?? [];
             const appointments = apptsRes.data ?? [];
@@ -447,7 +453,8 @@ export default function Customers() {
 
     useEffect(() => {
         loadData();
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
 
     async function addCustomer() {
         if (!form.name.trim()) {
@@ -585,7 +592,6 @@ export default function Customers() {
     async function insertPaymentRow(row: Record<string, any>): Promise<string> {
         let { error } = await supabase.from("payments").insert(row);
         if (error && /customer_id/i.test(String(error.message || ""))) {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { customer_id: _omit, ...rest } = row;
             ({ error } = await supabase.from("payments").insert(rest));
         }
@@ -609,10 +615,6 @@ export default function Customers() {
 
         setCollectSaving(true);
         setCollectError("");
-        // income.insert basarili olduktan sonra id burada tutulur ki sonraki
-        // adimlardan biri basarisiz olursa telafi (rollback) icin silinebilsin —
-        // hayalet (yetim) gelir kaydi kalmasin.
-        let insertedIncomeId: string | null = null;
         try {
             const customer = collectCustomer;
             const dateIso = new Date(`${collectDate || todayStr()}T12:00:00`).toISOString();
@@ -632,22 +634,17 @@ export default function Customers() {
 
             // Kasaya giren toplam tutarı önce gelir (income) olarak kaydet — en kısıt-riskli adım.
             // Başarısız olursa hiçbir sipariş bakiyesi değiştirilmeden hata gösterilir.
-            const incomeRes = await supabase
-                .from("income")
-                .insert({
-                    company_id: companyId,
-                    income_date: dateIso,
-                    amount,
-                    payment_method: collectMethod || null,
-                    description: `Tahsilat - ${customer.name || "Müşteri"}`,
-                    note: baseNote || null,
-                    source: "order_payment",
-                    order_id: null,
-                })
-                .select("id")
-                .single();
+            const incomeRes = await supabase.from("income").insert({
+                company_id: companyId,
+                income_date: dateIso,
+                amount,
+                payment_method: collectMethod || null,
+                description: `Tahsilat - ${customer.name || "Müşteri"}`,
+                note: baseNote || null,
+                source: "order_payment",
+                order_id: null,
+            });
             if (incomeRes.error) throw incomeRes.error;
-            insertedIncomeId = incomeRes.data?.id ?? null;
 
             let remainingToApply = amount;
 
@@ -671,9 +668,7 @@ export default function Customers() {
                     .eq("company_id", companyId);
                 if (upd.error) throw upd.error;
 
-                // Dönüş değeri artık kontrol ediliyor — insert sessizce başarısız
-                // olamaz; hata varsa fırlatılır ve kullanıcıya gösterilir.
-                const payErr = await insertPaymentRow({
+                await insertPaymentRow({
                     company_id: companyId,
                     customer_id: customer.id,
                     order_id: order.id,
@@ -682,7 +677,6 @@ export default function Customers() {
                     method: collectMethod || null,
                     note: baseNote || "Müşteri tahsilatı",
                 });
-                if (payErr) throw new Error(payErr);
 
                 remainingToApply -= applied;
             }
@@ -691,7 +685,7 @@ export default function Customers() {
 
             // Fazla ödeme (avans) — herhangi bir siparişe sığmayan kısım müşteri alacağı olarak işlenir.
             if (overpayment > 0.005) {
-                const overpayErr = await insertPaymentRow({
+                await insertPaymentRow({
                     company_id: companyId,
                     customer_id: customer.id,
                     order_id: null,
@@ -700,7 +694,6 @@ export default function Customers() {
                     method: collectMethod || null,
                     note: [baseNote, "Fazla ödeme / Avans"].filter(Boolean).join(" — "),
                 });
-                if (overpayErr) throw new Error(overpayErr);
             }
 
             const newRemaining = Math.max(prevRemaining - amount, 0);
@@ -716,22 +709,7 @@ export default function Customers() {
 
             await loadData();
         } catch (e: any) {
-            let message = e?.message ? `Tahsilat kaydedilemedi: ${e.message}` : "Tahsilat kaydedilemedi. Lütfen tekrar deneyin.";
-            // Telafi (rollback): income kaydı zaten oluşturulduysa ama sonraki
-            // adımlardan biri başarısız olduysa, hayalet gelir kaydı kalmasın
-            // diye silinmeye çalışılır. Silme de başarısız olursa kullanıcıya
-            // açıkça bildirilir (sessizce geçilmez).
-            if (insertedIncomeId) {
-                const { error: cleanupErr } = await supabase
-                    .from("income")
-                    .delete()
-                    .eq("id", insertedIncomeId)
-                    .eq("company_id", companyId);
-                if (cleanupErr) {
-                    message += ` UYARI: Oluşturulan gelir kaydı otomatik olarak temizlenemedi (id: ${insertedIncomeId}), lütfen Muhasebe ekranından kontrol edin.`;
-                }
-            }
-            setCollectError(message);
+            setCollectError(e?.message ? `Tahsilat kaydedilemedi: ${e.message}` : "Tahsilat kaydedilemedi. Lütfen tekrar deneyin.");
         } finally {
             setCollectSaving(false);
         }
@@ -1282,7 +1260,7 @@ export default function Customers() {
                     </div>
                 )}
 
-                {filteredByFilter.slice(0, visibleCount).map((c) => {
+                {filteredByFilter.map((c) => {
                     const isEditing = editingId === c.id;
                     const ledger = ledgerMap[c.id] ?? { totalSales: 0, totalPaid: 0, balance: 0, advance: 0, entries: [] };
                     const netBalance = ledger.balance - ledger.advance;
@@ -1406,23 +1384,20 @@ export default function Customers() {
                     );
                 })}
 
-                {/* Pagination */}
-                {filteredByFilter.length > visibleCount && (
-                    <div className="flex justify-center pt-4">
-                        <button
-                            onClick={() => setVisibleCount((prev) => prev + 10)}
-                            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition shadow-sm text-sm"
-                        >
-                            Daha Fazla Göster
-                        </button>
-                    </div>
+                {!loading && filteredByFilter.length > 0 && totalPages > 0 && (
+                    <Pagination
+                        currentPage={page}
+                        totalPages={totalPages}
+                        onPageChange={setPage}
+                        isLoading={loading}
+                    />
                 )}
             </div>
 
             {/* Premium Tabbed Details CRM Modal */}
             {selectedCustomer && selectedLedger && (
                 <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/60 backdrop-blur-xs p-0 sm:items-center sm:p-4 animate-fadeIn">
-                    <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 pb-safe sm:pb-6 flex flex-col border border-slate-200 dark:border-slate-850">
+                    <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 flex flex-col border border-slate-200 dark:border-slate-850">
                         {/* Header details */}
                         <div className="flex justify-between items-start gap-4 pb-4 border-b border-slate-100 dark:border-slate-800 mb-4">
                             <div className="min-w-0">
@@ -1445,6 +1420,7 @@ export default function Customers() {
                                     setSelectedCustomerId(null);
                                     nav("/measurements/new", {
                                         state: {
+                                            fresh: true,
                                             customerId: selectedCustomer.id,
                                             customerName: selectedCustomer.name,
                                             phone: selectedCustomer.phone,

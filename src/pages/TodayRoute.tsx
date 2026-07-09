@@ -110,6 +110,19 @@ function yolaMesaji(type: string | null, customerName: string, time: string | nu
   return `Merhaba ${isim}, randevunuz için yola çıktım. Yaklaşık varış: ${saat}`;
 }
 
+function yolaMesaji(type: string | null, customerName: string, time: string | null) {
+  const tip = String(type ?? "").toLowerCase();
+  const isim = customerName || "";
+  const saat = fmtTime(time);
+  if (tip === "measurement") {
+    return `Merhaba ${isim}, ölçü randevusu için yola çıktım. Yaklaşık varış: ${saat}`;
+  }
+  if (tip === "installation") {
+    return `Merhaba ${isim}, montaj randevusu için yola çıktım. Yaklaşık varış: ${saat}`;
+  }
+  return `Merhaba ${isim}, randevunuz için yola çıktım. Yaklaşık varış: ${saat}`;
+}
+
 export default function TodayRoute() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();

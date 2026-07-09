@@ -97,7 +97,6 @@ export default function Locked() {
         try {
             let { error } = await supabase.from("support_tickets").insert(payload);
             if (error && /support_metadata|schema cache|column/i.test(String(error.message || ""))) {
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 const { support_metadata: _metadata, ...fallbackPayload } = payload;
                 const retry = await supabase.from("support_tickets").insert(fallbackPayload);
                 error = retry.error;

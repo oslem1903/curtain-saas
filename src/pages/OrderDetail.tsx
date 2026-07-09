@@ -2,15 +2,10 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Capacitor } from "@capacitor/core";
-import { supabase, getEffectiveTenantContext } from "../supabaseClient";
+import { supabase } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
-import FieldInfoGallery from "../components/FieldInfoGallery";
-import { parseFieldInfo } from "../utils/fieldInfo";
-import { normalizeOrderStatus, ORDER_STATUS } from "../utils/order";
-import { postSupplierDebt } from "../utils/supplierCari";
-import { createFinanceService } from "../services/finance";
-
-const financeService = createFinanceService();
+import { logAction } from "../utils/audit";
+import { notifyPaymentReceived } from "../services/notificationManager";
 import { 
     Plus, 
     Trash2, 
@@ -20,7 +15,6 @@ import {
     Pencil,
     X,
     Camera as CameraIcon,
-    CheckCircle2,
 } from "lucide-react";
 
 
@@ -43,8 +37,7 @@ type OrderRow = {
     customer_id?: string | null;
     company_id?: string | null;
     assigned_to?: string | null;
-    delivery_due_date?: string | null;
-    customers?: { name: string; phone: string; address?: string | null } | null;
+    customers?: { id?: string; name: string; phone: string; address?: string | null; email?: string | null } | null;
 };
 
 type SupplierRow = { id: string; name: string | null };
@@ -125,67 +118,13 @@ type PaymentRow = {
     amount: number | null;
     method: string | null;
     note: string | null;
-    reverses_payment_id?: string | null;
 };
 
 type InstallationJobRow = {
     id: string;
     status: string | null;
     assigned_staff_id?: string | null;
-    // Montaj Geçmişi timeline için (workflow şemasında garanti kolonlar):
-    created_at?: string | null;
-    updated_at?: string | null;
-    scheduled_date?: string | null;
 };
-
-// Montaj Geçmişi olayı — mevcut veriden türetilir (yeni tablo/sorgu yok).
-type InstallationTimelineEvent = {
-    key: string;
-    label: string;
-    detail?: string | null;
-    at?: string | null;
-    done: boolean;
-};
-
-function fmtTimelineDate(value?: string | null): string {
-    if (!value) return "";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleDateString("tr-TR");
-}
-
-function fmtTimelineDateTime(value?: string | null): string {
-    if (!value) return "";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-/**
- * Montaj Geçmişi olaylarını mevcut yüklü veriden türetir (installation_jobs + order).
- * Yeni tablo/sorgu yok. Türetilemeyen alanlar TODO ile işaretli:
- *  - "Montajcı atandı" kesin zamanı: ayrı atama/audit kaydı gerekir (şimdilik zamansız).
- *  - "Tahmini teslim tarihi DEĞİŞTİ" geçmişi: değişiklik log'u gerekir; şimdilik güncel değer gösterilir.
- */
-function buildInstallationTimeline(
-    order: { delivery_due_date?: string | null } | null,
-    job: InstallationJobRow | null,
-    staffList: Array<{ id: string; full_name: string }>,
-): InstallationTimelineEvent[] {
-    if (!job) return [];
-    const installerName = job.assigned_staff_id
-        ? (staffList.find((s) => s.id === job.assigned_staff_id)?.full_name ?? "Montajcı")
-        : null;
-    const completed = normalizeOrderStatus(job.status) === ORDER_STATUS.COMPLETED;
-    return [
-        { key: "sent", label: "Montaja gönderildi", at: job.created_at ?? null, done: true },
-        // TODO: kesin atama zamanı için atama/durum audit kaydı gerekir (şu an tablo yok).
-        { key: "assigned", label: "Montajcı atandı", detail: installerName, at: null, done: !!job.assigned_staff_id },
-        // TODO: tarih DEĞİŞİKLİK geçmişi için audit/log gerekir; şimdilik güncel değer gösterilir.
-        { key: "delivery", label: "Tahmini teslim tarihi", detail: order?.delivery_due_date ? fmtTimelineDate(order.delivery_due_date) : null, at: null, done: !!order?.delivery_due_date },
-        { key: "completed", label: "Montaj tamamlandı", at: completed ? (job.updated_at ?? null) : null, done: completed },
-    ];
-}
 
 function fmtTL(n?: number | null) {
     return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(Number(n ?? 0));
@@ -317,14 +256,9 @@ export default function OrderDetail() {
     const [paymentNote, setPaymentNote] = useState("");
     const [paymentError, setPaymentError] = useState("");
     const [paymentSuccess, setPaymentSuccess] = useState("");
-    const [cancellingPaymentId, setCancellingPaymentId] = useState<string | null>(null);
     const [installationJob, setInstallationJob] = useState<InstallationJobRow | null>(null);
     const [workflowMessage, setWorkflowMessage] = useState("");
     const [workflowError, setWorkflowError] = useState("");
-    const [showCompleteModal, setShowCompleteModal] = useState(false);
-    const [completingInstallation, setCompletingInstallation] = useState(false);
-    const [showCancelModal, setShowCancelModal] = useState(false);
-    const [cancellingOrder, setCancellingOrder] = useState(false);
 
     // Maliyet giriş alanları
     const [mechanismCostInput, setMechanismCostInput] = useState("");
@@ -351,10 +285,6 @@ export default function OrderDetail() {
     const [pNote, setPNote] = useState("");
     const [pModelName, setPModelName] = useState("");
     const [pColorName, setPColorName] = useState("");
-    // Tedarikçi vade tarihi (opsiyonel) — order_items'ta DEĞİL, supplier_transactions.due_date'te tutulur.
-    const [pSupplierDueDate, setPSupplierDueDate] = useState("");
-    // Düzenleme açıldığında mevcut vade — dirty (kaydedilmemiş değişiklik) karşılaştırması için.
-    const pSupplierDueDateInitRef = useRef("");
     // Ürün fotoğrafı state'leri
     const [photo, setPhoto] = useState<File | null>(null);
     const [photoPreview, setPhotoPreview] = useState<string>("");
@@ -370,14 +300,12 @@ export default function OrderDetail() {
         if (!id) return;
         setLoading(true);
         try {
-            const { data: o } = await supabase.from("orders").select("*, customers(name, phone, address)").eq("id", id).single();
-            const itemsRes = await supabase
+            const { data: o } = await supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("id", id).single();
+            let { data: i, error: itemsErr } = await supabase
                 .from("order_items")
                 .select("*, suppliers(id, name)")
                 .eq("order_id", id)
                 .order("created_at");
-            let i = itemsRes.data;
-            const itemsErr = itemsRes.error;
             if (itemsErr) {
                 // Fallback: bazı kolonlar yoksa temel alanlarla dene
                 const fb = await supabase
@@ -452,28 +380,17 @@ export default function OrderDetail() {
                 .select("id, preview_image_url, original_photo_url, note, selected_catalog_variant_id, catalog_variant:catalog_variants(variant_code, color_name, price_per_m2, texture_image_url, series:catalog_series(product_type, series_code, model_name))")
                 .eq("order_id", id)
                 .order("created_at", { ascending: false });
-            const paymentRes = await supabase
+            const { data: paymentRows } = await supabase
                 .from("payments")
-                .select("id,payment_date,amount,method,note,reverses_payment_id")
+                .select("id,payment_date,amount,method,note")
                 .eq("order_id", id)
                 .order("payment_date", { ascending: false });
-            let paymentRows = paymentRes.data;
-            if (paymentRes.error) {
-                // reverses_payment_id kolonu henüz yoksa (migration uygulanmadan önce)
-                // eski sorguya düş — mevcut davranış korunur (bkz. Accounting.tsx aynı desen).
-                const paymentFb = await supabase
-                    .from("payments")
-                    .select("id,payment_date,amount,method,note")
-                    .eq("order_id", id)
-                    .order("payment_date", { ascending: false });
-                paymentRows = (paymentFb.data ?? []).map((r: any) => ({ ...r, reverses_payment_id: null }));
-            }
             const { data: jobRow } = await supabase
                 .from("installation_jobs")
-                .select("id,status,assigned_staff_id,created_at,updated_at,scheduled_date")
+                .select("id,status,assigned_staff_id")
                 .eq("order_id", id)
                 .maybeSingle();
-
+            
             setOrder(o);
             setItems(i ?? []);
             setVisualPreviews((previews ?? []) as VisualPreviewRow[]);
@@ -485,42 +402,6 @@ export default function OrderDetail() {
             setTransportCostInput(String(o?.transport_cost ?? 0));
             setInstallationJob((jobRow ?? null) as InstallationJobRow | null);
             setAssignedTo(jobRow?.assigned_staff_id || o?.assigned_to || "");
-
-            // ── Eski kayıt backfill (güvenli, best-effort) ────────────────────────────
-            // Montajcı atanmadan tamamlanmış (ör. "Hülya Telek") eski completed job'lar:
-            //   - assigned_staff_id boş + order.assigned_to dolu → montajcıyı bağla (backfill)
-            //   - installer_fee boş/0 → order.installation_cost (montaj bedeli) ile doldur
-            // Böylece hakediş InstallerLedger earned'a düşer. Montajcı HİÇ yoksa OTOMATİK
-            // bağlama YOK — kullanıcı uyarılır. Yalnız var olan kaydın eksik alanları tamamlanır;
-            // migration/RPC/yeni tablo yok, cari/ödeme mantığına dokunulmaz. İdempotent: alan
-            // dolunca sonraki yüklemelerde koşul sağlanmaz.
-            if (jobRow && jobRow.status === "completed" && !jobRow.assigned_staff_id) {
-                const orderAssignee = o?.assigned_to || "";
-                if (orderAssignee) {
-                    await supabase.from("installation_jobs")
-                        .update({ assigned_staff_id: orderAssignee })
-                        .eq("id", jobRow.id)
-                        .then(() => {}, () => {});
-                    const montajFee = Math.max(0, safeNumber(o?.installation_cost));
-                    if (montajFee > 0) {
-                        const { data: feeRow, error: feeErr } = await supabase
-                            .from("installation_jobs")
-                            .select("installer_fee")
-                            .eq("id", jobRow.id)
-                            .maybeSingle();
-                        if (!feeErr && feeRow && safeNumber(feeRow.installer_fee) <= 0) {
-                            await supabase.from("installation_jobs")
-                                .update({ installer_fee: montajFee })
-                                .eq("id", jobRow.id)
-                                .then(() => {}, () => {});
-                        }
-                    }
-                    setInstallationJob((prev) => prev ? { ...prev, assigned_staff_id: orderAssignee } : prev);
-                    setAssignedTo(orderAssignee);
-                } else {
-                    setWorkflowError("Bu montaj, montajcı atanmadan tamamlanmış. Hakedişin montajcı cariye düşmesi için önce montajcı atayın.");
-                }
-            }
 
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
@@ -644,11 +525,9 @@ export default function OrderDetail() {
         setItemFormError("");
         setPhoto(null);
         setPhotoPreview("");
-        setPSupplierDueDate("");
-        pSupplierDueDateInitRef.current = "";
     }
 
-    async function startEditItem(item: OrderItemRow) {
+    function startEditItem(item: OrderItemRow) {
         setEditingItemId(item.id);
         setPType((item.product_type || "stor") as ProductType);
         setPWidth(String(item.width_cm ?? ""));
@@ -680,34 +559,6 @@ export default function OrderDetail() {
         setPWaste(0);
         setItemFormError("");
         window.scrollTo({ top: 0, behavior: "smooth" });
-
-        // Mevcut tedarikçi borcunun vadesini (supplier_transactions.due_date) forma yansıt.
-        // Migration/yeni tablo yok; var olan kayıttan SADECE due_date okunur (update/insert yok).
-        // Öncelik: kaleme bağlı supplier_transaction_id. Yoksa (ör. NewOrder'dan gelen,
-        // order_item'a bağlanmamış borçlar) → order_id + supplier_id + 'debt' ile en güncel
-        // borcun vadesini fallback olarak oku. Bulunamazsa alan boş kalır.
-        let dueInit = "";
-        if (item.supplier_transaction_id) {
-            const { data: tx } = await supabase
-                .from("supplier_transactions")
-                .select("due_date")
-                .eq("id", item.supplier_transaction_id)
-                .maybeSingle();
-            dueInit = tx?.due_date ? String(tx.due_date).slice(0, 10) : "";
-        } else if (id && item.supplier_id) {
-            const { data: tx } = await supabase
-                .from("supplier_transactions")
-                .select("due_date")
-                .eq("order_id", id)
-                .eq("supplier_id", item.supplier_id)
-                .eq("transaction_type", "debt")
-                .order("transaction_date", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            dueInit = tx?.due_date ? String(tx.due_date).slice(0, 10) : "";
-        }
-        setPSupplierDueDate(dueInit);
-        pSupplierDueDateInitRef.current = dueInit;
     }
 
     function onPhotoChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -855,13 +706,12 @@ export default function OrderDetail() {
                 pRoom !== (o.room || "") ||
                 pNote !== (o.note || "") ||
                 pModelName !== (opts.model_name ?? opts.product_name ?? "") ||
-                pColorName !== (opts.color_name ?? "") ||
-                pSupplierDueDate !== pSupplierDueDateInitRef.current
+                pColorName !== (opts.color_name ?? "")
             );
         }
         // Yeni satır modu: anlamlı bir alan dolduysa kirli say
-        return !!(pWidth || pHeight || pPrice || pModelName.trim() || pColorName.trim() || pRoom.trim() || pNote.trim() || pSupplierId || pSupplierDueDate);
-    }, [editingItemId, editingOriginal, pType, pWidth, pHeight, pQty, pPrice, pPurchaseCost, pSupplierId, pRoom, pNote, pModelName, pColorName, pSupplierDueDate]);
+        return !!(pWidth || pHeight || pPrice || pModelName.trim() || pColorName.trim() || pRoom.trim() || pNote.trim() || pSupplierId);
+    }, [editingItemId, editingOriginal, pType, pWidth, pHeight, pQty, pPrice, pPurchaseCost, pSupplierId, pRoom, pNote, pModelName, pColorName]);
 
     // Sayfa yenileme / kapatma / donanım geri tuşunda kaydedilmemiş değişiklik uyarısı
     useEffect(() => {
@@ -876,15 +726,8 @@ export default function OrderDetail() {
         const salesTotal = nextItems.reduce((s, x) => s + safeNumber(x.line_total), 0);
         const purchaseTotal = nextItems.reduce((s, x) => s + safeNumber(x.supplier_total_cost), 0);
         const lineProfit = nextItems.reduce((s, x) => s + safeNumber(x.profit), 0);
-        // paid_amount taze okunur (React state'teki order bayat olabilir — bkz. Adım 7 Madde 1/2).
-        const { data: freshOrder } = await supabase
-            .from("orders")
-            .select("paid_amount, deposit_amount")
-            .eq("id", id)
-            .maybeSingle();
-        const paid = safeNumber(freshOrder?.paid_amount ?? freshOrder?.deposit_amount ?? order.paid_amount ?? order.deposit_amount);
-        // Fazla ödeme/kredi durumunda negatif remaining_amount korunur (Math.max ile 0'a kırpılmaz).
-        const remaining = salesTotal - paid;
+        const paid = safeNumber(order.paid_amount ?? order.deposit_amount);
+        const remaining = Math.max(salesTotal - paid, 0);
 
         const { error } = await supabase.from("orders").update({
             total_amount: salesTotal,
@@ -905,68 +748,29 @@ export default function OrderDetail() {
         supplierId: string;
         amount: number;
         description: string;
-        // Vade (opsiyonel): supplier varsayılan vadesi/manuel giriş eklenince iletilir.
-        dueDate?: string | null;
-        supplierDueDays?: number | null;
     }) {
-        const result = await postSupplierDebt({
-            companyId: params.companyId,
-            orderId: params.orderId,
-            supplierId: params.supplierId,
-            amount: params.amount,
-            description: params.description,
-            orderItemId: params.orderItemId,
-            dueDate: params.dueDate ?? null,
-            supplierDueDays: params.supplierDueDays ?? null,
-        });
-        if (result.status === "error") {
-            console.warn("Tedarikçi cari kaydı oluşturulamadı:", result.message);
-        }
-    }
-
-    // Tedarikçi bazlı expenses kaydını supplier_transactions ile AYNI delta ile senkron
-    // tutar (Madde 3 düzeltmesi): sipariş düzenlendikten sonra expenses stale kalmasın.
-    // Mevcut kayıt varsa amount delta kadar güncellenir (0'ın altına düşmez); yoksa
-    // (yalnızca delta>0 iken) NewOrder.tsx::createSupplierExpense ile birebir aynı
-    // şekilde yeni bir kayıt oluşturulur.
-    async function syncSupplierExpenseForLine(params: {
-        companyId: string;
-        orderId: string;
-        supplierId: string;
-        delta: number;
-        customerName: string;
-    }) {
-        const { companyId, orderId, supplierId, delta, customerName } = params;
-        if (!supplierId || delta === 0) return;
-        const { data: existing, error: findErr } = await supabase
-            .from("expenses")
-            .select("id, amount")
-            .eq("company_id", companyId)
-            .eq("order_id", orderId)
-            .eq("supplier_id", supplierId)
-            .eq("category", "Kumaş / Ürün")
-            .maybeSingle();
-        if (findErr) {
-            console.warn("Tedarikçi gider kaydı senkronize edilemedi:", findErr.message);
+        if (params.amount <= 0 || !params.supplierId) return;
+        const { data, error } = await supabase
+            .from("supplier_transactions")
+            .insert({
+                company_id: params.companyId,
+                supplier_id: params.supplierId,
+                order_id: params.orderId,
+                order_item_id: params.orderItemId,
+                transaction_date: new Date().toISOString(),
+                transaction_type: "debt",
+                amount: params.amount,
+                description: params.description,
+                reference_no: params.orderId.slice(0, 8).toUpperCase(),
+            })
+            .select("id")
+            .single();
+        if (error) {
+            console.warn("Tedarikçi cari kaydı oluşturulamadı:", error.message);
             return;
         }
-        if (existing) {
-            const nextAmount = Math.max(safeNumber(existing.amount) + delta, 0);
-            const { error: updErr } = await supabase.from("expenses").update({ amount: nextAmount }).eq("id", existing.id);
-            if (updErr) console.warn("Tedarikçi gider kaydı güncellenemedi:", updErr.message);
-        } else if (delta > 0) {
-            const { error: insErr } = await supabase.from("expenses").insert({
-                company_id: companyId,
-                expense_date: new Date().toISOString(),
-                amount: delta,
-                category: "Kumaş / Ürün",
-                vendor: supplierNameById(supplierId),
-                supplier_id: supplierId,
-                order_id: orderId,
-                status: "unpaid",
-                note: `Sipariş maliyeti - Kumaş / Ürün - Müşteri: ${customerName}`,
-            });
-            if (insErr) console.warn("Tedarikçi gider kaydı oluşturulamadı:", insErr.message);
+        if (data?.id) {
+            await supabase.from("order_items").update({ supplier_transaction_id: data.id }).eq("id", params.orderItemId);
         }
     }
 
@@ -1011,10 +815,6 @@ export default function OrderDetail() {
         const cleanNote = pNote.trim();
         const finalNote = [cleanNote, photoUrl].filter(Boolean).join("\n");
 
-        // Saha bilgileri (field_info) kalemde tutulur; düzenlemede KAYBOLMASIN.
-        const existingItem = editingItemId ? items.find((it) => it.id === editingItemId) : null;
-        const existingFieldInfo = parseFieldInfo(existingItem?.product_options);
-
         return {
             product_type: pType,
             width_cm: w,
@@ -1033,8 +833,6 @@ export default function OrderDetail() {
                 product_name: pModelName.trim() || "",
                 model_name: pModelName.trim() || "",
                 color_name: pColorName.trim() || "",
-                swatch_photo_url: existingFieldInfo.swatch_photo_url,
-                field_info: existingFieldInfo,
             },
         };
     }
@@ -1050,10 +848,6 @@ export default function OrderDetail() {
             const uploaded = await uploadPhoto(companyId);
             const payload = buildItemPayload(uploaded.url);
 
-            // Tedarikçi vade tarihi (opsiyonel): boşsa null. Vade order_items'ta değil,
-            // supplier_transactions.due_date'te tutulur.
-            const manualDueDate = pSupplierDueDate.trim() ? pSupplierDueDate : null;
-
             if (editingItemId) {
                 const { error } = await supabase
                     .from("order_items")
@@ -1066,6 +860,7 @@ export default function OrderDetail() {
                 // tedarikçiye ödeme yapılmış olabilir. Bunun yerine eski tedarikçiye
                 // "iptal" (cancel) hareketi, yeni tedarikçiye temiz bir "borç" atarız.
                 const oldItem = items.find((item) => item.id === editingItemId);
+                const oldTxId = oldItem?.supplier_transaction_id;
                 const oldSupplierId = oldItem?.supplier_id || "";
                 const oldCost = safeNumber(oldItem?.supplier_total_cost);
                 const newSupplierId = payload.supplier_id || "";
@@ -1076,39 +871,19 @@ export default function OrderDetail() {
                 const nowIso = new Date().toISOString();
 
                 if (oldSupplierId && newSupplierId && oldSupplierId === newSupplierId) {
-                    // Aynı tedarikçi — mevcut borç hareketi MUTASYONA UĞRATILMAZ (reverse-entry
-                    // ilkesi: ödeme yapılmış olabilir). Kalem cari harekete bağlı olsun ya da
-                    // olmasın TEK modelle işlenir: yalnız net farkı (delta) işleriz —
-                    // artış → yeni 'debt' hareketi, azalış → 'cancel' hareketi.
-                    const delta = newCost - oldCost;
-                    if (delta > 0) {
-                        await supabase.from("supplier_transactions").insert({
-                            company_id: companyId,
-                            supplier_id: newSupplierId,
-                            order_id: id,
-                            order_item_id: editingItemId,
-                            transaction_date: nowIso,
-                            transaction_type: "debt",
-                            amount: delta,
-                            description: `Sipariş ürün maliyeti arttı: ${custName} - ${lineLabel}`,
-                            reference_no: refNo,
-                            ...(manualDueDate ? { due_date: manualDueDate } : {}),
-                        });
-                    } else if (delta < 0) {
-                        await supabase.from("supplier_transactions").insert({
-                            company_id: companyId,
-                            supplier_id: newSupplierId,
-                            order_id: id,
-                            order_item_id: editingItemId,
-                            transaction_date: nowIso,
-                            transaction_type: "cancel",
-                            amount: -delta,
-                            description: `Sipariş ürün maliyeti azaldı: ${custName} - ${lineLabel}`,
-                            reference_no: refNo,
+                    // Aynı tedarikçi — yalnızca borç tutarını güncelle
+                    if (oldTxId) {
+                        await supabase.from("supplier_transactions").update({
+                            amount: newCost,
+                            description: `Sipariş ürün güncellendi: ${custName} - ${lineLabel}`,
+                        }).eq("id", oldTxId);
+                    } else if (newCost > 0) {
+                        await postSupplierDebtForLine({
+                            companyId, orderId: id, orderItemId: editingItemId,
+                            supplierId: newSupplierId, amount: newCost,
+                            description: `Sipariş ürün güncellendi: ${custName} - ${lineLabel}`,
                         });
                     }
-                    // delta === 0 → cari hareket gerekmez
-                    await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: newSupplierId, delta, customerName: custName });
                 } else if (oldSupplierId !== newSupplierId) {
                     // Tedarikçi değişti / kaldırıldı / yeni eklendi
                     // 1) Eski tedarikçinin borcunu iptal et (ödeme yapılmışsa bakiye düzeltme hareketi)
@@ -1126,7 +901,6 @@ export default function OrderDetail() {
                                 : `Tedarikçi kaldırıldı: ${custName} - ${lineLabel}`,
                             reference_no: refNo,
                         });
-                        await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: oldSupplierId, delta: -oldCost, customerName: custName });
                     }
                     // 2) Yeni tedarikçiye borç işle (ya da tedarikçi kaldırıldıysa bağlantıyı temizle)
                     if (newSupplierId && newCost > 0) {
@@ -1136,9 +910,7 @@ export default function OrderDetail() {
                             description: oldSupplierId
                                 ? `Tedarikçi değişikliği: ${supplierNameById(oldSupplierId)} firmasından ${supplierNameById(newSupplierId)} firmasına aktarıldı`
                                 : `Sipariş ürün eklendi: ${custName} - ${lineLabel}`,
-                            dueDate: manualDueDate,
                         });
-                        await syncSupplierExpenseForLine({ companyId, orderId: id, supplierId: newSupplierId, delta: newCost, customerName: custName });
                     } else {
                         await supabase.from("order_items").update({ supplier_transaction_id: null }).eq("id", editingItemId);
                     }
@@ -1159,14 +931,6 @@ export default function OrderDetail() {
                         supplierId: payload.supplier_id,
                         amount: payload.supplier_total_cost,
                         description: `Sipariş ürün eklendi: ${order.customers?.name || "Müşteri"} - ${productLabel(payload.product_type)} (${payload.room || "Alan"})`,
-                        dueDate: manualDueDate,
-                    });
-                    await syncSupplierExpenseForLine({
-                        companyId,
-                        orderId: id,
-                        supplierId: payload.supplier_id,
-                        delta: payload.supplier_total_cost,
-                        customerName: order.customers?.name || "Müşteri",
                     });
                 }
             }
@@ -1191,15 +955,11 @@ export default function OrderDetail() {
         setSaving(true);
         setItemFormError("");
         try {
-            const companyId = order.company_id;
-            if (!companyId) throw new Error("Şirket bilgisi bulunamadı.");
-            // Silinmeden önce tedarikçi cari iptal kaydı oluştur — sonucu MUTLAKA kontrol
-            // edilir; insert başarısız olursa fail-fast: order_items SİLİNMEZ (orphan
-            // tedarikçi borcu bırakılmasın diye).
+            // Silinmeden önce tedarikçi cari iptal kaydı oluştur
             const itemToDelete = items.find((item) => item.id === itemId);
             if (itemToDelete?.supplier_id && safeNumber(itemToDelete.supplier_total_cost) > 0) {
-                const { error: cancelErr } = await supabase.from("supplier_transactions").insert({
-                    company_id: companyId,
+                await supabase.from("supplier_transactions").insert({
+                    company_id: order.company_id,
                     supplier_id: itemToDelete.supplier_id,
                     order_id: id,
                     order_item_id: itemId,
@@ -1208,16 +968,6 @@ export default function OrderDetail() {
                     amount: safeNumber(itemToDelete.supplier_total_cost),
                     description: `Sipariş satırı silindi: ${order.customers?.name || "Müşteri"} - ${productLabel(itemToDelete.product_type)} (${itemToDelete.room || "Alan"})`,
                     reference_no: id.slice(0, 8).toUpperCase(),
-                });
-                if (cancelErr) {
-                    throw new Error(`Tedarikçi cari iptal kaydı oluşturulamadı, ürün silinmedi: ${cancelErr.message}`);
-                }
-                await syncSupplierExpenseForLine({
-                    companyId,
-                    orderId: id,
-                    supplierId: itemToDelete.supplier_id,
-                    delta: -safeNumber(itemToDelete.supplier_total_cost),
-                    customerName: order.customers?.name || "Müşteri",
                 });
             }
 
@@ -1244,13 +994,6 @@ export default function OrderDetail() {
         try {
             const selected = staffList.find((s) => s.id === assignedTo);
 
-            // Montajcı DEĞİŞTİ mi + sipariş montaj tamamlanmış durumda mı? (aşağıda aşama sıfırlama için)
-            const prevInstaller = installationJob?.assigned_staff_id || order?.assigned_to || "";
-            const installerChanged = (assignedTo || "") !== prevInstaller;
-            const wasCompleted = order?.status === "montaj_tamamlandi"
-                || order?.status === "installation_completed"
-                || installationJob?.status === "completed";
-
             // orders.assigned_to FK'sı auth.users'a bağlı — yalnızca hesabı olan
             // montajcılar yazılabilir; hesabı olmayanlarda alan boş bırakılır,
             // bağlantı montaj takibi üzerinden kurulur.
@@ -1262,35 +1005,12 @@ export default function OrderDetail() {
                 return;
             }
 
-            // Montaj Takibi + Montajcı Cari bağlantısı: bu siparişin montaj işine montajcıyı KESİN işle.
-            // InstallerLedger hakedişi installation_jobs.assigned_staff_id kolonundan okur — aynı
-            // kolona yazıyoruz. Hata artık sessizce yutulmuyor (0 satır = henüz job yok, hata değil).
-            const jobUpdate = await supabase.from("installation_jobs")
+            // Montaj Takibi + Montajcı Cari bağlantısı: bu siparişin montaj işine montajcıyı işle
+            // (montaj işi henüz yoksa sorun değil — "Montaja Hazır" yapılırken montajcı taşınır)
+            await supabase.from("installation_jobs")
                 .update({ assigned_staff_id: assignedTo || null })
                 .eq("order_id", id)
-                .select("id");
-            if (jobUpdate.error) {
-                console.warn("[montaj-ata] installation_jobs.assigned_staff_id yazılamadı:", jobUpdate.error.message);
-                alert("Montajcı siparişe atandı ancak montaj işine bağlanamadı: " + jobUpdate.error.message);
-            } else {
-                console.info("[montaj-ata] assigned_staff_id yazıldı:", { assignedTo, orderAssignee, etkilenenJob: jobUpdate.data?.length ?? 0 });
-            }
-
-            // Montajcı değiştiyse ve montaj TAMAMLANMIŞSA aşamayı BAŞA al: tamamlanmış iş eski
-            // montajcıya bağlı kalmasın; yeni montajcının hakedişi için kullanıcı yeniden
-            // "Montaj Tamamlandı"ya basmalı. Hakediş completed işten türediğinden, iş "waiting"e
-            // dönünce eski hakediş otomatik düşer. Veri silinmez; yalnız status geri alınır.
-            if (installerChanged && wasCompleted) {
-                await supabase.from("installation_jobs")
-                    .update({ status: "waiting" })
-                    .eq("order_id", id)
-                    .then(() => {}, () => {});
-                await supabase.from("orders")
-                    .update({ status: "installation_ready" })
-                    .eq("id", id)
-                    .then(() => {}, () => {});
-                setWorkflowMessage("Montajcı değişti. Montaj aşaması sıfırlandı — tamamlamak için yeniden 'Montaj Tamamlandı'ya basın.");
-            }
+                .then(() => {}, () => {});
 
             await loadData();
         } finally {
@@ -1398,77 +1118,49 @@ export default function OrderDetail() {
         setPaymentError("");
         setPaymentSuccess("");
         try {
-            // paid_amount/remaining_amount artik customer_record_collection RPC
-            // tarafindan payments ledger'indan yeniden turetilerek yaziliyor.
-            // orders.status ARTIK BU AKISTAN GUNCELLENMIYOR: bu kolon ayni zamanda
-            // is akisi durumu (order.ts::ORDER_STATUS) icin de kullanildigindan,
-            // RPC bilincli olarak status'a dokunmuyor (bkz. customerCollectionService.ts
-            // basindaki arastirma notu — cakisma riski).
-            const result = await financeService.customerCollections.recordCollection({
-                companyId: order.company_id!,
-                orderId: id,
-                amount,
-                method: paymentMethod,
-                note: paymentNote || "Sipariş tahsilatı",
-                idempotencyKey: crypto.randomUUID(),
+            // Use atomic RPC function for payment recording
+            const { data, error } = await supabase.rpc("record_order_payment", {
+                p_company_id: order.company_id,
+                p_order_id: id,
+                p_amount: amount,
+                p_payment_method: paymentMethod || null,
+                p_note: paymentNote || "Sipariş tahsilatı",
             });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
 
-            const { isOverpayment, overpaymentAmount } = result.data;
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Ödeme kaydedilemedi.");
 
-            // Fazla tahsilat notu RPC'nin kapsamında degil (RPC yalnizca bilgi olarak
-            // isOverpayment/overpaymentAmount doner) — mevcut davranisi korumak icin
-            // ayri bir direkt yazim olarak burada tutuluyor.
-            if (isOverpayment) {
-                await supabase
-                    .from("orders")
-                    .update({
-                        note: [order.note, `Fazla tahsilat / müşteri alacağı: ${fmtTL(overpaymentAmount)}`].filter(Boolean).join("\n"),
-                    })
-                    .eq("id", id);
+            const overpayment = data.overpayment;
+
+            // Log audit trail (fire-and-forget, don't block if it fails)
+            logAction("payment_created", "payment", data.payment_id || "", {
+                amount,
+                payment_method: paymentMethod,
+                order_id: id,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
+
+            // Send payment confirmation email to customer (fire-and-forget)
+            if (order?.customers?.email) {
+              notifyPaymentReceived({
+                customerEmail: order.customers.email,
+                customerName: order.customers.name || "Müşteri",
+                paymentId: data.payment_id || "",
+                amount,
+                paymentMethod: paymentMethod || "Belirtilmemiş",
+                createdAt: new Date().toISOString(),
+              }).catch(err => console.error("Payment notification failed:", err));
             }
 
             setPaymentAmount("");
             setPaymentNote("");
             setShowPaymentForm(false);
-            setPaymentSuccess(isOverpayment ? `Ödeme kaydedildi. Müşteri alacaklı: ${fmtTL(overpaymentAmount)}` : "Ödeme kaydedildi.");
+            setPaymentSuccess(overpayment > 0 ? `Ödeme kaydedildi. Müşteri alacaklı: ${fmtTL(overpayment)}` : "Ödeme kaydedildi.");
             await loadData();
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            setPaymentError(msg.includes("customer_record_collection")
-                ? "Tahsilat servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Ödeme kaydedilemedi."));
+            setPaymentError(e?.message ?? "Ödeme kaydedilemedi.");
         } finally {
             setSaving(false);
-        }
-    }
-
-    async function handleCancelPayment(payment: PaymentRow) {
-        if (!order) return;
-        setCancellingPaymentId(payment.id);
-        setPaymentError("");
-        setPaymentSuccess("");
-        try {
-            const result = await financeService.customerCollections.cancelCollection({
-                companyId: order.company_id!,
-                paymentId: payment.id,
-                idempotencyKey: crypto.randomUUID(),
-            });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
-
-            setPaymentSuccess("Tahsilat iptal edildi.");
-            await loadData();
-        } catch (e: any) {
-            const msg = String(e?.message || "");
-            setPaymentError(msg.includes("customer_cancel_collection")
-                ? "Tahsilat iptal servisi bulunamadı. supabase_customer_collection_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Tahsilat iptal edilemedi."));
-        } finally {
-            setCancellingPaymentId(null);
         }
     }
 
@@ -1553,223 +1245,7 @@ export default function OrderDetail() {
         }
     }
 
-    // Montaja göndermeyi geri al — yalnızca montajcı henüz iş yapmadıysa (job "waiting").
-    // Sipariş durumunu montaj öncesine döndürür; legacy yazım korunur ("new_order").
-    async function handleUndoSendToInstallation() {
-        if (!id || !installationJob) return;
-        if (installationJob.status && installationJob.status !== "waiting") {
-            setWorkflowError("Montaj başladığı için geri alınamaz. Önce montaj takibinden durumu sıfırlayın.");
-            return;
-        }
-        setSaving(true);
-        setWorkflowError("");
-        setWorkflowMessage("");
-        try {
-            const ctx = await getEffectiveTenantContext();
-            const { error: delErr } = await supabase
-                .from("installation_jobs")
-                .delete()
-                .eq("id", installationJob.id)
-                .eq("company_id", ctx.company_id);
-            if (delErr) throw delErr;
-
-            // TODO: önceki durumu birebir saklayıp geri yükle (şimdilik Sipariş Alındı'ya döner).
-            const { error: updErr } = await supabase
-                .from("orders")
-                .update({ status: "new_order" })
-                .eq("id", id);
-            if (updErr) throw updErr;
-
-            setInstallationJob(null);
-            setOrder((prev) => prev ? { ...prev, status: "new_order" } : prev);
-            setWorkflowMessage("Montaja gönderme geri alındı. Sipariş yeniden 'Sipariş Alındı' durumunda.");
-        } catch (e: any) {
-            setWorkflowError(e?.message ?? "Geri alınamadı.");
-        } finally {
-            setSaving(false);
-        }
-    }
-
     const currentInstallerId = installationJob?.assigned_staff_id || order?.assigned_to || "";
-
-    const isInstallationActive = installationJob && installationJob.status !== "completed";
-    const isInstallationCompleted = installationJob?.status === "completed" ||
-        order?.status === "montaj_tamamlandi" ||
-        order?.status === "installation_completed";
-
-    // "Montaja Gönder" yalnızca doğru durumda aktif (kanonik normalize üzerinden):
-    // henüz montaj işi yokken ve sipariş Sipariş Alındı / Üretimde / Montaja Hazır iken.
-    const normalizedOrderStatus = normalizeOrderStatus(order?.status);
-    const canSendToInstallation = !installationJob && !isInstallationCompleted && (
-        normalizedOrderStatus === ORDER_STATUS.RECEIVED ||
-        normalizedOrderStatus === ORDER_STATUS.PRODUCTION ||
-        normalizedOrderStatus === ORDER_STATUS.READY_FOR_INSTALL
-    );
-    const canUndoSendToInstallation = !!installationJob && (!installationJob.status || installationJob.status === "waiting");
-
-    async function handleCompleteInstallation() {
-        if (!id || !installationJob) return;
-        // Montajcı OPSİYONEL (solo perdeci kendi montajını atamadan da tamamlayabilir).
-        // Atanmışsa hakediş o montajcının carisine işlenir; atanmamışsa hakediş OLUŞMAZ.
-        const effectiveInstaller = installationJob.assigned_staff_id || order?.assigned_to || "";
-        setCompletingInstallation(true);
-        setWorkflowError("");
-        try {
-            const ctx = await getEffectiveTenantContext();
-            const now = new Date().toISOString();
-
-            // 1. Montaj işini tamamlandı olarak işaretle. assigned_staff_id boşsa sipariş
-            // montajcısıyla BACKFILL et → completed job montajcıya bağlı kalır, hakediş cari'ye düşer.
-            // Geniş güncelleme dene (completed_at + updated_at kolonları varsa)
-            let { error: jobError } = await supabase
-                .from("installation_jobs")
-                .update({ status: "completed", completed_at: now, updated_at: now, ...(effectiveInstaller ? { assigned_staff_id: effectiveInstaller } : {}) })
-                .eq("id", installationJob.id)
-                .eq("company_id", ctx.company_id);
-
-            // Kolon yoksa minimal güncellemeye düş
-            if (jobError && /completed_at|updated_at|column.*does not exist/i.test(jobError.message || "")) {
-                const fallback = await supabase
-                    .from("installation_jobs")
-                    .update({ status: "completed", ...(effectiveInstaller ? { assigned_staff_id: effectiveInstaller } : {}) })
-                    .eq("id", installationJob.id)
-                    .eq("company_id", ctx.company_id);
-                jobError = fallback.error;
-            }
-            if (jobError) throw jobError;
-
-            // 1b. Hakediş seed: Montajcı cari (InstallerLedger) "Toplam Hakediş"i tamamlanan
-            // işlerin installer_fee toplamından TÜRETİR. İş completed olurken installer_fee
-            // boş/0 ise siparişin montaj bedeli (order.installation_cost) ile doldururuz; böylece
-            // tamamlanınca hakediş cari'ye düşer. Manuel girilmiş fee EZİLMEZ. Bu adım ayrı ve
-            // best-effort: completion akışını bozmaz, installer_fee kolonu yoksa sessizce geçilir.
-            // (Yeni tablo/şema/ödeme mantığı yok; earned türetilmiş olduğundan çift kayıt olmaz.)
-            const montajFee = Math.max(0, safeNumber(order?.installation_cost));
-            if (effectiveInstaller && montajFee > 0) {
-                const { data: feeRow, error: feeErr } = await supabase
-                    .from("installation_jobs")
-                    .select("installer_fee")
-                    .eq("id", installationJob.id)
-                    .maybeSingle();
-                if (!feeErr && feeRow && safeNumber(feeRow.installer_fee) <= 0) {
-                    await supabase
-                        .from("installation_jobs")
-                        .update({ installer_fee: montajFee })
-                        .eq("id", installationJob.id)
-                        .eq("company_id", ctx.company_id);
-                }
-            }
-
-            // 2. Sipariş durumunu güncelle
-            const { error: orderError } = await supabase
-                .from("orders")
-                .update({ status: "montaj_tamamlandi" })
-                .eq("id", id)
-                .eq("company_id", ctx.company_id);
-            if (orderError) throw orderError;
-
-            // UI anlık güncelle
-            setInstallationJob((prev) => prev ? { ...prev, status: "completed", ...(effectiveInstaller ? { assigned_staff_id: effectiveInstaller } : {}) } : prev);
-            setOrder((prev) => prev ? { ...prev, status: "montaj_tamamlandi" } : prev);
-            console.info("[montaj-tamamla] hakediş için yazılan:", { effectiveInstaller: effectiveInstaller || "(yok - hakediş oluşmadı)", montajFee, status: "completed" });
-            setWorkflowMessage("✅ Montaj tamamlandı olarak işaretlendi. Montajcı cari ekranı otomatik güncellenecek.");
-            setShowCompleteModal(false);
-            await loadData(); // job + backfill'i tazele (ledger ekranı açılınca güncel okur)
-        } catch (e: any) {
-            setWorkflowError(e?.message ?? "Montaj tamamlanamadı.");
-            setShowCompleteModal(false);
-        } finally {
-            setCompletingInstallation(false);
-        }
-    }
-
-    // Siparişi Geri Al / İptal Et — VERİ SİLMEZ; bağlı cari etkilerini cancel hareketiyle dengeler:
-    //   • Tedarikçi borcu: bu siparişin açık borcu (Σdebt − Σcancel) kadar 'cancel' hareketi.
-    //   • Montaj işi: status "cancelled" → tamamlanmış sayılmaz, hakediş (earned) düşer.
-    //   • Sipariş: status "cancelled" + remaining_amount 0 → müşteride fantom bakiye kalmaz.
-    // Ödeme/borç formüllerine dokunmaz; yalnız dengeleyici hareket + status yazar. Migration yok.
-    async function handleCancelOrder() {
-        if (!id || !order) return;
-        setCancellingOrder(true);
-        setWorkflowError("");
-        setWorkflowMessage("");
-        try {
-            const ctx = await getEffectiveTenantContext();
-            const companyId = order.company_id ?? ctx.company_id;
-            const nowIso = new Date().toISOString();
-            const custName = order.customers?.name || "Müşteri";
-            const refNo = id.slice(0, 8).toUpperCase();
-
-            // 1) Tedarikçi cari: bu siparişin tedarikçi bazında AÇIK borcunu (Σdebt − Σcancel)
-            //    hesapla ve kalan kadar 'cancel' işle (mevcut cancel'ları çift saymadan).
-            const { data: supTxs } = await supabase
-                .from("supplier_transactions")
-                .select("supplier_id, transaction_type, amount")
-                .eq("company_id", companyId)
-                .eq("order_id", id);
-            const openBySupplier = new Map<string, number>();
-            (supTxs ?? []).forEach((t: any) => {
-                if (!t.supplier_id) return;
-                const amt = safeNumber(t.amount);
-                if (t.transaction_type === "debt") openBySupplier.set(t.supplier_id, (openBySupplier.get(t.supplier_id) ?? 0) + amt);
-                else if (t.transaction_type === "cancel") openBySupplier.set(t.supplier_id, (openBySupplier.get(t.supplier_id) ?? 0) - amt);
-            });
-            for (const [supplierId, open] of openBySupplier) {
-                if (open > 0.01) {
-                    await supabase.from("supplier_transactions").insert({
-                        company_id: companyId,
-                        supplier_id: supplierId,
-                        order_id: id,
-                        transaction_date: nowIso,
-                        transaction_type: "cancel",
-                        amount: open,
-                        description: `Sipariş iptali: ${custName} - borç iptal edildi`,
-                        reference_no: refNo,
-                    });
-                }
-            }
-
-            // 2) Montaj işi: iptal → tamamlanmış sayılmaz (hakediş düşer). Silme yok, best-effort.
-            await supabase.from("installation_jobs")
-                .update({ status: "cancelled" })
-                .eq("order_id", id)
-                .eq("company_id", companyId)
-                .then(() => {}, () => {});
-
-            // 2b) Gider accrual + satış faturası: iptal İŞARETLE (SİLME YOK). Böylece Toplam Gider
-            // ve fatura/ciro iptal edilen siparişi saymaz. best-effort — kayıt yoksa sessiz geçilir.
-            await supabase.from("expenses")
-                .update({ status: "cancelled" })
-                .eq("order_id", id)
-                .eq("company_id", companyId)
-                .then(() => {}, () => {});
-            await supabase.from("invoices")
-                .update({ status: "cancelled" })
-                .eq("order_id", id)
-                .eq("company_id", companyId)
-                .then(() => {}, () => {});
-
-            // 3) Sipariş: iptal + kalan bakiye sıfırla (müşteride fantom alacak kalmasın).
-            const { error: ordErr } = await supabase
-                .from("orders")
-                .update({ status: "cancelled", remaining_amount: 0 })
-                .eq("id", id)
-                .eq("company_id", companyId);
-            if (ordErr) throw ordErr;
-
-            setShowCancelModal(false);
-            const collected = safeNumber(order.paid_amount ?? order.deposit_amount);
-            setWorkflowMessage(collected > 0
-                ? `Sipariş iptal edildi. Tedarikçi borcu ve montaj hakedişi geri alındı. Not: Müşteriden tahsil edilen ${fmtTL(collected)} varsa iadesi manuel yapılmalıdır.`
-                : "Sipariş iptal edildi. Tedarikçi borcu ve montaj hakedişi geri alındı.");
-            await loadData();
-        } catch (e: any) {
-            setWorkflowError(e?.message ?? "Sipariş iptal edilemedi.");
-            setShowCancelModal(false);
-        } finally {
-            setCancellingOrder(false);
-        }
-    }
 
     return (
         <div className="max-w-6xl mx-auto space-y-6 pb-24 px-4">
@@ -1801,18 +1277,6 @@ export default function OrderDetail() {
                         <div className="text-2xl sm:text-3xl font-black text-primary-600 tracking-tighter">{fmtTL(salesTotal)}</div>
                     </div>
                 </div>
-
-                {(role === "admin" || role === "accountant") && order.status !== "cancelled" && (
-                    <div className="mt-4 flex justify-end">
-                        <button
-                            type="button"
-                            onClick={() => setShowCancelModal(true)}
-                            className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-black uppercase tracking-wide text-rose-700 hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300"
-                        >
-                            <X className="w-4 h-4" /> Siparişi Geri Al / İptal Et
-                        </button>
-                    </div>
-                )}
 
                 {(role === "admin" || role === "accountant") && (
                     <div className="mt-6 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
@@ -1908,167 +1372,24 @@ export default function OrderDetail() {
                 {workflowMessage ? <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{workflowMessage}</div> : null}
 
                 {(role === "admin" || role === "accountant") ? (
-                    <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="flex-1">
-                                <div className="text-xs font-black uppercase tracking-widest text-slate-400">Montaj İş Akışı</div>
-                                <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
-                                    {isInstallationCompleted
-                                        ? "✅ Montaj tamamlandı."
-                                        : installationJob
-                                            ? `Bu sipariş montaj takibinde (${installationJob.status || "waiting"}).`
-                                            : "Üretim tamamlandıysa siparişi montaj takibine aktarın."}
-                                </div>
-                                {isInstallationActive && (
-                                    <div className="mt-1 text-xs text-amber-600 font-bold">Montaj henüz tamamlanmadı. Montajcı işi bitirdikten sonra onaylayın.</div>
-                                )}
-                            </div>
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                {/* Montaja Gönder — yalnızca doğru durumda (kanonik normalize üzerinden) aktif */}
-                                {canSendToInstallation && (
-                                    <button
-                                        type="button"
-                                        onClick={handleMarkInstallationReady}
-                                        disabled={saving}
-                                        className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 text-sm font-black text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                                    >
-                                        <PackageCheck className="h-5 w-5" />
-                                        Montaja Gönder
-                                    </button>
-                                )}
-                                {/* Montaja göndermeyi geri al — yalnızca montaj henüz başlamadıysa */}
-                                {canUndoSendToInstallation && (
-                                    <button
-                                        type="button"
-                                        onClick={handleUndoSendToInstallation}
-                                        disabled={saving}
-                                        className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 px-5 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 sm:w-auto"
-                                    >
-                                        <X className="h-5 w-5" />
-                                        Montaja Göndermeyi Geri Al
-                                    </button>
-                                )}
-                                {/* Montajı Tamamla butonu — takibde ve henüz tamamlanmamışsa */}
-                                {isInstallationActive && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowCompleteModal(true)}
-                                        disabled={saving || completingInstallation}
-                                        className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto shadow-lg shadow-emerald-600/20"
-                                    >
-                                        <CheckCircle2 className="h-5 w-5" />
-                                        Montajı Tamamla
-                                    </button>
-                                )}
-                                {/* Tamamlandı badge */}
-                                {isInstallationCompleted && (
-                                    <span className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-100 px-5 text-sm font-black text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 sm:w-auto">
-                                        <CheckCircle2 className="h-5 w-5" />
-                                        Montaj Tamamlandı
-                                    </span>
-                                )}
+                    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/40 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <div className="text-xs font-black uppercase tracking-widest text-slate-400">Montaj İş Akışı</div>
+                            <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
+                                {installationJob ? `Bu sipariş montaj takibinde (${installationJob.status || "waiting"}).` : "Üretim tamamlandıysa siparişi montaj takibine aktarın."}
                             </div>
                         </div>
-
-                        {/* Montaj Geçmişi — sade ERP timeline; olaylar mevcut veriden türetilir (yeni sorgu yok) */}
-                        {installationJob && (
-                            <div className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-700">
-                                <div className="text-xs font-black uppercase tracking-widest text-slate-400">Montaj Geçmişi</div>
-                                <ol className="mt-3">
-                                    {buildInstallationTimeline(order, installationJob, staffList).map((ev, idx, arr) => (
-                                        <li key={ev.key} className="relative flex gap-3 pb-4 last:pb-0">
-                                            {idx < arr.length - 1 && (
-                                                <span className="absolute left-[7px] top-4 h-full w-px bg-slate-200 dark:bg-slate-700" aria-hidden />
-                                            )}
-                                            <span className={`relative z-10 mt-1 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${ev.done ? "border-emerald-500 bg-emerald-500" : "border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-800"}`} aria-hidden />
-                                            <div className="min-w-0 flex-1">
-                                                <div className={`text-sm font-bold ${ev.done ? "text-slate-800 dark:text-slate-100" : "text-slate-400 dark:text-slate-500"}`}>{ev.label}</div>
-                                                {ev.detail ? <div className="text-xs text-slate-500 dark:text-slate-400">{ev.detail}</div> : null}
-                                                {ev.at ? <div className="text-[11px] text-slate-400">{fmtTimelineDateTime(ev.at)}</div> : null}
-                                            </div>
-                                        </li>
-                                    ))}
-                                </ol>
-                            </div>
-                        )}
+                        <button
+                            type="button"
+                            onClick={handleMarkInstallationReady}
+                            disabled={saving || Boolean(installationJob)}
+                            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 text-sm font-black text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                        >
+                            <PackageCheck className="h-5 w-5" />
+                            {installationJob ? "Montaj Takibinde" : "Montaja Hazır"}
+                        </button>
                     </div>
                 ) : null}
-
-                {/* Siparişi Geri Al / İptal Onay Modalı */}
-                {showCancelModal && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl dark:bg-slate-900 overflow-hidden">
-                            <div className="bg-rose-50 dark:bg-rose-900/20 p-6 text-center">
-                                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-rose-100 dark:bg-rose-900/40">
-                                    <X className="h-8 w-8 text-rose-600" />
-                                </div>
-                                <h2 className="text-lg font-black text-slate-900 dark:text-white">Siparişi Geri Al / İptal Et</h2>
-                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                                    Bu sipariş <strong>iptal</strong> edilsin mi?
-                                </p>
-                                <p className="mt-1 text-xs text-slate-400">
-                                    Tedarikçi borcu iptal hareketiyle geri alınır, montaj işi iptal edilir, montajcı hakedişi düşer. Kayıtlar silinmez. Tahsil edilen ödemelerin iadesi manuel yapılır.
-                                </p>
-                            </div>
-                            <div className="flex gap-3 p-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowCancelModal(false)}
-                                    disabled={cancellingOrder}
-                                    className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60"
-                                >
-                                    Vazgeç
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleCancelOrder()}
-                                    disabled={cancellingOrder}
-                                    className="flex-1 rounded-xl bg-rose-600 px-4 py-3 text-sm font-black text-white hover:bg-rose-700 disabled:opacity-60 shadow-lg shadow-rose-600/20"
-                                >
-                                    {cancellingOrder ? "İşleniyor..." : "Evet, İptal Et"}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Montajı Tamamla Onay Modalı */}
-                {showCompleteModal && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl dark:bg-slate-900 overflow-hidden">
-                            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-6 text-center">
-                                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
-                                    <CheckCircle2 className="h-8 w-8 text-emerald-600" />
-                                </div>
-                                <h2 className="text-lg font-black text-slate-900 dark:text-white">Montajı Tamamla</h2>
-                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                                    Bu sipariş <strong>montaj tamamlandı</strong> olarak işaretlensin mi?
-                                </p>
-                                <p className="mt-1 text-xs text-slate-400">
-                                    Onaylanınca sipariş durumu güncellenecek ve montajcı iş geçmişine işlenecek.
-                                </p>
-                            </div>
-                            <div className="flex gap-3 p-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowCompleteModal(false)}
-                                    disabled={completingInstallation}
-                                    className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60"
-                                >
-                                    İptal
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleCompleteInstallation()}
-                                    disabled={completingInstallation}
-                                    className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60 shadow-lg shadow-emerald-600/20"
-                                >
-                                    {completingInstallation ? "İşleniyor..." : "✅ Evet, Tamamla"}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 {showPaymentForm ? (
                     <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10">
@@ -2092,41 +1413,15 @@ export default function OrderDetail() {
                     <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                         <div className="text-xs font-black uppercase tracking-widest text-slate-400">Tahsilat Geçmişi</div>
                         <div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">
-                            {(() => {
-                                // Zaten iptal edilmiş (başka bir satırın reverses_payment_id'siyle
-                                // işaret edilen) orijinal tahsilatları bulmak için kullanılır —
-                                // bu satırlara ve iptal (reversal) satırlarının kendisine "İptal Et"
-                                // butonu gösterilmez.
-                                const reversedPaymentIds = new Set(
-                                    payments.map((p) => p.reverses_payment_id).filter((v): v is string => !!v)
-                                );
-                                return payments.map((payment) => {
-                                    const isReversal = !!payment.reverses_payment_id;
-                                    const canCancel = !isReversal && !reversedPaymentIds.has(payment.id);
-                                    return (
-                                        <div key={payment.id} className="flex flex-col gap-1 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                                            <div>
-                                                <div className="font-black">{fmtTL(payment.amount)}</div>
-                                                <div className="text-xs text-slate-500">{payment.method || "Ödeme"} - {payment.note || "Açıklama yok"}</div>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <div className="text-xs font-bold text-slate-500">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString("tr-TR") : "-"}</div>
-                                                {canCancel ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleCancelPayment(payment)}
-                                                        disabled={cancellingPaymentId === payment.id}
-                                                        className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900/40 dark:text-rose-400"
-                                                        title="Tahsilatı İptal Et"
-                                                    >
-                                                        {cancellingPaymentId === payment.id ? "İptal ediliyor..." : "İptal Et"}
-                                                    </button>
-                                                ) : null}
-                                            </div>
-                                        </div>
-                                    );
-                                });
-                            })()}
+                            {payments.map((payment) => (
+                                <div key={payment.id} className="flex flex-col gap-1 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <div className="font-black">{fmtTL(payment.amount)}</div>
+                                        <div className="text-xs text-slate-500">{payment.method || "Ödeme"} - {payment.note || "Açıklama yok"}</div>
+                                    </div>
+                                    <div className="text-xs font-bold text-slate-500">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString("tr-TR") : "-"}</div>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 ) : null}
@@ -2194,12 +1489,6 @@ export default function OrderDetail() {
                                 <input placeholder="Renk / kod" value={pColorName} onChange={e => setPColorName(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                                 <input placeholder="Ürün notu" value={pNote} onChange={e => setPNote(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-                                <label className="flex flex-col gap-1">
-                                    <span className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Tedarikçi vade tarihi (opsiyonel)</span>
-                                    <input type="date" value={pSupplierDueDate} onChange={e => setPSupplierDueDate(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
-                                </label>
-                            </div>
                             <div className="mt-3">
                                 <div className="flex items-center gap-3">
                                     <button
@@ -2243,16 +1532,8 @@ export default function OrderDetail() {
                             </div>
                             {itemFormError ? <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">{itemFormError}</div> : null}
                             {itemFormDirty ? (
-                                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                                    <span className="flex items-center gap-2">⚠️ Kaydedilmemiş değişiklikler var. Çıkmadan önce kaydedin.</span>
-                                    <button
-                                        type="button"
-                                        onClick={handleSaveItem}
-                                        disabled={saving}
-                                        className="shrink-0 rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow disabled:opacity-60"
-                                    >
-                                        {saving ? "Kaydediliyor..." : editingItemId ? "Satırı Kaydet" : "Satıra Ekle"}
-                                    </button>
+                                <div className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                                    ⚠️ Kaydedilmemiş değişiklikler var. Çıkmadan önce kaydedin.
                                 </div>
                             ) : null}
                             <div className="mt-4 flex flex-col sm:flex-row gap-3">
@@ -2306,7 +1587,6 @@ export default function OrderDetail() {
                                                         {[it.product_options.model_name, it.product_options.color_name].filter(Boolean).join(" / ")}
                                                     </div>
                                                 )}
-                                                <FieldInfoGallery info={parseFieldInfo(it.product_options)} compact />
                                                 {it.note ? <div className="mt-1 text-[11px] text-slate-400">{it.note}</div> : null}
                                             </td>
                                             <td className="px-4 py-5 text-sm font-bold text-slate-600">{it.room || "—"}</td>
@@ -2339,7 +1619,7 @@ export default function OrderDetail() {
                                                         <button type="button" onClick={() => startEditItem(it)} className="p-2 text-primary-600 hover:bg-primary-50 rounded-xl" title="Düzenle">
                                                             <Pencil className="w-4 h-4" />
                                                         </button>
-                                                        <button type="button" onClick={() => handleDeleteItem(it.id)} disabled={saving} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
+                                                        <button type="button" onClick={() => handleDeleteItem(it.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
                                                     </div>

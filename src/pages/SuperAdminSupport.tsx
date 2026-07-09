@@ -18,19 +18,6 @@ import {
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { cn } from "../utils/cn";
-import AdminInterventionPanel from "../components/AdminInterventionPanel";
-
-type SupportCategory = 'order' | 'measurement' | 'installation' | 'supplier' | 'customer' | 'payment' | 'other'
-    // eski kayıtlarla uyum için
-    | 'bug' | 'question' | 'request';
-
-interface ConsoleErrorEntry {
-    type?: string;
-    message?: string;
-    detail?: string;
-    route?: string;
-    at?: string;
-}
 
 type SupportTicket = {
     id: string;
@@ -41,7 +28,7 @@ type SupportTicket = {
     status: 'open' | 'in_progress' | 'waiting_user' | 'update_ready' | 'resolved' | 'closed';
     admin_response?: string | null;
     priority: 'low' | 'medium' | 'high' | 'urgent';
-    category: SupportCategory;
+    category: 'bug' | 'question' | 'request' | 'payment' | 'other';
     page_url: string | null;
     screenshot_url: string | null;
     created_at: string;
@@ -51,44 +38,10 @@ type SupportTicket = {
         requested_device_id?: string;
         device_name?: string;
         user_agent?: string;
-        browser?: string;
-        os?: string;
-        platform?: string;
-        screen?: string;
-        viewport?: string;
-        app_version?: string;
-        route?: string;
-        console_errors?: ConsoleErrorEntry[];
     } | null;
     company?: { name: string };
     profile?: { full_name: string };
 };
-
-// Açıklama/başlık içindeki UUID'leri yakala (sipariş/ölçü/müşteri ID'si)
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-function extractRecordIds(ticket: SupportTicket): string[] {
-    const text = `${ticket.title || ""} ${ticket.description || ""}`;
-    return Array.from(new Set(text.match(UUID_RE) ?? []));
-}
-
-// Kategoriye göre kaydın açılacağı uygulama rotası (hash tabanlı)
-function recordRoute(category: SupportCategory, id: string): string {
-    switch (category) {
-        case 'order':
-        case 'installation':
-        case 'payment':
-            return `#/orders/${id}`;
-        case 'measurement':
-            return `#/appointments/${id}`;
-        case 'supplier':
-            return `#/suppliers/${id}`;
-        case 'customer':
-            return `#/customers`;
-        default:
-            return `#/orders/${id}`;
-    }
-}
 
 export default function SuperAdminSupport() {
     const [tickets, setTickets] = useState<SupportTicket[]>([]);
@@ -136,12 +89,10 @@ export default function SuperAdminSupport() {
         setLoadErr("");
         try {
             // 1. Gömülü join'lerle dene (FK ilişkileri kuruluysa en hızlı yol)
-            const firstTry = await supabase
+            let { data, error } = await supabase
                 .from('support_tickets')
                 .select('*, company:companies(name), profile:profiles(full_name)')
                 .order('created_at', { ascending: false });
-            let data = firstTry.data;
-            const error = firstTry.error;
 
             // 2. profiles FK'sı yoksa PostgREST tüm sorguyu reddeder —
             //    join'siz oku, firma/kullanıcı adlarını ayrıca çek.
@@ -316,18 +267,12 @@ export default function SuperAdminSupport() {
         urgent: { label: 'Acil', color: 'red' }
     };
 
-    const categoryMap: Record<string, string> = {
-        order: "Sipariş",
-        measurement: "Ölçü / Teklif",
-        installation: "Montaj",
-        supplier: "Tedarikçi",
-        customer: "Müşteri",
-        payment: "Ödeme / Tahsilat",
-        other: "Diğer",
-        // eski kayıtlar
+    const categoryMap = {
         bug: "Hata",
         question: "Soru",
         request: "İstek",
+        payment: "Ödeme",
+        other: "Diğer",
     };
 
     if (loading) return <div className="p-8 text-center">Yükleniyor...</div>;
@@ -404,12 +349,10 @@ export default function SuperAdminSupport() {
                             className="px-3 py-2 text-sm rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none"
                         >
                             <option value="all">Tüm kategoriler</option>
-                            <option value="order">Sipariş</option>
-                            <option value="measurement">Ölçü / Teklif</option>
-                            <option value="installation">Montaj</option>
-                            <option value="supplier">Tedarikçi</option>
-                            <option value="customer">Müşteri</option>
-                            <option value="payment">Ödeme / Tahsilat</option>
+                            <option value="bug">Hata</option>
+                            <option value="question">Soru</option>
+                            <option value="request">Talep</option>
+                            <option value="payment">Ödeme</option>
                             <option value="other">Diğer</option>
                         </select>
                     </div>
@@ -614,93 +557,6 @@ export default function SuperAdminSupport() {
                                     <div className="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300 leading-relaxed">
                                         {selectedTicket.description}
                                     </div>
-                                </div>
-
-                                {/* İlgili Kayıtlar — sipariş/ölçü/müşteri ID'sini direkt aç */}
-                                {(extractRecordIds(selectedTicket).length > 0 || selectedTicket.page_url) && (
-                                    <div className="space-y-3">
-                                        <h4 className="text-sm font-black uppercase text-slate-400 tracking-widest">İlgili Kayıtlar</h4>
-                                        <div className="flex flex-wrap gap-2">
-                                            {selectedTicket.page_url && (
-                                                <a
-                                                    href={selectedTicket.page_url.startsWith("#") ? selectedTicket.page_url : `#${selectedTicket.page_url}`}
-                                                    className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-300"
-                                                >
-                                                    Kullanıcının olduğu sayfayı aç
-                                                </a>
-                                            )}
-                                            {extractRecordIds(selectedTicket).map((rid) => (
-                                                <a
-                                                    key={rid}
-                                                    href={recordRoute(selectedTicket.category, rid)}
-                                                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
-                                                >
-                                                    {categoryMap[selectedTicket.category] || "Kayıt"}: {rid.slice(0, 8)}… ↗
-                                                </a>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Teknik Bilgi — cihaz / tarayıcı / sürüm */}
-                                {selectedTicket.support_metadata && (
-                                    <div className="space-y-3">
-                                        <h4 className="text-sm font-black uppercase text-slate-400 tracking-widest">Teknik Bilgi</h4>
-                                        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                                            {[
-                                                ["Tarayıcı", selectedTicket.support_metadata.browser],
-                                                ["İşletim Sistemi", selectedTicket.support_metadata.os],
-                                                ["Platform", selectedTicket.support_metadata.platform],
-                                                ["Sürüm", selectedTicket.support_metadata.app_version],
-                                                ["Ekran", selectedTicket.support_metadata.screen],
-                                                ["Görünüm", selectedTicket.support_metadata.viewport],
-                                                ["Rota", selectedTicket.support_metadata.route],
-                                            ].filter(([, v]) => v).map(([label, value]) => (
-                                                <div key={label} className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/30">
-                                                    <div className="text-[10px] font-black uppercase text-slate-400">{label}</div>
-                                                    <div className="truncate text-xs font-bold text-slate-700 dark:text-slate-200" title={String(value)}>{String(value)}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        {selectedTicket.support_metadata.user_agent && (
-                                            <div className="truncate rounded-lg bg-slate-50 px-3 py-1.5 font-mono text-[10px] text-slate-400 dark:bg-slate-800/30" title={selectedTicket.support_metadata.user_agent}>
-                                                {selectedTicket.support_metadata.user_agent}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* Otomatik Yakalanan Hata Logları */}
-                                {(selectedTicket.support_metadata?.console_errors?.length ?? 0) > 0 && (
-                                    <div className="space-y-3">
-                                        <h4 className="flex items-center gap-2 text-sm font-black uppercase text-slate-400 tracking-widest">
-                                            <AlertTriangle size={15} className="text-red-500" /> Hata Logları (otomatik)
-                                        </h4>
-                                        <div className="space-y-2 rounded-2xl border border-red-100 bg-red-50/40 p-3 dark:border-red-900/30 dark:bg-red-950/10">
-                                            {selectedTicket.support_metadata!.console_errors!.map((err, i) => (
-                                                <div key={i} className="rounded-lg bg-white/70 p-2 dark:bg-slate-900/40">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span className="rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-black uppercase text-red-700 dark:bg-red-900/40 dark:text-red-300">{err.type || "error"}</span>
-                                                        {err.route && <span className="font-mono text-[10px] text-slate-400">{err.route}</span>}
-                                                    </div>
-                                                    <div className="mt-1 break-words font-mono text-[11px] text-slate-700 dark:text-slate-300">{err.message}</div>
-                                                    {err.detail && <div className="mt-0.5 break-words font-mono text-[10px] text-slate-400">{err.detail}</div>}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Admin Müdahale & İşlem Geçmişi & Geri Alma */}
-                                <div className="space-y-3 rounded-2xl border border-slate-200 p-5 dark:border-slate-800">
-                                    <h4 className="text-sm font-black uppercase text-slate-400 tracking-widest">Uzaktan Müdahale & İşlem Geçmişi</h4>
-                                    <AdminInterventionPanel
-                                        companyId={selectedTicket.company_id}
-                                        companyName={selectedTicket.company?.name}
-                                        ticketId={selectedTicket.id}
-                                        defaultCategory={selectedTicket.category}
-                                        suggestedRecordId={extractRecordIds(selectedTicket)[0] ?? null}
-                                    />
                                 </div>
 
                                 {/* Ekran Görüntüsü */}

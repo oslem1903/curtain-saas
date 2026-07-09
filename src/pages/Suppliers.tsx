@@ -4,9 +4,9 @@ import {
     TrendingUp, X, Edit3, AlertCircle, Search, Package
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
-import { createFinanceService } from "../services/finance";
-
-const financeService = createFinanceService();
+import { withoutDeleted } from "../utils/softDelete";
+import { PAGE_SIZE } from "../constants/pagination";
+import { Pagination } from "../components/Pagination";
 
 type Supplier = {
     id: string;
@@ -112,6 +112,8 @@ export const Suppliers = () => {
     const [balances, setBalances] = useState<SupplierBalance[]>([]);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
+    const [page, setPage] = useState(0);
+    const [totalPages, setTotalPages] = useState(0);
     const [success, setSuccess] = useState("");
     const [searchQuery, setSearchQuery] = useState("");
     const [dashFilter, setDashFilter] = useState<DashboardFilter>("all");
@@ -146,7 +148,6 @@ export const Suppliers = () => {
     const [productFormSaving, setProductFormSaving] = useState(false);
 
     const [transactions, setTransactions] = useState<SupplierTransaction[]>([]);
-    const [cancellingTxId, setCancellingTxId] = useState<string | null>(null);
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentAmount, setPaymentAmount] = useState("");
@@ -161,13 +162,17 @@ export const Suppliers = () => {
             setErr("");
             const ctx = await getContext();
 
-            const { data, error } = await supabase
+            const { data, error, count } = await withoutDeleted(supabase
                 .from("suppliers")
-                .select("id, name, phone, email, address, created_at")
-                .eq("company_id", ctx.company_id)
-                .order("name");
+                .select("id, name, phone, email, address, created_at", { count: 'exact' })
+                .eq("company_id", ctx.company_id))
+                .order("name")
+                .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
             if (error) throw error;
+
+            setTotalPages(Math.ceil((count || 0) / PAGE_SIZE));
+
             const list = (data ?? []) as Supplier[];
             setSuppliers(list);
 
@@ -230,7 +235,7 @@ export const Suppliers = () => {
                     };
                 })
             );
-        } catch { /* yoksay */ }
+        } catch { }
     }
 
     async function createSupplier() {
@@ -360,7 +365,7 @@ export const Suppliers = () => {
                 description: row.description || "",
                 created_at: row.created_at
             })));
-        } catch { /* yoksay */ }
+        } catch { }
     }
 
     async function updateSupplier() {
@@ -424,44 +429,19 @@ export const Suppliers = () => {
 
     async function handleDeleteTransaction(txId: string) {
         if (!selectedSupplier) return;
-        const tx = transactions.find((t) => t.id === txId);
-        if (!tx) return;
-
-        // Hard delete KALDIRILDI: supplier_transactions satırları burada artık
-        // silinmiyor (ters kayıt / hard-delete-yok mimarisini bozuyordu ve
-        // bağlı expense kaydı orphan kalabiliyordu — expense_id bu ekranda hiç
-        // okunmuyordu). Yalnızca 'payment' türü kayıtlar
-        // SupplierPaymentService.cancelPayment (reverse-entry) ile iptal
-        // edilebilir. Diğer türler (debt/cancel/payment_reversal) için bu
-        // ekranda bir servis/RPC yok — bu yüzden silme işlemi engellenir.
-        if (tx.transaction_type !== "payment") {
-            alert("Bu işlem türü silinemez. Yalnızca ödeme kayıtları iptal edilebilir.");
-            return;
-        }
-
-        setCancellingTxId(txId);
         try {
-            const ctx = await getContext();
-            const result = await financeService.supplierPayments.cancelPayment({
-                companyId: ctx.company_id,
-                transactionId: txId,
-                idempotencyKey: crypto.randomUUID(),
-            });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
+            const { error } = await supabase
+                .from("supplier_transactions")
+                .delete()
+                .eq("id", txId);
+            if (error) throw error;
 
-            setSuccess("Ödeme iptal edildi");
+            setSuccess("Cari işlemi silindi");
             await loadSupplierTransactions(selectedSupplier.id);
             await loadSuppliers();
             setTimeout(() => setSuccess(""), 3000);
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            alert(msg.includes("supplier_cancel_payment")
-                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Ödeme iptal edilemedi"));
-        } finally {
-            setCancellingTxId(null);
+            alert(e?.message ?? "Cari işlem silinemedi");
         }
     }
 
@@ -476,21 +456,22 @@ export const Suppliers = () => {
             const ctx = await getContext();
             const amount = Number(paymentAmount);
 
-            // supplier_transactions + expenses tek atomik RPC çağrısında yazılıyor
-            // (eski, expenses'e hiç yazmayan doğrudan insert'in yerine geçer) —
-            // SupplierDetail/SupplierLedger/Accounting ile aynı mekanizma.
-            const result = await financeService.supplierPayments.recordPayment({
-                companyId: ctx.company_id,
-                supplierId: selectedSupplier.id,
-                amount,
-                method: paymentMethod,
-                date: new Date(paymentDate).toISOString(),
-                note: paymentNote || `${paymentMethod} ile ödeme`,
-                idempotencyKey: crypto.randomUUID(),
-            });
-            if (result.status !== "success") {
-                throw result.status === "error" ? result.error : new Error(result.reason);
-            }
+            const { error } = await supabase
+                .from("supplier_transactions")
+                .insert([{
+                    company_id: ctx.company_id,
+                    supplier_id: selectedSupplier.id,
+                    transaction_type: "payment",
+                    amount,
+                    description: paymentNote || `${paymentMethod} ile ödeme`,
+                    transaction_date: new Date(paymentDate).toISOString(),
+                    payment_method: paymentMethod,
+                    reference_no: null,
+                    order_id: null,
+                    order_item_id: null
+                }]);
+
+            if (error) throw error;
 
             setSuccess("Ödeme kaydedildi!");
             setPaymentAmount("");
@@ -504,10 +485,7 @@ export const Suppliers = () => {
 
             setTimeout(() => setSuccess(""), 3000);
         } catch (e: any) {
-            const msg = String(e?.message || "");
-            alert(msg.includes("supplier_record_payment")
-                ? "Tedarikçi ödeme servisi bulunamadı. supabase_supplier_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
-                : (e?.message ?? "Ödeme kaydedilemedi"));
+            alert(e?.message ?? "Ödeme kaydedilemedi");
         } finally {
             setPaymentSaving(false);
         }
@@ -532,11 +510,11 @@ export const Suppliers = () => {
             };
             
             // Upsert products table manually to avoid unique constraint issues
-            const prodRes: any = await supabase.from("products").select("id").eq("company_id", ctx.company_id).eq("name", prodPayload.name).single();
+            let prodRes: any = await supabase.from("products").select("id").eq("company_id", ctx.company_id).eq("name", prodPayload.name).single();
             if (prodRes.data?.id) {
                 await supabase.from("products").update(prodPayload).eq("id", prodRes.data.id);
             } else {
-                const insRes: any = await supabase.from("products").insert([prodPayload]).select("id").single();
+                let insRes: any = await supabase.from("products").insert([prodPayload]).select("id").single();
                 if (insRes.error && /cost_price/i.test(String(insRes.error.message))) {
                     const fb = { ...prodPayload } as any; delete fb.cost_price;
                     await supabase.from("products").insert([fb]);
@@ -553,7 +531,7 @@ export const Suppliers = () => {
             };
             
             // Check existence manually to prevent duplicates
-            const existingPriceRes = await supabase.from("supplier_product_prices")
+            let existingPriceRes = await supabase.from("supplier_product_prices")
                 .select("id")
                 .eq("company_id", ctx.company_id)
                 .eq("supplier_id", selectedSupplier.id)
@@ -561,7 +539,7 @@ export const Suppliers = () => {
                 .single();
 
             let isUpdate = false;
-            const targetId = editingProductId || existingPriceRes.data?.id;
+            let targetId = editingProductId || existingPriceRes.data?.id;
 
             if (targetId) {
                 // Update
@@ -688,8 +666,8 @@ export const Suppliers = () => {
 
     useEffect(() => {
         loadSuppliers();
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnız mount'ta bir kez yükle
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
 
     return (
         <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -780,8 +758,9 @@ export const Suppliers = () => {
                         {suppliers.length === 0 ? "Henüz tedarikçi yok" : "Arama sonucu bulunamadı"}
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {filteredSuppliers.map((supplier) => {
+                    <div className="flex flex-col">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {filteredSuppliers.map((supplier) => {
                             const bal = balances.find(b => b.supplierId === supplier.id);
                             const firstLetter = getFirstLetter(supplier.name);
 
@@ -822,22 +801,22 @@ export const Suppliers = () => {
                                         </div>
 
                                         {/* Finance Summary */}
-                                        <div className="grid grid-cols-3 gap-2 pt-2">
-                                            <div className="min-w-0 rounded-2xl bg-gradient-to-br from-red-50 to-red-100/50 dark:from-red-950/40 dark:to-red-900/20 p-2.5 text-center border border-red-100 dark:border-red-900/30">
-                                                <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Borç</p>
-                                                <p className="mt-1 text-sm sm:text-base lg:text-lg font-black text-red-600 dark:text-red-400 tabular-nums leading-tight break-words">
+                                        <div className="grid grid-cols-3 gap-3 pt-2">
+                                            <div className="rounded-2xl bg-gradient-to-br from-red-50 to-red-100/50 dark:from-red-950/40 dark:to-red-900/20 p-4 text-center border border-red-100 dark:border-red-900/30">
+                                                <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Borç</p>
+                                                <p className="text-2xl font-black text-red-600 dark:text-red-400 mt-2">
                                                     {formatTL(bal?.totalDebt ?? 0)}
                                                 </p>
                                             </div>
-                                            <div className="min-w-0 rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-emerald-950/40 dark:to-emerald-900/20 p-2.5 text-center border border-emerald-100 dark:border-emerald-900/30">
-                                                <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Ödenen</p>
-                                                <p className="mt-1 text-sm sm:text-base lg:text-lg font-black text-emerald-600 dark:text-emerald-400 tabular-nums leading-tight break-words">
+                                            <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-emerald-950/40 dark:to-emerald-900/20 p-4 text-center border border-emerald-100 dark:border-emerald-900/30">
+                                                <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Ödenen</p>
+                                                <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-2">
                                                     {formatTL(bal?.totalPaid ?? 0)}
                                                 </p>
                                             </div>
-                                            <div className={`min-w-0 rounded-2xl bg-gradient-to-br p-2.5 text-center border ${bal && bal.balance > 0 ? "from-orange-50 to-orange-100/50 dark:from-orange-950/40 dark:to-orange-900/20 border-orange-100 dark:border-orange-900/30" : "from-slate-50 to-slate-100/50 dark:from-slate-950 dark:to-slate-900 border-slate-100 dark:border-slate-800"}`}>
-                                                <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Kalan</p>
-                                                <p className={`mt-1 text-sm sm:text-base lg:text-lg font-black tabular-nums leading-tight break-words ${bal && bal.balance > 0 ? "text-orange-600 dark:text-orange-400" : "text-slate-400 dark:text-slate-600"}`}>
+                                            <div className={`rounded-2xl bg-gradient-to-br p-4 text-center border ${bal && bal.balance > 0 ? "from-orange-50 to-orange-100/50 dark:from-orange-950/40 dark:to-orange-900/20 border-orange-100 dark:border-orange-900/30" : "from-slate-50 to-slate-100/50 dark:from-slate-950 dark:to-slate-900 border-slate-100 dark:border-slate-800"}`}>
+                                                <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Kalan</p>
+                                                <p className={`text-2xl font-black mt-2 ${bal && bal.balance > 0 ? "text-orange-600 dark:text-orange-400" : "text-slate-400 dark:text-slate-600"}`}>
                                                     {formatTL(bal?.balance ?? 0)}
                                                 </p>
                                             </div>
@@ -893,14 +872,26 @@ export const Suppliers = () => {
                                     </div>
                                 </div>
                             );
-                        })}
+                            })}
+                        </div>
+
+                        {filteredSuppliers.length > 0 && totalPages > 0 && (
+                            <div className="mt-6">
+                                <Pagination
+                                    currentPage={page}
+                                    totalPages={totalPages}
+                                    onPageChange={setPage}
+                                    isLoading={loading}
+                                />
+                            </div>
+                        )}
                     </div>
                 )}
 
                 {showNewSupplierModal && (
-                    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-                        <div className="bg-white dark:bg-slate-900 w-full sm:max-w-xl sm:rounded-3xl rounded-t-3xl shadow-2xl flex flex-col max-h-[90vh] sm:max-h-[85vh]">
-                            <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800 shrink-0">
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[90vh] overflow-y-auto w-full max-w-2xl shadow-2xl">
+                            <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
                                 <h2 className="text-2xl font-black text-slate-900 dark:text-white">Yeni Tedarikçi Ekle</h2>
                                 <button
                                     onClick={() => setShowNewSupplierModal(false)}
@@ -910,7 +901,7 @@ export const Suppliers = () => {
                                 </button>
                             </div>
 
-                            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
+                            <div className="p-6 space-y-4">
                                 <div>
                                     <label className="block text-sm font-semibold mb-2">Firma Adı *</label>
                                     <input
@@ -954,7 +945,7 @@ export const Suppliers = () => {
                                 </div>
                             </div>
 
-                            <div className="flex gap-3 p-4 sm:p-6 border-t border-slate-200 dark:border-slate-800 shrink-0 pb-safe sm:pb-6">
+                            <div className="sticky bottom-0 flex gap-3 p-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
                                 <button
                                     onClick={() => setShowNewSupplierModal(false)}
                                     className="flex-1 px-6 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition"
@@ -1241,7 +1232,7 @@ export const Suppliers = () => {
                                                             <p className={`font-black text-lg ${tx.transaction_type === "debt" ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                                                                 {tx.transaction_type === "debt" ? "+" : "-"}{formatTL(tx.amount)}
                                                             </p>
-                                                            <button type="button" onClick={() => handleDeleteTransaction(tx.id)} disabled={cancellingTxId === tx.id} className="p-2 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/50 dark:hover:text-red-400 rounded-lg transition disabled:opacity-60" title="İşlemi Sil">
+                                                            <button type="button" onClick={() => handleDeleteTransaction(tx.id)} className="p-2 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/50 dark:hover:text-red-400 rounded-lg transition" title="İşlemi Sil">
                                                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                                             </button>
                                                         </div>
@@ -1297,18 +1288,7 @@ export const Suppliers = () => {
                                                     {transactions.filter(t => t.transaction_type === "payment").map(tx => (
                                                         <div key={tx.id} className="flex items-center justify-between text-sm">
                                                             <span className="text-slate-600 dark:text-slate-400">{new Date(tx.created_at).toLocaleDateString("tr-TR")}</span>
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-bold text-emerald-600 dark:text-emerald-400">-{formatTL(tx.amount)}</span>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleDeleteTransaction(tx.id)}
-                                                                    disabled={cancellingTxId === tx.id}
-                                                                    className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900/40 dark:text-rose-400"
-                                                                    title="Ödemeyi İptal Et"
-                                                                >
-                                                                    {cancellingTxId === tx.id ? "İptal ediliyor..." : "İptal Et"}
-                                                                </button>
-                                                            </div>
+                                                            <span className="font-bold text-emerald-600 dark:text-emerald-400">-{formatTL(tx.amount)}</span>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -1357,9 +1337,9 @@ export const Suppliers = () => {
                 )}
 
                 {showPaymentModal && selectedSupplier && selectedBalance && (
-                    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-                        <div className="bg-white dark:bg-slate-900 w-full sm:max-w-xl sm:rounded-3xl rounded-t-3xl shadow-2xl flex flex-col max-h-[90vh] sm:max-h-[85vh]">
-                            <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800 shrink-0">
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[90vh] overflow-y-auto w-full max-w-xl shadow-2xl">
+                            <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800">
                                 <h2 className="text-2xl font-black text-slate-900 dark:text-white">Ödeme Yap</h2>
                                 <button
                                     onClick={() => setShowPaymentModal(false)}
@@ -1369,7 +1349,7 @@ export const Suppliers = () => {
                                 </button>
                             </div>
 
-                            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
+                            <div className="p-6 space-y-4">
                                 <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
                                     <div className="grid grid-cols-3 gap-3 text-center">
                                         <div>
@@ -1440,7 +1420,7 @@ export const Suppliers = () => {
                                 </div>
                             </div>
 
-                            <div className="flex gap-3 p-4 sm:p-6 border-t border-slate-200 dark:border-slate-800 shrink-0 pb-safe sm:pb-6">
+                            <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-slate-800">
                                 <button
                                     onClick={() => setShowPaymentModal(false)}
                                     className="flex-1 px-6 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition"

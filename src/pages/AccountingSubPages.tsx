@@ -4,6 +4,7 @@ import { ArrowLeft, Download, FileText, Plus, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
+import { logAction } from "../utils/audit";
 
 type IncomeRow = {
     id: string;
@@ -25,7 +26,6 @@ type ExpenseRow = {
     status: string | null;
     note: string | null;
     due_date?: string | null;
-    order_id?: string | null;
     document_no?: string | null;
     is_installment?: boolean | null;
     installment_count?: number | null;
@@ -187,30 +187,36 @@ export function IncomePage() {
         const value = Number(amount);
         if (!companyId || !Number.isFinite(value) || value <= 0) return;
         const nowIso = new Date().toISOString();
-        const { error } = await supabase.from("income").insert({
-            company_id: companyId,
-            income_date: nowIso,
-            amount: value,
-            payment_method: method || null,
-            description: description || "Gelir kaydı",
-            source: "other",
-        });
-        if (error) {
-            alert(error.message);
-            return;
+        try {
+            // Use atomic RPC function for income entry with transaction log
+            const { data, error } = await supabase.rpc("record_income_entry", {
+                p_company_id: companyId,
+                p_income_date: nowIso,
+                p_amount: value,
+                p_payment_method: method || null,
+                p_description: description || "Gelir kaydı",
+                p_source: "other",
+                p_create_transaction: true,
+            });
+
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Gelir kaydedilemedi.");
+
+            // Log audit trail (fire-and-forget)
+            logAction("income_created", "income", data.income_id || "", {
+                amount: value,
+                payment_method: method,
+                source: "other",
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
+
+            setAmount("");
+            setDescription("");
+            setMethod("");
+            await loadData();
+        } catch (e: any) {
+            alert(e?.message ?? "Gelir kaydedilemedi.");
         }
-        await supabase.from("transactions").insert({
-            company_id: companyId,
-            tx_date: nowIso,
-            type: "income",
-            direction: "in",
-            amount: value,
-            description: description || "Gelir kaydı",
-        });
-        setAmount("");
-        setDescription("");
-        setMethod("");
-        await loadData();
     }
 
     const total = useMemo(() => rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
@@ -273,7 +279,7 @@ export function ExpensesPage() {
         }
         let res: any = await supabase
             .from("expenses")
-            .select("id, expense_date, amount, category, vendor, payment_method, status, note, due_date, order_id, document_no, is_installment, installment_count, is_recurring")
+            .select("id, expense_date, amount, category, vendor, payment_method, status, note, due_date, document_no, is_installment, installment_count, is_recurring")
             .eq("company_id", cid)
             .order("expense_date", { ascending: false });
         if (res.error) {
@@ -295,78 +301,61 @@ export function ExpensesPage() {
         const value = Number(amount);
         if (!companyId || !Number.isFinite(value) || value <= 0) return;
         const expenseDateIso = expenseDate ? new Date(`${expenseDate}T12:00:00`).toISOString() : new Date().toISOString();
-        const dueDateIso = dueDate ? new Date(`${dueDate}T12:00:00`).toISOString() : null;
-        let { error } = await supabase.from("expenses").insert({
-            company_id: companyId,
-            expense_date: expenseDateIso,
-            amount: value,
-            category: category || null,
-            vendor: vendor || null,
-            payment_method: method || null,
-            note: [
+        try {
+            const noteText = [
                 needsPeriod ? `İlgili ay: ${periodMonth}` : null,
                 documentNo ? `Belge/Fatura No: ${documentNo}` : null,
                 isInstallment ? `Taksit: ${installmentCount || "1"} taksit` : null,
                 isRecurring ? "Tekrarlayan ödeme" : null,
                 description || null,
-            ].filter(Boolean).join("\n") || null,
-            status,
-            due_date: dueDateIso,
-            document_no: documentNo || null,
-            is_installment: isInstallment,
-            installment_count: isInstallment ? Number(installmentCount || 1) : null,
-            is_recurring: isRecurring,
-        });
-        if (error && /(due_date|document_no|is_installment|installment_count|is_recurring)/i.test(error.message || "")) {
-            const retry = await supabase.from("expenses").insert({
-                company_id: companyId,
-                expense_date: expenseDateIso,
-                amount: value,
-                category: category || null,
-                vendor: vendor || null,
-                payment_method: method || null,
-                note: [
-                    needsPeriod ? `İlgili ay: ${periodMonth}` : null,
-                    documentNo ? `Belge/Fatura No: ${documentNo}` : null,
-                    isInstallment ? `Taksit: ${installmentCount || "1"} taksit` : null,
-                    isRecurring ? "Tekrarlayan ödeme" : null,
-                    description || null,
-                ].filter(Boolean).join("\n") || null,
-                status,
+            ].filter(Boolean).join("\n") || null;
+
+            // Use atomic RPC function for expense entry with optional transaction log
+            const { data, error } = await supabase.rpc("record_expense_entry", {
+                p_company_id: companyId,
+                p_expense_date: expenseDateIso,
+                p_amount: value,
+                p_category: category || null,
+                p_description: [category || vendor || "Gider kaydı", needsPeriod ? periodMonth : null].filter(Boolean).join(" - "),
+                p_note: noteText,
+                p_payment_method: method || null,
+                p_status: status,
+                p_create_transaction: true,
             });
-            error = retry.error;
+
+            if (error) throw error;
+            if (!data?.success) throw new Error(data?.error || "Gider kaydedilemedi.");
+
+            // Log audit trail (fire-and-forget)
+            logAction("expense_created", "expense", data.expense_id || "", {
+                amount: value,
+                category,
+                payment_method: method,
+                status,
+                timestamp: new Date().toISOString()
+            }).catch(err => console.error("Audit log failed:", err));
+
+            setAmount("");
+            setExpenseDate(new Date().toISOString().slice(0, 10));
+            setDueDate("");
+            setDocumentNo("");
+            setCategory(EXPENSE_CATEGORIES[0]);
+            setPeriodMonth(MONTHS_TR[new Date().getMonth()]);
+            setVendor("");
+            setMethod("");
+            setStatus("paid");
+            setIsInstallment(false);
+            setInstallmentCount("1");
+            setIsRecurring(false);
+            setDescription("");
+            await loadData();
+        } catch (e: any) {
+            alert(e?.message ?? "Gider kaydedilemedi.");
         }
-        if (error) {
-            alert(error.message);
-            return;
-        }
-        await supabase.from("transactions").insert({
-            company_id: companyId,
-            tx_date: expenseDateIso,
-            type: "expense",
-            direction: "out",
-            amount: value,
-            description: [category || vendor || "Gider kaydı", needsPeriod ? periodMonth : null].filter(Boolean).join(" - "),
-        });
-        setAmount("");
-        setExpenseDate(new Date().toISOString().slice(0, 10));
-        setDueDate("");
-        setDocumentNo("");
-        setCategory(EXPENSE_CATEGORIES[0]);
-        setPeriodMonth(MONTHS_TR[new Date().getMonth()]);
-        setVendor("");
-        setMethod("");
-        setStatus("paid");
-        setIsInstallment(false);
-        setInstallmentCount("1");
-        setIsRecurring(false);
-        setDescription("");
-        await loadData();
     }
 
     const total = useMemo(() => rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
-    // Sipariş tedarikçi accrual'ı (order_id dolu) "Bekleyen"e girmez — ödenme durumu cari'de tutulur.
-    const pending = useMemo(() => rows.filter((x) => !x.order_id && (x.status || "paid") !== "paid").reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
+    const pending = useMemo(() => rows.filter((x) => (x.status || "paid") !== "paid").reduce((sum, row) => sum + Number(row.amount ?? 0), 0), [rows]);
 
     return (
         <div className="mx-auto max-w-7xl space-y-5 pb-24">

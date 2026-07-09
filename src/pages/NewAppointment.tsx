@@ -11,6 +11,7 @@ import {
     type ReminderOffset,
     type ReminderTaskType,
 } from "../utils/localNotifications";
+import { notifyAppointmentReminder } from "../services/notificationManager";
 import {
     Calendar,
     CheckCircle2,
@@ -31,6 +32,7 @@ type Customer = {
     name: string | null;
     phone: string | null;
     address: string | null;
+    email?: string | null;
 };
 
 type StaffMember = {
@@ -185,7 +187,7 @@ export default function NewAppointment() {
                 const [custRes, memberRes, employeeRes, profileRes] = await Promise.all([
                     supabase
                         .from("customers")
-                        .select("id, name, phone, address")
+                        .select("id, name, phone, address, email")
                         .eq("company_id", ctx.company_id)
                         .order("name"),
                     supabase.from("company_members").select("user_id").eq("company_id", ctx.company_id),
@@ -527,6 +529,21 @@ export default function NewAppointment() {
                     detailUrl: `/appointments/${appointmentId}`,
                 });
 
+                // Send appointment reminder email to customer (fire-and-forget)
+                if (customerMode === "existing") {
+                  const customer = customers.find(c => c.id === customerId);
+                  if (customer?.email) {
+                    notifyAppointmentReminder({
+                      customerEmail: customer.email,
+                      customerName: displayCustomerName,
+                      appointmentId,
+                      scheduledAt: startAt,
+                      address: address.trim() || undefined,
+                      serviceType: title,
+                    }).catch(err => console.error("Appointment notification failed:", err));
+                  }
+                }
+
                 if (userId) {
                     const d = new Date(startAt);
                     const dateLabel = `${d.getDate().toString().padStart(2, "0")}.${(d.getMonth() + 1).toString().padStart(2, "0")}.${d.getFullYear()} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
@@ -537,7 +554,7 @@ export default function NewAppointment() {
                             message: `${title} — ${displayCustomerName || "Müşteri"}, ${dateLabel}`,
                             type: "info",
                         }]);
-                    } catch { /* yoksay */ }
+                    } catch { }
                 }
             }
 

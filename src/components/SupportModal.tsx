@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useSupportModal } from "../context/SupportModalContext";
-import { getCapturedErrorsForSupport } from "../utils/consoleCapture";
 import {
     X,
     Send,
@@ -33,14 +32,9 @@ function collectTechnicalInfo() {
         os,
         user_agent: ua.slice(0, 300),
         screen: `${window.screen.width}x${window.screen.height}`,
-        viewport: `${window.innerWidth}x${window.innerHeight}`,
-        platform: (window as any).Capacitor?.isNativePlatform?.() ? "native" : "web",
         app_version: String(import.meta.env.VITE_APP_VERSION || "0.0.0"),
         route: window.location.hash || "/",
         timestamp: new Date().toISOString(),
-        // Otomatik yakalanan console/hata kayıtları — kullanıcı "sipariş görünmüyor"
-        // dese bile süper admin arkadaki hatayı görebilir.
-        console_errors: getCapturedErrorsForSupport(),
     };
 }
 
@@ -192,12 +186,10 @@ export default function SupportModal({ companyId, userId }: SupportModalProps) {
                                         onChange={(e)=>setFormData({ category: e.target.value })}
                                         className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-bold text-sm"
                                     >
-                                        <option value="order">Sipariş</option>
-                                        <option value="measurement">Ölçü / Teklif</option>
-                                        <option value="installation">Montaj</option>
-                                        <option value="supplier">Tedarikçi</option>
-                                        <option value="customer">Müşteri</option>
-                                        <option value="payment">Ödeme / Tahsilat</option>
+                                        <option value="bug">Hata Bildirimi</option>
+                                        <option value="question">Soru / Yardım</option>
+                                        <option value="request">Özellik İsteği</option>
+                                        <option value="payment">Ödeme / Abonelik</option>
                                         <option value="other">Diğer</option>
                                     </select>
                                 </div>

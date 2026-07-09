@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase, getEffectiveTenantContext } from "../supabaseClient";
-import { Upload, X, Check, Loader2, Bell, LifeBuoy, Download } from "lucide-react";
-import { exportBackupWorkbook } from "../utils/backupExport";
+import { supabase } from "../supabaseClient";
+import { Upload, X, Check, Loader2, Bell, LifeBuoy } from "lucide-react";
 
 type MyTicket = {
     id: string;
@@ -39,20 +38,6 @@ export const Settings = () => {
     const [notificationSettings, setNotificationSettings] = useState(() => getNotificationSettings());
     const [myTickets, setMyTickets] = useState<MyTicket[]>([]);
     const [ticketsLoading, setTicketsLoading] = useState(false);
-
-    // Yedekleme / Dışa Aktarma (Sadece Admin)
-    const [expFrom, setExpFrom] = useState(() => {
-        const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
-    });
-    const [expTo, setExpTo] = useState(() => new Date().toISOString().slice(0, 10));
-    const [expCustomer, setExpCustomer] = useState("");
-    const [expSupplier, setExpSupplier] = useState("");
-    const [expInstaller, setExpInstaller] = useState("");
-    const [exporting, setExporting] = useState(false);
-    const [expCustomers, setExpCustomers] = useState<Array<{ id: string; name: string }>>([]);
-    const [expSuppliers, setExpSuppliers] = useState<Array<{ id: string; name: string }>>([]);
-    const [expInstallers, setExpInstallers] = useState<Array<{ id: string; name: string }>>([]);
 
     useEffect(() => {
         async function loadProfile() {
@@ -95,14 +80,12 @@ export const Settings = () => {
             try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return;
-                const ticketsRes = await supabase
+                let { data, error } = await supabase
                     .from("support_tickets")
                     .select("id, title, status, admin_response, created_at")
                     .eq("user_id", user.id)
                     .order("created_at", { ascending: false })
                     .limit(20);
-                let data = ticketsRes.data;
-                const error = ticketsRes.error;
                 if (error) {
                     // admin_response kolonu henüz yoksa onsuz dene
                     const fb = await supabase
@@ -241,53 +224,6 @@ export const Settings = () => {
 
     const isAdmin = role === "admin";
 
-    // Dışa aktarma filtre seçenekleri (müşteri/tedarikçi/montajcı) — yalnız admin.
-    useEffect(() => {
-        if (role !== "admin") return;
-        let alive = true;
-        (async () => {
-            try {
-                const ctx = await getEffectiveTenantContext();
-                const [cs, ss, es] = await Promise.all([
-                    supabase.from("customers").select("id,name").eq("company_id", ctx.company_id).order("name", { ascending: true }),
-                    supabase.from("suppliers").select("id,name").eq("company_id", ctx.company_id).order("name", { ascending: true }),
-                    supabase.from("employees").select("id,full_name").eq("company_id", ctx.company_id).order("full_name", { ascending: true }),
-                ]);
-                if (!alive) return;
-                setExpCustomers((cs.data ?? []).map((c: any) => ({ id: c.id, name: c.name || "İsimsiz" })));
-                setExpSuppliers((ss.data ?? []).map((s: any) => ({ id: s.id, name: s.name || "İsimsiz" })));
-                setExpInstallers((es.data ?? []).map((e: any) => ({ id: e.id, name: e.full_name || "Montajcı" })));
-            } catch {
-                // sessiz — filtreler boş kalır, tarih aralığıyla yine dışa aktarılır
-            }
-        })();
-        return () => { alive = false; };
-    }, [role]);
-
-    async function handleExportBackup() {
-        if (!expFrom || !expTo) { setMessage({ type: "error", text: "Başlangıç ve bitiş tarihi seçin." }); return; }
-        if (expFrom > expTo) { setMessage({ type: "error", text: "Başlangıç tarihi bitiş tarihinden sonra olamaz." }); return; }
-        setExporting(true);
-        setMessage(null);
-        try {
-            const ctx = await getEffectiveTenantContext();
-            const res = await exportBackupWorkbook({
-                companyId: ctx.company_id,
-                dateFrom: expFrom,
-                dateTo: expTo,
-                customerId: expCustomer || null,
-                supplierId: expSupplier || null,
-                installerId: expInstaller || null,
-            });
-            const total = Object.values(res.sheetCounts).reduce((a, b) => a + b, 0);
-            setMessage({ type: "success", text: `${res.filename} indirildi — ${total} kayıt, 8 sayfa.` });
-        } catch (e: any) {
-            setMessage({ type: "error", text: e?.message ?? "Dışa aktarma başarısız oldu." });
-        } finally {
-            setExporting(false);
-        }
-    }
-
     return (
         <div className="mx-auto max-w-4xl space-y-6 pb-24">
             <div>
@@ -357,67 +293,6 @@ export const Settings = () => {
                                 <p className="text-[11px] text-slate-400">PNG, JPG veya SVG (Önerilen: Kare, max 2MB)</p>
                             </div>
                         </div>
-                    </div>
-                )}
-
-                {/* YEDEKLEME / DIŞA AKTARMA (Sadece Admin) */}
-                {isAdmin && (
-                    <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
-                        <div className="flex items-center gap-2">
-                            <Download className="w-5 h-5 text-primary-600" />
-                            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Yedekleme / Dışa Aktarma</h3>
-                        </div>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                            Seçtiğiniz tarih aralığındaki kayıtları çok sayfalı Excel (.xlsx) olarak indirin.
-                        </p>
-
-                        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <label className="flex flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Başlangıç Tarihi</span>
-                                <input type="date" value={expFrom} onChange={(e) => setExpFrom(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm" />
-                            </label>
-                            <label className="flex flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Bitiş Tarihi</span>
-                                <input type="date" value={expTo} onChange={(e) => setExpTo(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm" />
-                            </label>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <label className="flex flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Müşteri (opsiyonel)</span>
-                                <select value={expCustomer} onChange={(e) => setExpCustomer(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
-                                    <option value="">Tümü</option>
-                                    {expCustomers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
-                            </label>
-                            <label className="flex flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Tedarikçi (opsiyonel)</span>
-                                <select value={expSupplier} onChange={(e) => setExpSupplier(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
-                                    <option value="">Tümü</option>
-                                    {expSuppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                </select>
-                            </label>
-                            <label className="flex flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Montajcı (opsiyonel)</span>
-                                <select value={expInstaller} onChange={(e) => setExpInstaller(e.target.value)} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent px-3 py-2.5 text-sm">
-                                    <option value="">Tümü</option>
-                                    {expInstallers.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-                                </select>
-                            </label>
-                        </div>
-
-                        <button
-                            onClick={handleExportBackup}
-                            disabled={exporting}
-                            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white px-5 py-2.5 text-sm font-bold shadow-sm disabled:opacity-60"
-                        >
-                            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                            {exporting ? "Hazırlanıyor..." : "Excel'e Aktar"}
-                        </button>
-
-                        <p className="mt-3 text-xs text-slate-400">
-                            Sayfalar: Siparişler · Ölçüler · Teklifler · Müşteriler · Tedarikçi Cari · Montajcı Cari · Tahsilatlar · Ödemeler
-                        </p>
                     </div>
                 )}
 

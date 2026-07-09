@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -208,10 +208,8 @@ const SummaryCard = memo(function SummaryCard({
   data: DashboardData;
 }) {
   const first = data.upcoming[0];
-  // eslint-disable-next-line react-hooks/purity -- görüntü tonu için anlık zaman; saf-render dışı, davranış aynı
-  const nowMs = Date.now();
-  const overdueCount = data.upcoming.filter((item) => item.when.getTime() < nowMs).length + data.overdueCollections.length + data.supplierOverdue.length;
-  const tone = overdueCount > 0 ? "red" : first && first.when.getTime() - nowMs <= 60 * 60 * 1000 ? "amber" : "blue";
+  const overdueCount = data.upcoming.filter((item) => item.when.getTime() < Date.now()).length + data.overdueCollections.length + data.supplierOverdue.length;
+  const tone = overdueCount > 0 ? "red" : first && first.when.getTime() - Date.now() <= 60 * 60 * 1000 ? "amber" : "blue";
   const classes = {
     blue: "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-100",
     amber: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-100",
@@ -258,7 +256,7 @@ const SummaryCard = memo(function SummaryCard({
   );
 });
 
-const MetricCard = memo(function MetricCard({
+function MetricCard({
   title,
   value,
   note,
@@ -294,9 +292,9 @@ const MetricCard = memo(function MetricCard({
       </div>
     </button>
   );
-});
+}
 
-const ActionButton = memo(function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any; onClick: () => void }) {
+function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="flex min-h-20 items-center gap-3 rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-primary-200 hover:bg-primary-50/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-primary-950/20">
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary-600 text-white shadow-lg shadow-primary-600/20">
@@ -305,7 +303,7 @@ const ActionButton = memo(function ActionButton({ label, icon: Icon, onClick }: 
       <span className="min-w-0 text-sm font-black text-slate-900 dark:text-white">{label}</span>
     </button>
   );
-});
+}
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -313,17 +311,14 @@ export const Dashboard = () => {
   const [data, setData] = useState<DashboardData>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const previousRoleRef = useRef<{ role: string; realRole: string; viewingUserId: string | null }>({ role: "unknown", realRole: "unknown", viewingUserId: null });
 
   const go = useCallback((path: string, state?: object) => {
     navigate(path, state ? { state } : undefined);
   }, [navigate]);
 
-  const loadDashboard = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadDashboard = useCallback(async () => {
     if (role === "unknown") return;
-    // silent: focus/görünürlük tazelemesinde skeleton gösterme (flicker olmasın); veriler
-    // güncellenince kartlar yerinde değişir. Hesaplama/toplam mantığı aynıdır.
-    if (!opts?.silent) setLoading(true);
+    setLoading(true);
     setError("");
 
     try {
@@ -360,11 +355,11 @@ export const Dashboard = () => {
         supabase.from("installation_jobs").select("id,order_id,customer_name,status,scheduled_date,scheduled_time,total_amount").eq("company_id", ctx.company_id).gte("scheduled_date", todayStr).lte("scheduled_date", weekEnd).order("scheduled_date", { ascending: true }),
         supabase.from("orders").select("id,created_at,status,total_amount,paid_amount,remaining_amount,customer:customers(name)").eq("company_id", ctx.company_id).order("created_at", { ascending: false }).limit(8),
         supabase.from("orders").select("id,remaining_amount,total_amount,paid_amount,payment_due_date,customer:customers(name)").eq("company_id", ctx.company_id).not("payment_due_date", "is", null),
-        supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id),
+        supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id).eq("transaction_type", "debt").not("due_date", "is", null),
         supabase.from("customers").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id),
         supabase.from("income").select("amount,income_date").eq("company_id", ctx.company_id).gte("income_date", todayStart.toISOString()).lte("income_date", todayEnd.toISOString()),
         supabase.from("installation_jobs").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id).eq("status", "completed"),
-        supabase.from("orders").select("id,total_amount,created_at").eq("company_id", ctx.company_id).neq("status", "cancelled").gte("created_at", monthStart.toISOString()).lte("created_at", monthEnd.toISOString()),
+        supabase.from("orders").select("id,total_amount,created_at").eq("company_id", ctx.company_id).gte("created_at", monthStart.toISOString()).lte("created_at", monthEnd.toISOString()),
       ]);
 
       const appointments = appointmentsRes.status === "fulfilled" && !appointmentsRes.value.error ? (appointmentsRes.value.data ?? []) as AppointmentRow[] : [];
@@ -418,26 +413,13 @@ export const Dashboard = () => {
         })
         .filter((row) => row.amount > 0.01 && row.due);
 
-      // Tedarikçi başına NET bakiye (borç - ödeme - iptal) hesapla. Vadeli açık borcu
-      // brüt değil KALAN tutarla göster — ödenmiş/kısmen ödenmiş vadeli borç kartı şişirmesin.
-      const supplierAgg = new Map<string, { name: string; balance: number; earliestDue: string | null }>();
-      for (const row of supplierRows) {
-        const sid = row.supplier_id;
-        if (!sid) continue;
-        const entry = supplierAgg.get(sid) ?? { name: pickOne(row.suppliers)?.name || "Tedarikçi", balance: 0, earliestDue: null };
-        const amt = Number(row.amount ?? 0);
-        if (row.transaction_type === "debt") entry.balance += amt;
-        else if (row.transaction_type === "payment" || row.transaction_type === "cancel") entry.balance -= amt;
-        // Vade yalnızca borç satırında anlamlı — en erken (en acil) vadeyi tut.
-        if (row.transaction_type === "debt" && row.due_date) {
-          if (!entry.earliestDue || row.due_date < entry.earliestDue) entry.earliestDue = row.due_date;
-        }
-        supplierAgg.set(sid, entry);
-      }
-
-      const supplierDueRows: SupplierDueRow[] = Array.from(supplierAgg.values())
-        .filter((e) => e.earliestDue && e.balance > 0.01)
-        .map((e) => ({ name: e.name, amount: e.balance, due: e.earliestDue as string }));
+      const supplierDueRows: SupplierDueRow[] = supplierRows
+        .map((row) => ({
+          name: pickOne(row.suppliers)?.name || "Tedarikçi",
+          amount: Number(row.amount ?? 0),
+          due: row.due_date,
+        }))
+        .filter((row) => row.amount > 0.01 && row.due);
 
       const upcoming: WorkItem[] = [
         ...appointments
@@ -522,35 +504,7 @@ export const Dashboard = () => {
   }, [role, realRole, viewingUserId]);
 
   useEffect(() => {
-    // Only reload if actual role values changed (not just reference changes)
-    const prevRole = previousRoleRef.current;
-    const roleChanged = prevRole.role !== role || prevRole.realRole !== realRole || prevRole.viewingUserId !== viewingUserId;
-
-    if (roleChanged) {
-      previousRoleRef.current = { role, realRole, viewingUserId };
-      void loadDashboard();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnız rol değişiminde yükle (previousRoleRef guard'lı)
-  }, [role, realRole, viewingUserId]);
-
-  // Pencere/sekme yeniden odaklandığında paneli SESSİZ tazele: başka ekranda/tabda yapılan
-  // işlem (sipariş/tahsilat/iptal vb.) sonrası kartlar bayat kalmasın. Skeleton göstermez
-  // (silent), debounce'lu (3sn) — gereksiz istek yapmaz. Hesaplama/toplam mantığı değişmez.
-  useEffect(() => {
-    let last = Date.now();
-    const refresh = () => {
-      if (document.hidden) return;
-      const now = Date.now();
-      if (now - last < 3000) return;
-      last = now;
-      void loadDashboard({ silent: true });
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
+    void loadDashboard();
   }, [loadDashboard]);
 
   const monthProfit = data.monthSales - data.monthCost;
@@ -595,7 +549,7 @@ export const Dashboard = () => {
           <h2 className="text-lg font-black text-slate-950 dark:text-white">Hızlı İşlemler</h2>
         </div>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <ActionButton label="Yeni Ölçü" icon={Ruler} onClick={() => go("/measurements/new")} />
+          <ActionButton label="Yeni Ölçü" icon={Ruler} onClick={() => go("/measurements/new", { fresh: true })} />
           <ActionButton label="Yeni Sipariş" icon={ShoppingCart} onClick={() => go("/orders/new")} />
           <ActionButton label="Tahsilat Yap" icon={Banknote} onClick={() => go("/accounting")} />
           <ActionButton label="Ödeme Yap" icon={ReceiptText} onClick={() => go("/suppliers")} />

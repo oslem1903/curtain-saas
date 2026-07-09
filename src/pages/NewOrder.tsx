@@ -8,9 +8,6 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getNotificationSettings, scheduleReminderNotification } from "../utils/localNotifications";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
-import { parseFieldInfo, type FieldInfo } from "../utils/fieldInfo";
-import { DELIVERY_DATE_LABEL, todayISO, isValidDeliveryDate, orderDeliveryFields } from "../utils/order";
-import { postSupplierDebt } from "../utils/supplierCari";
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 async function getContext() { return getEffectiveTenantContext(); }
@@ -23,7 +20,7 @@ type MeasuredAppointment = {
     start_at: string | null; room_name?: string | null; width_cm?: number | null; height_cm?: number | null;
     rounded_width_cm?: number | null; rounded_height_cm?: number | null; product_type?: string | null;
     model_name?: string | null; color_name?: string | null; quantity?: number | null; unit_price?: number | null;
-    supplier_id?: string | null; supplier_unit_cost?: number | null; field_info?: any;
+    supplier_id?: string | null; supplier_unit_cost?: number | null;
     customer?: { name: string | null; phone: string | null } | Array<{ name: string | null; phone: string | null }> | null;
 };
 type ProductRow = {
@@ -42,7 +39,6 @@ type OrderItemUI = {
     supplier_id: string; supplier_cost: number; product_type: ProductType; room: string;
     width_cm: number; height_cm: number; qty: number; unit_price: number;
     pile: "2" | "3"; mechanism: "reducer" | "standard"; control_type: "corded" | "tape";
-    field_info?: FieldInfo | null;
 };
 type StaffOption = { id: string; userId: string | null; employeeId: string | null; full_name: string; role: string; };
 
@@ -248,7 +244,6 @@ function buildOrderItemFromAppointment(
         pile: "2",
         mechanism: "standard",
         control_type: "corded",
-        field_info: parseFieldInfo(appt.field_info ?? { color_name: appt.color_name }),
     };
 }
 
@@ -330,10 +325,6 @@ export default function NewOrder() {
     const [apptTitle, setApptTitle] = useState<string>("Ölçü");
     const [apptDate, setApptDate] = useState<string>("");
     const [apptTime, setApptTime] = useState<string>("");
-    // Termin (teslim tarihi) doğrudan sipariş oluştururken zorunludur; orders.delivery_due_date'e yazılır.
-    const [terminDate, setTerminDate] = useState<string>("");
-    // Opsiyonel tedarikçi ödeme vadesi → supplier_transactions.due_date (boşsa yazılmaz).
-    const [supplierDueDate, setSupplierDueDate] = useState<string>("");
     const [apptAddress, setApptAddress] = useState<string>(isQuoteConversion ? (_qs.address ?? "") : "");
     const [products, setProducts] = useState<ProductRow[]>([]);
     const [supplierPrices, setSupplierPrices] = useState<SupplierPriceRow[]>([]);
@@ -415,7 +406,7 @@ export default function NewOrder() {
                         // Genişletilmiş select — measurement_notes, assigned_user_id, rounded_* sütunları
                         // appointments tablosunda olmayabilir; hata alınırsa sadece temel sütunlarla tekrar dener.
                         let q = supabase.from("appointments")
-                            .select("id,customer_id,address,note,measurement_notes,assigned_to,assigned_user_id,start_at,room_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,product_type,model_name,color_name,quantity,unit_price,supplier_id,supplier_unit_cost,field_info,customer:customers(name,phone)")
+                            .select("id,customer_id,address,note,measurement_notes,assigned_to,assigned_user_id,start_at,room_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,product_type,model_name,color_name,quantity,unit_price,supplier_id,supplier_unit_cost,customer:customers(name,phone)")
                             .eq("company_id", ctx.company_id).in("status", ["measured", "done", "planned", "onway"]).eq("type", "measurement")
                             .order("start_at", { ascending: false }).limit(100);
                         if (role === "installer" || role === "measurement" || role === "personnel")
@@ -525,6 +516,7 @@ export default function NewOrder() {
         }
 
         setWantAppointment(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location.state]);
 
     useEffect(() => {
@@ -547,7 +539,7 @@ export default function NewOrder() {
                 // Önce genişletilmiş sütunlarla dene
                 let { data, error } = await supabase
                     .from("appointments")
-                    .select("id,customer_id,address,note,measurement_notes,assigned_to,assigned_user_id,start_at,room_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,product_type,model_name,color_name,quantity,unit_price,supplier_id,supplier_unit_cost,field_info,customer:customers(name,phone)")
+                    .select("id,customer_id,address,note,measurement_notes,assigned_to,assigned_user_id,start_at,room_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,product_type,model_name,color_name,quantity,unit_price,supplier_id,supplier_unit_cost,customer:customers(name,phone)")
                     .eq("id", pendingConvertAppointmentId)
                     .eq("company_id", ctx.company_id)
                     .maybeSingle();
@@ -705,7 +697,6 @@ export default function NewOrder() {
             });
             return changed ? next : prev;
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- productForItem/supplierCostForProduct stabil; kasıtlı bağımlılık listesi
     }, [fabricSupplierId, products, supplierPrices]);
 
     function removeItem(key: string) { setItems((prev) => prev.length <= 1 ? prev : prev.filter((x) => x.key !== key)); }
@@ -799,7 +790,6 @@ export default function NewOrder() {
         if (!companyId) { setErr("Şirket bilgisi yüklenemedi."); return; }
         if (!customerId && !customerInput.trim()) { setErr("Lütfen müşteri seçin."); return; }
         if (itemsComputed.length === 0) { setErr("En az 1 ürün eklemelisiniz."); return; }
-        if (!isValidDeliveryDate(terminDate)) { setErr(`${DELIVERY_DATE_LABEL} zorunludur. Lütfen tarihi girin.`); return; }
         setSaving(true);
         try {
             const supplierPriceWarnings = (await Promise.all(items.map((item) => persistSupplierPurchasePriceForItem(item)))).filter(Boolean);
@@ -824,7 +814,7 @@ export default function NewOrder() {
               if (!it.qty || it.qty <= 0) throw new Error(`${it.product_name || it.product_type}: Miktar 0'dan büyük olmalı`);
             }
 
-            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, ...orderDeliveryFields(terminDate), note: [note.trim(), paymentNote].filter(Boolean).join("\n") || null, status, total_amount: grandTotal, deposit_amount: deposit, paid_amount: Math.max(deposit, status === "paid" ? grandTotal : 0), remaining_amount: status === "paid" ? 0 : remaining, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: assignedUserId || null }]).select("id").single();
+            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: [note.trim(), paymentNote].filter(Boolean).join("\n") || null, status, total_amount: grandTotal, deposit_amount: deposit, paid_amount: Math.max(deposit, status === "paid" ? grandTotal : 0), remaining_amount: status === "paid" ? 0 : remaining, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: assignedUserId || null }]).select("id").single();
             if (orderErr) throw orderErr;
             const orderId = orderRow.id;
 
@@ -837,12 +827,7 @@ export default function NewOrder() {
               }
             }
 
-            const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type, swatch_photo_url: it.field_info?.swatch_photo_url ?? null, field_info: it.field_info ?? null } }));
-            // TODO(v2 — order item bazlı teslim): Şu an teslim tarihi sipariş seviyesinde
-            // (orders.delivery_due_date) tutuluyor. İleride her order_item kendi teslim
-            // tarihini taşıyabilir (kısmi/eksik teslim, montaj planlama). Bu eklendiğinde
-            // tarih burada itemsPayload üzerine, orderDeliveryFields'in kalem-bazlı sürümü
-            // ile yazılacak; UI değişmeden src/utils/order.ts genişletilir.
+            const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
             const { error: itemsErr } = await supabase.from("order_items").insert(itemsPayload);
             if (itemsErr) {
               // Items error - delete order + payment to prevent orphans
@@ -874,41 +859,20 @@ export default function NewOrder() {
                     }
                 }
             }
+            const firstSupplierId = fabricSupplierId || itemsComputed.find((it) => it.supplier_id)?.supplier_id || "";
+            const supplierExpenseAmount = itemsComputed.reduce((acc, it) => acc + safeNumber(it.supplier_total_cost), 0);
+            if (supplierExpenseAmount > 0 && firstSupplierId) await createSupplierExpense({ company_id: companyId, amount: supplierExpenseAmount, category: "Kumaş / Ürün", supplier_id: firstSupplierId, orderId, customerName });
             await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
             const cariWarnings: string[] = [];
-            // Tedarikçi bazında TOPLAM borç: aynı siparişte aynı tedarikçiye ait birden çok
-            // kalem olduğunda tek bir 'debt' = kalemlerin toplam maliyeti olarak yazılır.
-            // (Önceki kalem-kalem + dedupe yaklaşımı yalnız ilk kalemi yazıp borcu eksik
-            // bırakıyordu.) Tedarikçisi olmayan kalem atlanır; maliyeti 0 olan kalem eski
-            // davranışa uygun uyarı üretir ve toplama girmez.
-            const debtBySupplier = new Map<string, number>();
             for (const it of itemsComputed) {
                 const suppId = it.supplier_id || fabricSupplierId;
                 const cost = it.supplier_total_cost;
                 if (!suppId) continue;
                 if (cost <= 0) { cariWarnings.push(`"${it.product_name || it.product_type}" ürününde alış maliyeti girilmemiş.`); continue; }
-                debtBySupplier.set(suppId, (debtBySupplier.get(suppId) ?? 0) + cost);
-            }
-            // debtBySupplier TEK gerçek kaynaktır: hem expenses hem supplier_transactions
-            // aynı (tedarikçi, tutar) çiftlerinden yazılır. Eski davranış (tüm maliyeti
-            // yalnızca ilk tedarikçiye atfeden tek expenses kaydı) kaldırıldı — çoklu
-            // tedarikçili siparişlerde expenses artık supplier_transactions ile birebir
-            // aynı dağılımı kullanıyor.
-            for (const [suppId, totalCost] of debtBySupplier) {
-                await createSupplierExpense({ company_id: companyId, amount: totalCost, category: "Kumaş / Ürün", supplier_id: suppId, orderId, customerName });
-
-                const cariResult = await postSupplierDebt({
-                    companyId,
-                    orderId,
-                    supplierId: suppId,
-                    amount: totalCost,
-                    description: `${customerName} - sipariş maliyeti`,
-                    // Aynı sipariş + tedarikçi için tekrar kayıt oluşmasını engelle (retry idempotent).
-                    dedupeByOrderSupplier: true,
-                    // Manuel tedarikçi vade tarihi (boşsa null → due_date yazılmaz; eski davranış korunur).
-                    dueDate: supplierDueDate || null,
-                });
-                if (cariResult.status === "error") cariWarnings.push(`Cari hareket oluşturulamadı: ${cariResult.message}`);
+                const { data: existing } = await supabase.from("supplier_transactions").select("id").eq("order_id", orderId).eq("supplier_id", suppId).eq("transaction_type", "debt").maybeSingle();
+                if (existing) continue;
+                const { error: cariErr } = await supabase.from("supplier_transactions").insert({ company_id: companyId, supplier_id: suppId, order_id: orderId, transaction_date: new Date().toISOString(), transaction_type: "debt", amount: cost, description: `${customerName} - ${it.product_name || productLabel(it.product_type)} sipariş maliyeti`, reference_no: orderId.slice(0, 8).toUpperCase() });
+                if (cariErr) cariWarnings.push(`Cari hareket oluşturulamadı: ${cariErr.message}`);
             }
             if (cariWarnings.length > 0) console.warn("Cari uyarılar:", cariWarnings);
             // Quotes.tsx'ten "Siparişe Çevir" ile gelindiyse ölçü kaydına order_id yaz
@@ -946,7 +910,7 @@ export default function NewOrder() {
                 <div className="flex flex-wrap items-center gap-2">
                     <button type="button" onClick={() => window.print()} className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-800">PDF Oluştur</button>
                     <button onClick={() => nav("/orders")} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-900">İptal</button>
-                    <button onClick={handleSave} disabled={saving || !isValidDeliveryDate(terminDate)} title={!isValidDeliveryDate(terminDate) ? `Önce ${DELIVERY_DATE_LABEL.toLowerCase()} girin` : undefined} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg">
+                    <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg">
                         {saving ? "Kaydediliyor..." : "Teklifi / Siparişi Kaydet"}
                     </button>
                 </div>
@@ -1284,26 +1248,12 @@ export default function NewOrder() {
                             )}
                         </div>
 
-                        {/* Sade inline teslim tarihi: zorunlu, geçmiş tarih seçilemez, modalsız.
-                            Teklif ekranıyla aynı davranış (src/utils/order.ts). */}
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500">{DELIVERY_DATE_LABEL} <span className="text-red-500">*</span></label>
-                            <input type="date" value={terminDate} min={todayISO()} onChange={(e) => setTerminDate(e.target.value)} className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border outline-none text-xs" />
-                            {!terminDate && <p className="text-[10px] font-medium text-slate-500">Sipariş oluşturmak için {DELIVERY_DATE_LABEL.toLowerCase()} zorunludur.</p>}
-                        </div>
-
-                        {/* Opsiyonel tedarikçi ödeme vadesi → tedarikçi borçlarına yazılır (boşsa eski davranış) */}
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500">Tedarikçi Vade Tarihi <span className="font-normal text-slate-400">(opsiyonel)</span></label>
-                            <input type="date" value={supplierDueDate} min={todayISO()} onChange={(e) => setSupplierDueDate(e.target.value)} className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border outline-none text-xs" />
-                        </div>
-
                         <div className="space-y-2">
                             <label className="text-xs font-bold text-slate-500">Notlar</label>
                             <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Özel notlar..." className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border outline-none text-xs h-24" />
                         </div>
 
-                        <button onClick={handleSave} disabled={saving || !isValidDeliveryDate(terminDate)} title={!isValidDeliveryDate(terminDate) ? `Önce ${DELIVERY_DATE_LABEL.toLowerCase()} girin` : undefined} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black shadow-lg flex items-center justify-center gap-2">
+                        <button onClick={handleSave} disabled={saving} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black shadow-lg flex items-center justify-center gap-2">
                             <Save size={18} />
                             {saving ? "Kaydediliyor..." : "Teklifi / Siparişi Kaydet"}
                         </button>
@@ -1312,7 +1262,7 @@ export default function NewOrder() {
             </div>
 
             <div className="lg:hidden fixed bottom-6 left-4 right-4 z-40">
-                <button onClick={handleSave} disabled={saving || !isValidDeliveryDate(terminDate)} title={!isValidDeliveryDate(terminDate) ? `Önce ${DELIVERY_DATE_LABEL.toLowerCase()} girin` : undefined} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-2xl flex items-center justify-center gap-2">
+                <button onClick={handleSave} disabled={saving} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-2xl flex items-center justify-center gap-2">
                     <Save size={20} /> {saving ? "Kaydediliyor..." : "Siparişi Kaydet"}
                 </button>
             </div>

@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft, Calculator, Check, ChevronLeft, ChevronRight,
-  Copy, AlertCircle, MapPin, MessageCircle, Phone, Plus, Save, Trash2
+  ArrowLeft, ArrowRight, Calculator, Check, ChevronLeft, ChevronRight,
+  Clock, Copy, AlertCircle, MapPin, MessageCircle, Phone, Plus, Save, Trash2
 } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
-import { useDraftState } from "../hooks/useDraftState";
-import FieldInfoEditor from "../components/FieldInfoEditor";
-import { emptyFieldInfo, parseFieldInfo, type FieldInfo } from "../utils/fieldInfo";
 import Quotes from "./Quotes";
 
 // ---- TYPES & CONSTANTS ----
@@ -40,10 +38,9 @@ export type MeasurementItem = {
   kasaTipi?: string;
   kasaRengi?: string;
   kornisTipi?: string;
-  fieldInfo?: FieldInfo;
 };
 
-const PRODUCT_OPTIONS: Array<{ value: ProductType; label: string; defaultPrice: number }> = [
+export const PRODUCT_OPTIONS: Array<{ value: ProductType; label: string; defaultPrice: number }> = [
   { value: "stor", label: "Stor", defaultPrice: 650 },
   { value: "zebra", label: "Zebra", defaultPrice: 850 },
   { value: "tul", label: "Tül", defaultPrice: 420 },
@@ -53,11 +50,11 @@ const PRODUCT_OPTIONS: Array<{ value: ProductType; label: string; defaultPrice: 
   { value: "diger", label: "Diğer", defaultPrice: 500 },
 ];
 
-function ceil10(value: number) { return Math.ceil(Math.max(0, value) / 10) * 10; }
-function formatMoney(value: number) { return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(value); }
-function productLabel(type: ProductType) { return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün"; }
+export function ceil10(value: number) { return Math.ceil(Math.max(0, value) / 10) * 10; }
+export function formatMoney(value: number) { return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(value); }
+export function productLabel(type: ProductType) { return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün"; }
 
-function calculate(productType: ProductType, widthCm: number, heightCm: number, qty: number, unitPrice: number, pile: "2" | "3") {
+export function calculate(productType: ProductType, widthCm: number, heightCm: number, qty: number, unitPrice: number, pile: "2" | "3") {
   if (productType === "tul" || productType === "fon") {
     const pileMultiplier = pile === "3" ? 3 : 2;
     const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 15;
@@ -74,7 +71,7 @@ function calculate(productType: ProductType, widthCm: number, heightCm: number, 
   return { roundedWidth, roundedHeight, areaM2, total, fabricWidthCm: null as number | null };
 }
 
-function normalizeProductType(value: string | null | undefined): ProductType {
+export function normalizeProductType(value: string | null | undefined): ProductType {
   const normalized = String(value ?? "").trim().toLocaleLowerCase("tr-TR");
   if (normalized === "tül") return "tul";
   if (normalized === "jaluzi") return "jalousie";
@@ -83,9 +80,7 @@ function normalizeProductType(value: string | null | undefined): ProductType {
   return "diger";
 }
 
-// Termin (teslim tarihi) ölçü aşamasında alınmaz; yalnızca siparişe çevirme/sipariş
-// oluşturma aşamasında girilir (orders.delivery_due_date tek doğruluk kaynağıdır).
-const STEPS = ["Müşteri", "Adres", "Ürünler"] as const;
+const STEPS = ["Müşteri", "Adres", "Termin", "Ürünler"] as const;
 
 function normalizeText(v: string | null | undefined) { return (v ?? "").trim().toLocaleLowerCase("tr-TR"); }
 
@@ -143,7 +138,7 @@ function makeNewItem(): MeasurementItem {
     roomName: "", widthCm: 100, heightCm: 200, productType: "stor",
     selectedProductName: "", supplierId: "", supplierCost: 0,
     modelName: "", colorName: "", qty: 1, unitPrice: 650, pile: "2",
-    note: "", photos: [], fieldInfo: emptyFieldInfo(),
+    note: "", photos: [],
   };
 }
 
@@ -151,29 +146,29 @@ function makeNewItem(): MeasurementItem {
 export default function MeasurementEntry() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { company } = useAuth();
   const state = (location.state ?? {}) as any;
 
+  // Persist form state to localStorage for refresh resilience
+  const savedState = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('measurement_draft') || '{}') : {};
+  const initialState = state && Object.keys(state).length > 0 ? state : savedState;
+
   const [step, setStep] = useState(1);
+  const [groupId, setGroupId] = useState(initialState.groupId ?? crypto.randomUUID());
+  const [customerId, setCustomerId] = useState(initialState.customerId ?? "");
+  const [customerName, setCustomerName] = useState(initialState.customerName ?? "");
+  const [phone, setPhone] = useState(initialState.phone ?? "");
+  const [address, setAddress] = useState(initialState.address ?? "");
 
-  // Use proper draft state management hook
-  const [formState, updateFormState, clearDraft] = useDraftState('measurement_draft', {
-    groupId: state?.groupId ?? crypto.randomUUID(),
-    customerId: "",
-    customerName: "",
-    phone: "",
-    address: "",
-    items: [] as MeasurementItem[],
-  });
+  // Auto-save draft to localStorage
+  useEffect(() => {
+    localStorage.setItem('measurement_draft', JSON.stringify({
+      groupId, customerId, customerName, phone, address
+    }));
+  }, [groupId, customerId, customerName, phone, address]);
+  const [deliveryDate, setDeliveryDate] = useState("");
 
-  const { groupId, customerId, customerName, phone, address, items } = formState;
-
-  // Convenience setters that work with the draft state hook
-  const setGroupId = (v: string) => updateFormState({ groupId: v });
-  const setCustomerId = (v: string) => updateFormState({ customerId: v });
-  const setCustomerName = (v: string) => updateFormState({ customerName: v });
-  const setPhone = (v: string) => updateFormState({ phone: v });
-  const setAddress = (v: string) => updateFormState({ address: v });
-  const setItems = (v: MeasurementItem[]) => updateFormState({ items: v });
+  const [items, setItems] = useState<MeasurementItem[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [supplierPrices, setSupplierPrices] = useState<SupplierProductPriceRow[]>([]);
@@ -224,6 +219,9 @@ export default function MeasurementEntry() {
           setPhone(cust?.phone || "");
         }
         setAddress(first.address || "");
+        if (first.delivery_due_date) {
+          setDeliveryDate(String(first.delivery_due_date).substring(0, 10));
+        }
 
         const loadedItems: MeasurementItem[] = data.map(row => {
           const noteStr = String(row.note || "");
@@ -233,15 +231,14 @@ export default function MeasurementEntry() {
           const kasaTMatch = noteStr.match(/Kasa Tipi: (.+)/);
           const kasaRMatch = noteStr.match(/Kasa Rengi: (.+)/);
           const kornisMatch = noteStr.match(/Korniş Tipi: (.+)/);
-          const pileMatch = noteStr.match(/Pile: ([23])/);
 
           let photos: string[] = [];
           const photoMatch = noteStr.match(/\[Photos:\s*(\[.*\])\]/);
           if (photoMatch) {
-            try { photos = JSON.parse(photoMatch[1]); } catch { /* bozuk foto JSON'u yok say */ }
+            try { photos = JSON.parse(photoMatch[1]); } catch { }
           }
 
-          const cleanNote = noteStr
+          let cleanNote = noteStr
             .replace(/\[Grup: .*\]/g, "")
             .replace(/Kumaş Grubu: .*/g, "")
             .replace(/Mekanizma: .*/g, "")
@@ -249,7 +246,6 @@ export default function MeasurementEntry() {
             .replace(/Kasa Tipi: .*/g, "")
             .replace(/Kasa Rengi: .*/g, "")
             .replace(/Korniş Tipi: .*/g, "")
-            .replace(/Pile: .*/g, "")
             .replace(/\[Photos: .*\]/g, "")
             .trim();
 
@@ -266,7 +262,7 @@ export default function MeasurementEntry() {
             colorName: row.color_name || "",
             qty: row.quantity || 1,
             unitPrice: row.unit_price || 0,
-            pile: pileMatch ? (pileMatch[1] as "2" | "3") : "2",
+            pile: "2",
             kumasGrubu: kumasMatch ? kumasMatch[1].trim() : undefined,
             mekanizma: mekMatch ? mekMatch[1].trim() : undefined,
             zincirYonu: zincirMatch ? zincirMatch[1].trim() : undefined,
@@ -275,29 +271,15 @@ export default function MeasurementEntry() {
             kornisTipi: kornisMatch ? kornisMatch[1].trim() : undefined,
             note: cleanNote,
             photos,
-            fieldInfo: parseFieldInfo({ color_name: row.color_name }),
           };
         });
         setItems(loadedItems);
         // Expand all loaded items
         setExpandedItems(new Set(loadedItems.map(i => i.id)));
-        // Saha bilgilerini tolerant şekilde getir (field_info kolonu yoksa sessizce geç,
-        // renkten türetilmiş haliyle kalır → eski kayıtlar bozulmaz)
-        try {
-          const ids = loadedItems.map(i => i.id);
-          if (ids.length) {
-            const { data: fiRows } = await supabase.from("appointments").select("id,field_info").in("id", ids);
-            if (fiRows && alive) {
-              const fiMap = new Map((fiRows as any[]).map(r => [r.id, r.field_info]));
-              setItems(loadedItems.map(i => fiMap.get(i.id) ? { ...i, fieldInfo: parseFieldInfo(fiMap.get(i.id)) } : i));
-            }
-          }
-        } catch { /* field_info kolonu yoksa yok say */ }
-      } catch { /* grup yükleme hatası: yeni ölçü olarak devam edilir */ }
+      } catch (e) { }
     }
     loadGroup();
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.groupId]);
 
   // Load catalogs
@@ -306,26 +288,27 @@ export default function MeasurementEntry() {
     async function loadCatalogData() {
       try {
         const ctx = await getEffectiveTenantContext();
-        // products.cost_price bu kurulumda yok — yalnızca var olan kolonları seç
-        // (cost_price opsiyonel maliyet ipucu; yokken maliyet ürün kartı yerine
-        // tedarikçi fiyatından gelir). 400 üreten probe'a gerek yok.
-        const pRes = await supabase.from("products").select("id,name,category,unit_price,is_active").eq("company_id", ctx.company_id);
+        const pRes = await supabase.from("products").select("id,name,category,unit_price,cost_price,is_active").eq("company_id", ctx.company_id);
         if (alive && pRes.data) setProducts(pRes.data as ProductRow[]);
 
         const sRes = await supabase.from("suppliers").select("id,name").eq("company_id", ctx.company_id);
         if (alive && sRes.data) setSuppliers(sRes.data as SupplierRow[]);
 
-        // supplier_product_prices bu kurulumda product_type/unit_price şemasını
-        // kullanıyor (product_name/product_category/unit_cost yok). Var olan
-        // kolonları doğrudan seç ve UI tipine eşle — 400 probe yok.
-        const spRes = await supabase.from("supplier_product_prices").select("supplier_id,product_type,unit_price").eq("company_id", ctx.company_id);
-        if (alive && !spRes.error) {
-          setSupplierPrices((spRes.data ?? []).map((p: any) => ({ ...p, product_name: p.product_type ?? null, product_category: p.product_type ?? null, unit_cost: p.unit_price ?? 0 })) as SupplierProductPriceRow[]);
+        // supplier_product_prices with fallback (some DBs have different column sets)
+        const spRes = await supabase.from("supplier_product_prices").select("supplier_id,product_name,product_category,unit_cost").eq("company_id", ctx.company_id);
+        if (!spRes.error) {
+          if (alive) setSupplierPrices((spRes.data ?? []) as SupplierProductPriceRow[]);
+        } else if (/(product_id|product_category)/i.test(String(spRes.error.message || ""))) {
+          const fb = await supabase.from("supplier_product_prices").select("supplier_id,product_name,unit_cost").eq("company_id", ctx.company_id);
+          if (alive) setSupplierPrices((fb.data ?? []) as SupplierProductPriceRow[]);
+        } else if (/(product_name|unit_cost)/i.test(String(spRes.error.message || ""))) {
+          const fb = await supabase.from("supplier_product_prices").select("supplier_id,product_type,unit_price").eq("company_id", ctx.company_id);
+          if (alive) setSupplierPrices((fb.data ?? []).map((p: any) => ({ ...p, product_name: p.product_type ?? null, product_category: p.product_type ?? null, unit_cost: p.unit_price ?? 0 })) as SupplierProductPriceRow[]);
         }
 
         const cRes = await supabase.from("customers").select("id,name,phone,address").eq("company_id", ctx.company_id).order("name").limit(500);
         if (alive && cRes.data) setCustomers(cRes.data as CustomerRow[]);
-      } catch { /* katalog yükleme hatası: dropdownlar boş kalır */ }
+      } catch (e) { }
     }
     void loadCatalogData();
     return () => { alive = false; };
@@ -342,17 +325,24 @@ export default function MeasurementEntry() {
     return { totalCost: cost, totalSale: sale, totalProfit: sale - cost };
   }, [items]);
 
+  const daysUntilDelivery = useMemo(() => {
+    if (!deliveryDate) return null;
+    const diff = new Date(deliveryDate).getTime() - new Date().getTime();
+    return Math.ceil(diff / (1000 * 3600 * 24));
+  }, [deliveryDate]);
+
   // Step completion check
   const stepComplete = useMemo(() => ({
     1: !!customerName.trim(),
     2: !!address.trim(),
-    3: items.length > 0,
-  }), [customerName, address, items]);
+    3: !!deliveryDate,
+    4: items.length > 0,
+  }), [customerName, address, deliveryDate, items]);
 
   function goStep(n: number) {
-    if (n < 1 || n > 3) return;
-    // Auto-add first item when entering the products step
-    if (n === 3 && items.length === 0) {
+    if (n < 1 || n > 4) return;
+    // Auto-add first item when entering Step 4
+    if (n === 4 && items.length === 0) {
       const first = makeNewItem();
       setItems([first]);
       setExpandedItems(new Set([first.id]));
@@ -386,7 +376,7 @@ export default function MeasurementEntry() {
   function toggleExpand(id: string) {
     setExpandedItems(prev => {
       const s = new Set(prev);
-      if (s.has(id)) s.delete(id); else s.add(id);
+      s.has(id) ? s.delete(id) : s.add(id);
       return s;
     });
   }
@@ -418,8 +408,6 @@ export default function MeasurementEntry() {
         if (it.kasaTipi) dynamicProps += `\nKasa Tipi: ${it.kasaTipi}`;
         if (it.kasaRengi) dynamicProps += `\nKasa Rengi: ${it.kasaRengi}`;
         if (it.kornisTipi) dynamicProps += `\nKorniş Tipi: ${it.kornisTipi}`;
-        // Pile yalnızca tül/fon alan hesabını etkiler; düzenlemede kaybolmaması için sakla.
-        if (it.productType === "tul" || it.productType === "fon") dynamicProps += `\nPile: ${it.pile}`;
         if (it.photos.length) dynamicProps += `\n[Photos: ${JSON.stringify(it.photos)}]`;
 
         return {
@@ -447,28 +435,19 @@ export default function MeasurementEntry() {
           supplier_total_cost: itemCost,
           estimated_area_m2: res.areaM2,
           estimated_total: res.total,
-          delivery_due_date: null, // Termin sipariş aşamasında girilir; ölçüde alınmaz
+          delivery_due_date: deliveryDate || null,
           note: `${it.note || ""}\n[Grup: ${groupId}]${dynamicProps}`.trim(),
           measurement_notes: `${it.note || ""}\n[Grup: ${groupId}]${dynamicProps}`.trim(),
-          field_info: it.fieldInfo ?? null,
         };
       });
 
       // Clear existing group items
       await supabase.from("appointments").delete().eq("company_id", ctx.company_id).ilike("note", `%[Grup: ${groupId}]%`);
 
-      let { error: insErr } = await supabase.from("appointments").insert(payloads);
-      // field_info kolonu yoksa (migration uygulanmamış ortam): alan olmadan tekrar dene → akış bozulmaz
-      if (insErr && /field_info/i.test(insErr.message || "")) {
-        const stripped = payloads.map(p => { const c: any = { ...p }; delete c.field_info; return c; });
-        const retry = await supabase.from("appointments").insert(stripped);
-        insErr = retry.error;
-      }
+      const { error: insErr } = await supabase.from("appointments").insert(payloads);
       if (insErr) throw insErr;
 
       setSuccess("✅ Ölçü grubu kaydedildi.");
-      // Başarılı kayıt sonrası draft'ı temizle
-      clearDraft();
       // Kaydetme sonrası ölçü anasayfasına yönlendir
       setTimeout(() => {
         navigate("/quotes", { replace: true });
@@ -490,10 +469,7 @@ export default function MeasurementEntry() {
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6 lg:p-8 pb-36">
       {/* HEADER */}
       <div className="flex items-center justify-between">
-        <button onClick={() => {
-          clearDraft();
-          navigate(-1);
-        }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+        <button onClick={() => navigate(-1)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
           <ArrowLeft className="h-4 w-4" /> Geri
         </button>
         <h1 className="text-xl font-black text-slate-900 dark:text-white">{state.groupId ? "Ölçü Düzenle" : "Yeni Ölçü"}</h1>
@@ -576,8 +552,24 @@ export default function MeasurementEntry() {
           </div>
         )}
 
-        {/* STEP 3: ÜRÜNLER */}
+        {/* STEP 3: TERMİN */}
         {step === 3 && (
+          <div className="grid gap-5">
+            <label>
+              <span className={labelCls}>Termin / Teslim Tarihi</span>
+              <input type="date" value={deliveryDate} onChange={e => setDeliveryDate(e.target.value)} className={inputCls} />
+            </label>
+            {daysUntilDelivery !== null && (
+              <div className={`flex items-center gap-3 rounded-2xl p-4 font-black ${daysUntilDelivery < 0 ? 'bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400' : daysUntilDelivery <= 2 ? 'bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400' : daysUntilDelivery <= 7 ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400'}`}>
+                <Clock className="h-5 w-5 shrink-0" />
+                {daysUntilDelivery < 0 ? `🔴 ${Math.abs(daysUntilDelivery)} gün gecikti!` : daysUntilDelivery === 0 ? '🔴 Bugün teslim!' : daysUntilDelivery <= 2 ? `🔴 ${daysUntilDelivery} gün kaldı` : daysUntilDelivery <= 7 ? `🟡 ${daysUntilDelivery} gün kaldı` : `🟢 ${daysUntilDelivery} gün kaldı`}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* STEP 4: ÜRÜNLER */}
+        {step === 4 && (
           <div className="grid gap-4">
             {items.map((item, idx) => {
               const isExpanded = expandedItems.has(item.id);
@@ -804,15 +796,6 @@ export default function MeasurementEntry() {
                           )}
                         </div>
                       </div>
-
-                      {/* Saha Bilgileri — bu ürün satırına bağlı (kartela kodu/fotoğrafı, mekan fotoğrafları, sesli not, montaj notu) */}
-                      <div className="mt-4">
-                        <FieldInfoEditor
-                          value={item.fieldInfo ?? emptyFieldInfo()}
-                          onChange={(fi) => updateItem(item.id, { fieldInfo: fi })}
-                          getCompanyId={async () => (await getEffectiveTenantContext()).company_id}
-                        />
-                      </div>
                     </div>
                   )}
                 </div>
@@ -837,7 +820,7 @@ export default function MeasurementEntry() {
           <ChevronLeft className="h-4 w-4" /> Geri
         </button>
         <div className="text-xs font-bold text-slate-400">Adım {step} / {STEPS.length}</div>
-        {step < 3 ? (
+        {step < 4 ? (
           <button
             onClick={() => goStep(step + 1)}
             className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-primary-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-primary-600/20 transition-colors hover:bg-primary-700"
@@ -869,6 +852,9 @@ export default function MeasurementEntry() {
               <div className="flex justify-between text-sm"><span className="text-slate-500">Müşteri</span><span className="font-bold text-slate-800 dark:text-slate-200">{customerName || "—"}</span></div>
               <div className="flex justify-between text-sm"><span className="text-slate-500">Toplam Ürün</span><span className="font-bold text-slate-800 dark:text-slate-200">{items.length} kalem</span></div>
               <div className="flex justify-between text-sm"><span className="text-slate-500">Toplam Adet</span><span className="font-bold text-slate-800 dark:text-slate-200">{items.reduce((s, i) => s + i.qty, 0)}</span></div>
+              {deliveryDate && (
+                <div className="flex justify-between text-sm"><span className="text-slate-500">Termin</span><span className="font-bold text-slate-800 dark:text-slate-200">{new Date(deliveryDate).toLocaleDateString("tr-TR")}</span></div>
+              )}
             </div>
           </div>
         </div>

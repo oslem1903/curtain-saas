@@ -1,23 +1,6 @@
 -- ============================================================================
--- INSTALLER/MONTAJCI COMMISSION SYSTEM - SCHEMA (Production Safe, v2)
+-- INSTALLER/MONTAJCI COMMISSION SYSTEM - SCHEMA ONLY
 -- Add commission settings to employees table
--- ============================================================================
--- GÜVENLİ SÜRÜM NOTLARI (bu dosyada yapılan düzeltmeler):
---   1) get_installer_ledger: installer_transactions tablosunda OLMAYAN
---      'order_id' kolonuna yapılan referans canlı şemaya uyarlandı. Sipariş ve
---      müşteri bilgisi, trigger'ların doldurduğu related_job_id üzerinden
---      installation_jobs -> orders -> customers zinciriyle türetilir. RPC çıktı
---      imzası (order_id, customer_name, running_balance) DEĞİŞMEDİ; frontend
---      (InstallerEarningsDetail.tsx) uyumlu kalır.
---   2) installer_earnings RLS politikaları DROP POLICY IF EXISTS guard'ı ile
---      idempotent hale getirildi (birden çok kez güvenle çalıştırılabilir).
---   3) CREATE OR REPLACE ve IF NOT EXISTS yapısı korunur. Veri kaybı oluşturacak
---      DROP YOKTUR (yalnızca politika guard'ları kaldırılıp yeniden kurulur).
---
--- BAĞIMLILIK SIRASI: Bu dosya, supabase_installer_commission_triggers.sql'den
--- ÖNCE çalıştırılmalıdır (trigger'lar buradaki installer_earnings tablosuna ve
--- fonksiyonlara bağlıdır). installer_transactions tablosu için bkz.
--- supabase_installer_ledger.sql.
 -- ============================================================================
 
 -- Add commission columns to employees (montajcı kartına)
@@ -77,7 +60,6 @@ COMMENT ON TABLE public.installer_earnings IS
 ALTER TABLE public.installer_earnings ENABLE ROW LEVEL SECURITY;
 
 -- Installer: Kendi earnings'ini görebilir
-DROP POLICY IF EXISTS installer_earnings_self_select ON public.installer_earnings;
 CREATE POLICY installer_earnings_self_select ON public.installer_earnings
 FOR SELECT USING (
     installer_id = auth.uid()
@@ -89,7 +71,6 @@ FOR SELECT USING (
 );
 
 -- Admin: Şirketinin earnings'ini görebilir
-DROP POLICY IF EXISTS installer_earnings_company_select ON public.installer_earnings;
 CREATE POLICY installer_earnings_company_select ON public.installer_earnings
 FOR SELECT USING (
     company_id IN (
@@ -99,14 +80,12 @@ FOR SELECT USING (
 );
 
 -- Super Admin: Tümünü görebilir
-DROP POLICY IF EXISTS installer_earnings_admin_select ON public.installer_earnings;
 CREATE POLICY installer_earnings_admin_select ON public.installer_earnings
 FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE user_id = auth.uid() AND role = 'super_admin')
 );
 
 -- Insert: System (trigger) ve Admin
-DROP POLICY IF EXISTS installer_earnings_insert ON public.installer_earnings;
 CREATE POLICY installer_earnings_insert ON public.installer_earnings
 FOR INSERT WITH CHECK (
     EXISTS (SELECT 1 FROM public.profiles WHERE user_id = auth.uid() AND role IN ('admin', 'super_admin'))
@@ -114,7 +93,6 @@ FOR INSERT WITH CHECK (
 );
 
 -- Update: Admin ve system
-DROP POLICY IF EXISTS installer_earnings_update ON public.installer_earnings;
 CREATE POLICY installer_earnings_update ON public.installer_earnings
 FOR UPDATE USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE user_id = auth.uid() AND role IN ('admin', 'super_admin'))
@@ -305,9 +283,6 @@ RETURNS TABLE (
 ) LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
     RETURN QUERY
-    -- NOT: installer_transactions tablosunda 'order_id' kolonu YOKTUR (canlı şema).
-    -- Sipariş/müşteri bilgisi, trigger'ların doldurduğu related_job_id üzerinden
-    -- installation_jobs -> orders -> customers zinciriyle türetilir.
     WITH ledger AS (
         SELECT
             st.id,
@@ -315,11 +290,10 @@ BEGIN
             st.transaction_type,
             st.amount,
             st.description,
-            ij.order_id AS order_id,
+            st.order_id,
             c.name as customer_name
         FROM public.installer_transactions st
-        LEFT JOIN public.installation_jobs ij ON st.related_job_id = ij.id
-        LEFT JOIN public.orders o ON ij.order_id = o.id
+        LEFT JOIN public.orders o ON st.order_id = o.id
         LEFT JOIN public.customers c ON o.customer_id = c.id
         WHERE st.installer_id = p_installer_id
           AND st.company_id = p_company_id
@@ -366,9 +340,4 @@ COMMENT ON FUNCTION public.get_installer_cari_summary IS
 'Montajcı cari özeti: toplam hakediş, ödemeler, bakiye';
 
 COMMENT ON FUNCTION public.get_installer_ledger IS
-'Montajcı cari hareket detayları. order_id/customer_name, related_job_id -> installation_jobs -> orders -> customers zincirinden türetilir (installer_transactions tablosunda order_id kolonu yoktur).';
-
--- ============================================================================
--- PostgREST şema cache yenileme (fonksiyon imzaları güncellendi)
--- ============================================================================
-NOTIFY pgrst, 'reload schema';
+'Montajcı cari hareket detayları';

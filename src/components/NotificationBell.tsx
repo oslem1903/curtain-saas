@@ -127,42 +127,27 @@ export default function NotificationBell({ userId }: { userId: string }) {
                 });
             }
 
-            // Tüm hareketleri çek; tedarikçi başına NET bakiye hesapla. Geciken bildirimi
-            // yalnızca gerçekten KALAN borcu olan tedarikçi için, kalan tutarla üret —
-            // ödenmiş vadeli borç yanlış "geciken ödeme" bildirimi oluşturmasın.
             const supplierRes = await supabase
                 .from("supplier_transactions")
-                .select("supplier_id,amount,due_date,transaction_type,suppliers(name)")
-                .eq("company_id", ctx.company_id);
+                .select("supplier_id,amount,due_date,suppliers(name)")
+                .eq("company_id", ctx.company_id)
+                .eq("transaction_type", "debt")
+                .not("due_date", "is", null)
+                .lte("due_date", today)
+                .limit(20);
 
             if (!supplierRes.error) {
-                const agg = new Map<string, { name: string; balance: number; earliestOverdue: string | null }>();
-                for (const row of (supplierRes.data ?? []) as any[]) {
-                    const sid = row.supplier_id;
-                    if (!sid) continue;
+                (supplierRes.data ?? []).forEach((row: any, index: number) => {
                     const sup = Array.isArray(row.suppliers) ? row.suppliers[0] : row.suppliers;
-                    const entry = agg.get(sid) ?? { name: sup?.name || "Tedarikçi", balance: 0, earliestOverdue: null };
-                    const amt = Number(row.amount ?? 0);
-                    if (row.transaction_type === "debt") entry.balance += amt;
-                    else if (row.transaction_type === "payment" || row.transaction_type === "cancel") entry.balance -= amt;
-                    if (row.transaction_type === "debt" && row.due_date && row.due_date <= today) {
-                        if (!entry.earliestOverdue || row.due_date < entry.earliestOverdue) entry.earliestOverdue = row.due_date;
-                    }
-                    agg.set(sid, entry);
-                }
-                Array.from(agg.entries())
-                    .filter(([, e]) => e.earliestOverdue && e.balance > 0.01)
-                    .slice(0, 20)
-                    .forEach(([sid, e]) => {
-                        items.push({
-                            id: `supplier-${sid}-${e.earliestOverdue}`,
-                            title: "Geciken ödeme",
-                            message: `${e.name} - ${new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(e.balance)}`,
-                            type: "error",
-                            created_at: new Date(`${e.earliestOverdue}T12:00:00`).toISOString(),
-                            target: "#/suppliers",
-                        });
+                    items.push({
+                        id: `supplier-${row.supplier_id || index}-${row.due_date}`,
+                        title: "Geciken ödeme",
+                        message: `${sup?.name || "Tedarikçi"} - ${new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(Number(row.amount ?? 0))}`,
+                        type: "error",
+                        created_at: new Date(`${row.due_date}T12:00:00`).toISOString(),
+                        target: "#/suppliers",
                     });
+                });
             }
 
             const completedRes = await supabase
@@ -189,7 +174,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
 
             const supportRes = await supabase
                 .from("support_tickets")
-                .select("id,title,created_at,status")
+                .select("id,title,subject,created_at,status")
                 .neq("status", "closed")
                 .order("created_at", { ascending: false })
                 .limit(5);
@@ -199,7 +184,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
                     items.push({
                         id: `support-${row.id}`,
                         title: "Yeni destek talebi",
-                        message: row.title || "Destek talebi",
+                        message: row.title || row.subject || "Destek talebi",
                         type: "info",
                         created_at: row.created_at || new Date().toISOString(),
                         target: "#/super-admin/support",

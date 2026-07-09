@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Plus, Search, Filter, ArrowLeft, RefreshCw } from "lucide-react";
-import { usePersistedState } from "../hooks/usePersistedState";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
+import { withoutDeleted } from "../utils/softDelete";
+import { PAGE_SIZE } from "../constants/pagination";
+import { Pagination } from "../components/Pagination";
 
 /** -----------------------
  * Helpers
@@ -122,9 +124,11 @@ export default function Orders() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [q, setQ] = useState("");
-    const [statusFilter, setStatusFilter] = usePersistedState("perdepro.orders.status", "all");
+    const [statusFilter, setStatusFilter] = useState("all");
     const [refreshKey, setRefreshKey] = useState(0);
     const [highlightId, setHighlightId] = useState<string | null>(newOrderId);
+    const [page, setPage] = useState(0);
+    const [totalPages, setTotalPages] = useState(0);
     const { effectiveRole: role, realRole, viewingUserId } = useRole();
 
     // Siparişe dönüştürme / yeni sipariş sonrası: her zaman en üstten başla.
@@ -221,29 +225,34 @@ export default function Orders() {
                         order_items:order_items(line_total)
                         `;
 
-                const query = supabase
+                const query = withoutDeleted(supabase
                     .from("orders")
-                    .select(fullSelect)
-                    .eq("company_id", ctx.company_id)
-                    .order("created_at", { ascending: false });
+                    .select(fullSelect, { count: 'exact' })
+                    .eq("company_id", ctx.company_id))
+                    .order("created_at", { ascending: false })
+                    .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-                let { data, error }: { data: any[] | null; error: any } = await query;
+                let { data, error, count }: { data: any[] | null; error: any; count: number | null } = await query;
 
                 if (error && String(error.message || "").toLowerCase().includes("assigned_user_id")) {
-                    const retryQuery = supabase
+                    const retryQuery = withoutDeleted(supabase
                         .from("orders")
-                        .select(legacySelect)
-                        .eq("company_id", ctx.company_id)
-                        .order("created_at", { ascending: false });
+                        .select(legacySelect, { count: 'exact' })
+                        .eq("company_id", ctx.company_id))
+                        .order("created_at", { ascending: false })
+                        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
                     const retry = await retryQuery;
                     data = retry.data;
                     error = retry.error;
+                    count = retry.count;
                 }
 
                 if (!alive) return;
 
                 if (error) throw error;
+
+                setTotalPages(Math.ceil((count || 0) / PAGE_SIZE));
 
                 const targetId = (realRole === "super_admin" && viewingUserId) ? viewingUserId : ctx.user.id;
                 const scopedRows =
@@ -269,7 +278,7 @@ export default function Orders() {
         return () => {
             alive = false;
         };
-    }, [refreshKey, role, viewingUserId, realRole]);
+    }, [refreshKey, role, viewingUserId, realRole, page]);
 
     const filtered = useMemo(() => {
         const s = q.trim().toLowerCase();
@@ -433,61 +442,62 @@ export default function Orders() {
                 </label>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-                {loading ? (
-                    <div className="p-8 text-center text-slate-500 dark:text-slate-400">
-                        Yükleniyor...
-                    </div>
-                ) : err ? (
-                    <div className="p-8 text-center text-red-600">{err}</div>
-                ) : filtered.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 dark:text-slate-400">
-                        Sipariş bulunamadı. Başlamak için yeni bir sipariş oluşturun.
-                    </div>
-                ) : (
-                    <div className="divide-y divide-slate-200 dark:divide-slate-800">
-                        {filtered.map((o) => {
-                            const totalNet = computeTotalNet(o);
-                            const paid = Number(o.paid_amount ?? 0);
-                            const remaining =
-                                o.remaining_amount != null
-                                    ? Number(o.remaining_amount ?? 0)
-                                    : Math.max(totalNet - paid, 0);
+            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+                <div className="flex-1">
+                    {loading ? (
+                        <div className="p-8 text-center text-slate-500 dark:text-slate-400">
+                            Yükleniyor...
+                        </div>
+                    ) : err ? (
+                        <div className="p-8 text-center text-red-600">{err}</div>
+                    ) : filtered.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500 dark:text-slate-400">
+                            Sipariş bulunamadı. Başlamak için yeni bir sipariş oluşturun.
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                            {filtered.map((o) => {
+                                const totalNet = computeTotalNet(o);
+                                const paid = Number(o.paid_amount ?? 0);
+                                const remaining =
+                                    o.remaining_amount != null
+                                        ? Number(o.remaining_amount ?? 0)
+                                        : Math.max(totalNet - paid, 0);
 
-                            const c = asCustomer(o.customer);
-                            const name = c?.name || "İsimsiz Müşteri";
-                            const phone = c?.phone ? ` • ${c.phone}` : "";
+                                const c = asCustomer(o.customer);
+                                const name = c?.name || "İsimsiz Müşteri";
+                                const phone = c?.phone ? ` • ${c.phone}` : "";
 
-                            return (
-                                <Link
-                                    key={o.id}
-                                    to={`/orders/${o.id}`}
-                                    ref={(el) => { if (el && highlightId === o.id) el.scrollIntoView({ block: "nearest" }); }}
-                                    className={`block p-4 transition ${
-                                        highlightId === o.id
-                                            ? "bg-emerald-50 ring-2 ring-inset ring-emerald-400 dark:bg-emerald-900/20"
-                                            : "hover:bg-slate-50 dark:hover:bg-slate-800/40"
-                                    }`}
-                                >
-                                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                                        <div className="min-w-0">
-                                            <div className="font-semibold text-slate-900 dark:text-white break-words">
-                                                {name}
-                                                <span className="text-slate-500 dark:text-slate-400 font-normal">
-                                                    {phone}
-                                                </span>
-                                            </div>
+                                return (
+                                    <Link
+                                        key={o.id}
+                                        to={`/orders/${o.id}`}
+                                        ref={(el) => { if (el && highlightId === o.id) el.scrollIntoView({ block: "nearest" }); }}
+                                        className={`block p-4 transition ${
+                                            highlightId === o.id
+                                                ? "bg-emerald-50 ring-2 ring-inset ring-emerald-400 dark:bg-emerald-900/20"
+                                                : "hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                                        }`}
+                                    >
+                                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                                            <div className="min-w-0">
+                                                <div className="font-semibold text-slate-900 dark:text-white break-words">
+                                                    {name}
+                                                    <span className="text-slate-500 dark:text-slate-400 font-normal">
+                                                        {phone}
+                                                    </span>
+                                                </div>
 
-                                            <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2">
-                                                <span>{formatDateTR(o.created_at)}</span>
-                                                <span>•</span>
-                                                <span
-                                                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClass(
-                                                        o.status
-                                                    )}`}
-                                                >
-                                                    {statusLabel(o.status)}
-                                                </span>
+                                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2">
+                                                    <span>{formatDateTR(o.created_at)}</span>
+                                                    <span>•</span>
+                                                    <span
+                                                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClass(
+                                                            o.status
+                                                        )}`}
+                                                    >
+                                                        {statusLabel(o.status)}
+                                                    </span>
                                                 <span>•</span>
                                                 <span className="text-blue-600">#{o.id.slice(0, 8)}</span>
                                             </div>
@@ -525,7 +535,17 @@ export default function Orders() {
                                 </Link>
                             );
                         })}
-                    </div>
+                        </div>
+                    )}
+                </div>
+
+                {!loading && !err && filtered.length > 0 && totalPages > 0 && (
+                    <Pagination
+                        currentPage={page}
+                        totalPages={totalPages}
+                        onPageChange={setPage}
+                        isLoading={loading}
+                    />
                 )}
             </div>
         </div>

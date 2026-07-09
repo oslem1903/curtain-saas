@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Download, FileText, Plus, RefreshCw, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { usePersistedState } from "../hooks/usePersistedState";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
+import { withoutDeleted } from "../utils/softDelete";
+import { PAGE_SIZE } from "../constants/pagination";
+import { Pagination } from "../components/Pagination";
 
 type InvoiceRow = {
     id: string;
@@ -37,8 +39,6 @@ type OrderSyncRow = {
     status: string | null;
     note: string | null;
     total_amount: number | null;
-    paid_amount: number | null;
-    remaining_amount: number | null;
     customer_id: string | null;
     customers: { name: string | null } | Array<{ name: string | null }> | null;
     order_items: Array<{
@@ -148,7 +148,7 @@ async function syncOrdersToInvoices(companyId: string) {
 
     const { data: orders, error: orderErr } = await supabase
         .from("orders")
-        .select("id, created_at, status, note, total_amount, paid_amount, remaining_amount, customer_id, customers(name), order_items(product_type, width_cm, height_cm, qty, unit_price, line_total)")
+        .select("id, created_at, status, note, total_amount, customer_id, customers(name), order_items(product_type, width_cm, height_cm, qty, unit_price, line_total)")
         .eq("company_id", companyId)
         .not("status", "eq", "draft")
         .not("status", "eq", "cancelled")
@@ -166,15 +166,6 @@ async function syncOrdersToInvoices(companyId: string) {
         const taxExclusive = Number((Number(order.total_amount) / divisor).toFixed(2));
         const taxAmount = Number((Number(order.total_amount) - taxExclusive).toFixed(2));
 
-        // Gercek odeme durumu paid_amount/remaining_amount'tan belirlenir —
-        // orders.status'un "paid" degeri (Accounting.tsx::saveIncome tarafindan
-        // yazilir) iptal edilen bir tahsilattan sonra bayat kalabilir; bu yuzden
-        // status alanina GUVENILMEZ. Tahsilati iptal edilmis bir siparis
-        // (remaining_amount tekrar > 0 oldugunda) hicbir zaman "paid" sayilmaz.
-        const remaining = order.remaining_amount != null
-            ? Number(order.remaining_amount)
-            : Math.max(Number(order.total_amount ?? 0) - Number(order.paid_amount ?? 0), 0);
-
         const { data: invoiceRow, error: invoiceErr } = await supabase
             .from("invoices")
             .insert([
@@ -188,7 +179,7 @@ async function syncOrdersToInvoices(companyId: string) {
                     total_tax_exclusive: taxExclusive,
                     total_tax_amount: taxAmount,
                     total_tax_inclusive: order.total_amount,
-                    status: remaining <= 0 ? "paid" : "sent",
+                    status: order.status === "paid" ? "paid" : "sent",
                     notes: order.note || `Siparis faturasi - ${getPartyName(order.customers) || "Musteri"}`,
                 },
             ])
@@ -218,15 +209,18 @@ export default function Invoices() {
     const [invoices, setInvoices] = useState<InvoiceView[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
-    const [filterType, setFilterType] = usePersistedState("perdepro.invoices.type", "all");
-    const [filterStatus, setFilterStatus] = usePersistedState("perdepro.invoices.status", "all");
+    const [page, setPage] = useState(0);
+    const [totalPages, setTotalPages] = useState(0);
+    const [filterType, setFilterType] = useState("all");
+    const [filterStatus, setFilterStatus] = useState("all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [overdueOnly, setOverdueOnly] = useState(false);
 
     useEffect(() => {
         loadInvoices();
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
 
     async function loadInvoices() {
         setLoading(true);
@@ -240,18 +234,20 @@ export default function Invoices() {
 
         await syncOrdersToInvoices(cid);
 
-        let invoiceRes: any = await supabase
+        let invoiceRes: any = await withoutDeleted(supabase
             .from("invoices")
-            .select("id, order_id, invoice_no, invoice_type, date, due_date, paid_amount, payment_method, total_tax_exclusive, total_tax_amount, total_tax_inclusive, status, customers(name), suppliers(name)")
-            .eq("company_id", cid)
-            .order("date", { ascending: false });
+            .select("id, order_id, invoice_no, invoice_type, date, due_date, paid_amount, payment_method, total_tax_exclusive, total_tax_amount, total_tax_inclusive, status, customers(name), suppliers(name)", { count: 'exact' })
+            .eq("company_id", cid))
+            .order("date", { ascending: false })
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
         if (invoiceRes.error) {
-            invoiceRes = await supabase
+            invoiceRes = await withoutDeleted(supabase
                 .from("invoices")
-                .select("id, order_id, invoice_no, invoice_type, date, total_tax_exclusive, total_tax_amount, total_tax_inclusive, status, customers(name), suppliers(name)")
-                .eq("company_id", cid)
-                .order("date", { ascending: false });
+                .select("id, order_id, invoice_no, invoice_type, date, total_tax_exclusive, total_tax_amount, total_tax_inclusive, status, customers(name), suppliers(name)", { count: 'exact' })
+                .eq("company_id", cid))
+                .order("date", { ascending: false })
+                .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         }
 
         if (invoiceRes.error || !invoiceRes.data) {
@@ -259,6 +255,8 @@ export default function Invoices() {
             setLoading(false);
             return;
         }
+
+        setTotalPages(Math.ceil((invoiceRes.count || 0) / PAGE_SIZE));
 
         const invoiceData = invoiceRes.data as Array<{ id: string }>;
         const invoiceIds = invoiceData.map((invoice: { id: string }) => invoice.id);
@@ -701,6 +699,17 @@ export default function Invoices() {
                     </table>
                 </div>
             </div>
+
+            {!loading && filtered.length > 0 && totalPages > 0 && (
+                <div className="mt-6">
+                    <Pagination
+                        currentPage={page}
+                        totalPages={totalPages}
+                        onPageChange={setPage}
+                        isLoading={loading}
+                    />
+                </div>
+            )}
         </div>
     );
 }
