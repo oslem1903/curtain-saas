@@ -243,6 +243,7 @@ export default function OrderDetail() {
     const [role, setRole] = useState<RoleState>("unknown");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const idempotencyKeyRef = useRef<string | null>(null);
     const [staffList, setStaffList] = useState<Array<{ id: string; full_name: string; role: string; hasAccount: boolean }>>([]);
     const [assignedTo, setAssignedTo] = useState("");
     const [showNewInstaller, setShowNewInstaller] = useState(false);
@@ -1107,6 +1108,7 @@ export default function OrderDetail() {
     }
 
     async function handleAddPayment() {
+        if (saving) return;
         if (!id || !order) return;
         const amount = Number(paymentAmount);
         if (!Number.isFinite(amount) || amount <= 0) {
@@ -1118,6 +1120,7 @@ export default function OrderDetail() {
         setPaymentError("");
         setPaymentSuccess("");
         try {
+            idempotencyKeyRef.current = crypto.randomUUID();
             // Use atomic RPC function for payment recording
             const { data, error } = await supabase.rpc("record_order_payment", {
                 p_company_id: order.company_id,
@@ -1125,6 +1128,7 @@ export default function OrderDetail() {
                 p_amount: amount,
                 p_payment_method: paymentMethod || null,
                 p_note: paymentNote || "Sipariş tahsilatı",
+                p_idempotency_key: idempotencyKeyRef.current,
             });
 
             if (error) throw error;
@@ -1161,6 +1165,7 @@ export default function OrderDetail() {
             setPaymentError(e?.message ?? "Ödeme kaydedilemedi.");
         } finally {
             setSaving(false);
+            idempotencyKeyRef.current = null;
         }
     }
 

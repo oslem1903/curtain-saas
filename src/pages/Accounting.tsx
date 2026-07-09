@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
     Download,
     TrendingUp,
@@ -291,6 +291,7 @@ export const Accounting = () => {
     const [collectionNote, setCollectionNote] = useState("");
 
     const [saving, setSaving] = useState(false);
+    const idempotencyKeyRef = useRef<string | null>(null);
 
     const [incomeAmount, setIncomeAmount] = useState("");
     const [incomeSourceType, setIncomeSourceType] = useState<"order" | "other">("order");
@@ -957,6 +958,7 @@ export const Accounting = () => {
 
 
     async function saveIncome() {
+        if (saving) return;
         if (!companyId) return;
         if (!incomeAmount.trim()) {
             alert("Tutar gir.");
@@ -969,6 +971,7 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
+            idempotencyKeyRef.current = crypto.randomUUID();
 
             const amount = Number(incomeAmount);
             if (!Number.isFinite(amount) || amount <= 0) {
@@ -993,6 +996,7 @@ export const Accounting = () => {
                     p_amount: amount,
                     p_payment_method: incomePaymentMethod || null,
                     p_note: incomeNote || incomeDescription || null,
+                    p_idempotency_key: idempotencyKeyRef.current,
                 });
 
                 if (error) throw error;
@@ -1016,6 +1020,7 @@ export const Accounting = () => {
                     p_note: incomeNote || null,
                     p_source: source,
                     p_create_transaction: true,
+                    p_idempotency_key: idempotencyKeyRef.current,
                 });
 
                 if (error) throw error;
@@ -1043,10 +1048,12 @@ export const Accounting = () => {
             alert(e?.message ?? "Gelir kaydedilemedi.");
         } finally {
             setSaving(false);
+            idempotencyKeyRef.current = null;
         }
     }
 
     async function saveExpense() {
+        if (saving) return;
         if (!companyId) return;
         if (!expenseAmount.trim()) {
             alert("Tutar gir.");
@@ -1055,6 +1062,7 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
+            idempotencyKeyRef.current = crypto.randomUUID();
 
             const amount = Number(expenseAmount);
             const expenseDateIso = expenseDate ? new Date(`${expenseDate}T12:00:00`).toISOString() : new Date().toISOString();
@@ -1084,6 +1092,7 @@ export const Accounting = () => {
                 p_status: expenseStatus || "paid",
                 p_supplier_id: expenseSupplierId || null,
                 p_create_transaction: (expenseStatus || "paid") === "paid",
+                p_idempotency_key: idempotencyKeyRef.current,
             });
 
             if (error) throw error;
@@ -1118,6 +1127,7 @@ export const Accounting = () => {
             alert(e?.message ?? "Gider kaydedilemedi.");
         } finally {
             setSaving(false);
+            idempotencyKeyRef.current = null;
         }
     }
 
@@ -1179,6 +1189,7 @@ export const Accounting = () => {
     }
 
     async function saveSupplierPayment() {
+        if (saving) return;
         if (!companyId) return;
         if (!supplierPaymentSupplierId) {
             alert("Tedarikçi seç.");
@@ -1198,6 +1209,7 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
+            idempotencyKeyRef.current = crypto.randomUUID();
 
             const payDateIso = new Date(supplierPaymentDate + "T12:00:00").toISOString();
 
@@ -1211,6 +1223,7 @@ export const Accounting = () => {
                 p_payment_date: payDateIso,
                 p_update_due_date: Boolean(supplierPaymentDueDate),
                 p_new_due_date: supplierPaymentDueDate ? payDateIso : null,
+                p_idempotency_key: idempotencyKeyRef.current,
             });
 
             if (error) throw error;
@@ -1237,6 +1250,7 @@ export const Accounting = () => {
             alert(e?.message ?? "Tedarikçi ödemesi kaydedilemedi.");
         } finally {
             setSaving(false);
+            idempotencyKeyRef.current = null;
         }
     }
 
