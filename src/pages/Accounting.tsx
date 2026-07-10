@@ -17,6 +17,7 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { logAction } from "../utils/audit";
+import { createFinanceService } from "../services/finance";
 
 
 function startOfDay(d: Date) {
@@ -989,21 +990,20 @@ export const Accounting = () => {
 
             // Use atomic RPC function for income entry with optional order payment
             if (incomeSourceType === "order" && selectedIncomeOrder) {
-                // Use the record_order_payment RPC for order payments
-                const { data, error } = await supabase.rpc("record_order_payment", {
-                    p_company_id: companyId,
-                    p_order_id: selectedIncomeOrder.id,
-                    p_amount: amount,
-                    p_payment_method: incomePaymentMethod || null,
-                    p_note: incomeNote || incomeDescription || null,
-                    p_idempotency_key: idempotencyKeyRef.current,
+                const finance = createFinanceService();
+                const result = await finance.customerCollections.recordCollection({
+                    companyId: companyId!,
+                    orderId: selectedIncomeOrder.id,
+                    amount,
+                    method: incomePaymentMethod as any || undefined,
+                    note: incomeNote || incomeDescription || undefined,
+                    idempotencyKey: idempotencyKeyRef.current
                 });
 
-                if (error) throw error;
-                if (!data?.success) throw new Error(data?.error || "Gelir kaydedilemedi.");
+                if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Gelir kaydedilemedi.");
 
                 // Log audit trail (fire-and-forget)
-                logAction("payment_created", "payment", data.payment_id || "", {
+                logAction("payment_created", "payment", result.data.paymentId || "", {
                     amount,
                     payment_method: incomePaymentMethod,
                     order_id: selectedIncomeOrder.id,
@@ -1155,19 +1155,20 @@ export const Accounting = () => {
             setSaving(true);
 
             // Use atomic RPC function for order payment
-            const { data, error } = await supabase.rpc("record_order_payment", {
-                p_company_id: companyId,
-                p_order_id: collectionOrderId,
-                p_amount: amount,
-                p_payment_method: collectionMethod || null,
-                p_note: collectionNote || "Sipariş tahsilatı",
+            const finance = createFinanceService();
+            const result = await finance.customerCollections.recordCollection({
+                companyId: companyId!,
+                orderId: collectionOrderId!,
+                amount,
+                method: collectionMethod as any || undefined,
+                note: collectionNote || "Sipariş tahsilatı",
+                idempotencyKey: undefined
             });
 
-            if (error) throw error;
-            if (!data?.success) throw new Error(data?.error || "Tahsilat kaydedilemedi.");
+            if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Tahsilat kaydedilemedi.");
 
             // Log audit trail (fire-and-forget)
-            logAction("payment_created", "payment", data.payment_id || "", {
+            logAction("payment_created", "payment", result.data.paymentId || "", {
                 amount,
                 payment_method: collectionMethod,
                 order_id: collectionOrderId,

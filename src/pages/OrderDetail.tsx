@@ -6,6 +6,7 @@ import { supabase } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { logAction } from "../utils/audit";
 import { notifyPaymentReceived } from "../services/notificationManager";
+import { createFinanceService } from "../services/finance";
 import { 
     Plus, 
     Trash2, 
@@ -1122,22 +1123,22 @@ export default function OrderDetail() {
         try {
             idempotencyKeyRef.current = crypto.randomUUID();
             // Use atomic RPC function for payment recording
-            const { data, error } = await supabase.rpc("record_order_payment", {
-                p_company_id: order.company_id,
-                p_order_id: id,
-                p_amount: amount,
-                p_payment_method: paymentMethod || null,
-                p_note: paymentNote || "Sipariş tahsilatı",
-                p_idempotency_key: idempotencyKeyRef.current,
+            const finance = createFinanceService();
+            const result = await finance.customerCollections.recordCollection({
+                companyId: order.company_id!,
+                orderId: id!,
+                amount,
+                method: paymentMethod as any || undefined,
+                note: paymentNote || "Sipariş tahsilatı",
+                idempotencyKey: idempotencyKeyRef.current
             });
 
-            if (error) throw error;
-            if (!data?.success) throw new Error(data?.error || "Ödeme kaydedilemedi.");
+            if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Ödeme kaydedilemedi.");
 
-            const overpayment = data.overpayment;
+            const overpayment = result.data.overpaymentAmount ?? 0;
 
             // Log audit trail (fire-and-forget, don't block if it fails)
-            logAction("payment_created", "payment", data.payment_id || "", {
+            logAction("payment_created", "payment", result.data.paymentId || "", {
                 amount,
                 payment_method: paymentMethod,
                 order_id: id,
@@ -1149,7 +1150,7 @@ export default function OrderDetail() {
               notifyPaymentReceived({
                 customerEmail: order.customers.email,
                 customerName: order.customers.name || "Müşteri",
-                paymentId: data.payment_id || "",
+                paymentId: result.data.paymentId || "",
                 amount,
                 paymentMethod: paymentMethod || "Belirtilmemiş",
                 createdAt: new Date().toISOString(),
