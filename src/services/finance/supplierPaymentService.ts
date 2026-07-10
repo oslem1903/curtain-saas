@@ -45,6 +45,12 @@ export type RecordSupplierPaymentParams = TenantContext & {
    * Verilmezse dedupe uygulanmaz (mevcut/eski davranışla aynı).
    */
   idempotencyKey?: string;
+  /** Ödemenin tarihi (ISO 8601 timestamp). Verilmezse now() kullanılır. */
+  paymentDate?: string; // ISO 8601 timestamp
+  /** Tedarikçinin bir borç satırının due_date'ini güncelle. */
+  updateDueDate?: boolean;
+  /** Güncelleme yapılırsa, yeni due_date değeri (ISO 8601 date). */
+  newDueDate?: string | null; // ISO 8601 date (YYYY-MM-DD)
 };
 
 export type SupplierPaymentRecord = {
@@ -183,6 +189,9 @@ export function createSupplierPaymentService(deps: FinanceServiceDeps): Supplier
         p_note: params.note ?? null,
         p_order_id: params.orderId ?? null,
         p_idempotency_key: params.idempotencyKey ?? null,
+        p_payment_date: params.paymentDate ?? null,
+        p_update_due_date: params.updateDueDate ?? false,
+        p_new_due_date: params.newDueDate ?? null,
       });
 
       if (rpcResult.status !== "success") return rpcResult;

@@ -93,14 +93,22 @@ ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS reversal_of_expense_id UUID
 --    Herhangi bir adim basarisiz olursa TUMU geri alinir — bakiye ASLA
 --    yaridan yazilmis veriyle hesaplanmaz.
 
-CREATE OR REPLACE FUNCTION public.supplier_record_payment(
+-- Atomic drop + create to avoid overload ambiguity
+BEGIN;
+
+DROP FUNCTION IF EXISTS public.supplier_record_payment(UUID, UUID, NUMERIC, TEXT, TEXT, UUID, TEXT) CASCADE;
+
+CREATE FUNCTION public.supplier_record_payment(
     p_company_id UUID,
     p_supplier_id UUID,
     p_amount NUMERIC,
     p_payment_method TEXT DEFAULT NULL,
     p_note TEXT DEFAULT NULL,
     p_order_id UUID DEFAULT NULL,
-    p_idempotency_key TEXT DEFAULT NULL
+    p_idempotency_key TEXT DEFAULT NULL,
+    p_payment_date TIMESTAMPTZ DEFAULT NULL,
+    p_update_due_date BOOLEAN DEFAULT false,
+    p_new_due_date DATE DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -112,6 +120,8 @@ DECLARE
     v_expense_id UUID;
     v_transaction_id UUID;
     v_new_balance NUMERIC;
+    v_payment_date TIMESTAMPTZ;
+    v_debt_id UUID;
 BEGIN
     IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
@@ -131,6 +141,9 @@ BEGIN
     IF p_supplier_id IS NULL THEN
         RAISE EXCEPTION 'invalid_reference: supplier_id gerekli';
     END IF;
+
+    -- Payment date: use provided date or default to now
+    v_payment_date := COALESCE(p_payment_date, now());
 
     -- Idempotency replay: ayni anahtarla ikinci cagri -> yeni kayit ACILMAZ,
     -- orijinal sonuc aynen geri donulur. transaction_type = 'payment' filtresi
@@ -166,22 +179,59 @@ BEGIN
 
     -- 1) Gider kaydi (expenses) — Giderler ekraniyla senkron (eski
     --    SupplierDetail/SupplierLedger davranisiyla ayni kategori/status).
+    --    expense_date now v_payment_date kullanir.
     INSERT INTO expenses (company_id, supplier_id, amount, expense_date, category, status, note)
-    VALUES (p_company_id, p_supplier_id, p_amount, now(), 'Tedarik', 'paid', p_note)
+    VALUES (p_company_id, p_supplier_id, p_amount, v_payment_date, 'Tedarik', 'paid', p_note)
     RETURNING id INTO v_expense_id;
 
     -- 2) Tedarikci cari hareketi (supplier_transactions).
+    --    transaction_date now v_payment_date kullanir.
     INSERT INTO supplier_transactions (
         company_id, supplier_id, order_id, transaction_date, transaction_type,
         amount, description, payment_method, expense_id, idempotency_key
     )
     VALUES (
-        p_company_id, p_supplier_id, p_order_id, now(), 'payment',
+        p_company_id, p_supplier_id, p_order_id, v_payment_date, 'payment',
         p_amount, p_note, p_payment_method, v_expense_id, p_idempotency_key
     )
     RETURNING id INTO v_transaction_id;
 
-    -- 3) Bakiye SADECE yukaridaki iki insert basariyla tamamlandiktan sonra
+    -- 3) Due-date guncelleme (opsiyonel).
+    --    Sadece p_update_due_date = true VE p_new_due_date IS NOT NULL ise calisir.
+    --    Replay'de (already_existed=true) bu blok execute edilmez.
+    IF p_update_due_date AND p_new_due_date IS NOT NULL THEN
+        -- Alistirma 1: p_order_id doluysa, aynı order'a bagli borcu sec.
+        IF p_order_id IS NOT NULL THEN
+            SELECT id INTO v_debt_id
+            FROM supplier_transactions
+            WHERE company_id = p_company_id
+              AND supplier_id = p_supplier_id
+              AND order_id = p_order_id
+              AND transaction_type = 'debt'
+            LIMIT 1;
+        END IF;
+
+        -- Geri plan: order_id ile eslesme yoksa (veya p_order_id NULL ise),
+        -- en eski Borc satiri seç (Fifo: oldest due_date, then oldest transaction).
+        IF v_debt_id IS NULL THEN
+            SELECT id INTO v_debt_id
+            FROM supplier_transactions
+            WHERE company_id = p_company_id
+              AND supplier_id = p_supplier_id
+              AND transaction_type = 'debt'
+            ORDER BY due_date ASC NULLS FIRST, transaction_date ASC, id ASC
+            LIMIT 1;
+        END IF;
+
+        -- Seçilen debt satiri varsa, due_date'i güncelle.
+        IF v_debt_id IS NOT NULL THEN
+            UPDATE supplier_transactions
+            SET due_date = p_new_due_date
+            WHERE id = v_debt_id;
+        END IF;
+    END IF;
+
+    -- 4) Bakiye SADECE yukaridaki insert/update'ler basariyla tamamlandiktan sonra
     --    hesaplanir (tedarikci bakiyesi stored bir kolon degil, her zaman
     --    ledger'dan turetilir — "guncelleme" degil "hesaplama"dir).
     SELECT
@@ -204,7 +254,9 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.supplier_record_payment(UUID, UUID, NUMERIC, TEXT, TEXT, UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.supplier_record_payment(UUID, UUID, NUMERIC, TEXT, TEXT, UUID, TEXT, TIMESTAMPTZ, BOOLEAN, DATE) TO authenticated;
+
+COMMIT;
 
 -- 3. supplier_cancel_payment — ters kayit (reverse entry), HARD DELETE YOK ---
 --    transaction_type = 'payment_reversal' (KESINLIKLE 'cancel' DEGIL —
@@ -345,5 +397,5 @@ NOTIFY pgrst, 'reload schema';
 
 -- SONUC
 SELECT 'SONUC: supplier_record_payment/supplier_cancel_payment hazir' AS check_name,
-       to_regprocedure('public.supplier_record_payment(uuid, uuid, numeric, text, text, uuid, text)') IS NOT NULL
+       to_regprocedure('public.supplier_record_payment(uuid, uuid, numeric, text, text, uuid, text, timestamptz, boolean, date)') IS NOT NULL
        AND to_regprocedure('public.supplier_cancel_payment(uuid, uuid, text, text)') IS NOT NULL AS ok;

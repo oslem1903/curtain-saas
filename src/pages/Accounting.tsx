@@ -1214,24 +1214,30 @@ export const Accounting = () => {
 
             const payDateIso = new Date(supplierPaymentDate + "T12:00:00").toISOString();
 
-            // Use atomic RPC function for supplier payment
-            const { data, error } = await supabase.rpc("record_supplier_payment", {
-                p_company_id: companyId,
-                p_supplier_id: supplierPaymentSupplierId,
-                p_amount: amount,
-                p_payment_method: supplierPaymentMethod || null,
-                p_description: `Tedarikçi ödemesi${supplierPaymentNote ? ` - ${supplierPaymentNote}` : ""}`,
-                p_payment_date: payDateIso,
-                p_update_due_date: Boolean(supplierPaymentDueDate),
-                p_new_due_date: supplierPaymentDueDate ? payDateIso : null,
-                p_idempotency_key: idempotencyKeyRef.current,
+            // Use financeService for supplier payment (atomic)
+            const financeService = createFinanceService({ supabase });
+            const rpcResult = await financeService.supplierPayments.recordPayment({
+                companyId,
+                supplierId: supplierPaymentSupplierId,
+                amount,
+                method: (supplierPaymentMethod || "nakit") as any,
+                date: supplierPaymentDate,
+                note: supplierPaymentNote || `Tedarikçi ödemesi`,
+                paymentDate: payDateIso,
+                updateDueDate: Boolean(supplierPaymentDueDate),
+                newDueDate: supplierPaymentDueDate ? supplierPaymentDate : null,
+                idempotencyKey: idempotencyKeyRef.current,
             });
 
-            if (error) throw error;
-            if (!data?.success) throw new Error(data?.error || "Tedarikçi ödemesi kaydedilemedi.");
+            if (rpcResult.status !== "success") {
+                const msg = rpcResult.status === "error"
+                    ? rpcResult.error.message
+                    : "Tedarikçi ödemesi kaydedilemedi.";
+                throw new Error(msg);
+            }
 
             // Log audit trail (fire-and-forget)
-            logAction("payment_created", "supplier_payment", data.payment_id || "", {
+            logAction("payment_created", "supplier_payment", rpcResult.data.transactionId, {
                 amount,
                 payment_method: supplierPaymentMethod,
                 supplier_id: supplierPaymentSupplierId,
