@@ -65,8 +65,8 @@ export default function Locked() {
     }
 
     async function handleSupportRequest() {
-        if (!company?.id || !user?.id) {
-            setCheckMessage("Firma veya kullanici bilgisi henuz yuklenemedi. Lutfen tekrar deneyin.");
+        if (!company?.id) {
+            setCheckMessage("Firma bilgisi henuz yuklenemedi. Lutfen tekrar deneyin.");
             return;
         }
 
@@ -75,17 +75,15 @@ export default function Locked() {
 
         const isDeviceLimit = lockReason === "device_limit";
         const payload = {
-            company_id: company.id,
-            user_id: user.id,
-            title: isDeviceLimit ? "Cihaz limiti talebi" : "Lisans / destek talebi",
-            description: isDeviceLimit
+            p_company_id: company.id,
+            p_title: isDeviceLimit ? "Cihaz limiti talebi" : "Lisans / destek talebi",
+            p_description: isDeviceLimit
                 ? `${company.name || "Firma"} icin yeni cihaz giris izni isteniyor. Super admin cihaz limitini artirabilir veya eski bir cihazi kaldirabilir.`
                 : `${company.name || "Firma"} icin lisans/destek talebi olusturuldu. Durum: ${lockReason || "unknown"}.`,
-            category: isDeviceLimit ? "payment" : "request",
-            priority: isDeviceLimit ? "high" : "medium",
-            status: "open",
-            page_url: window.location.href,
-            support_metadata: {
+            p_category: isDeviceLimit ? "payment" : "request",
+            p_priority: isDeviceLimit ? "high" : "medium",
+            p_page_url: window.location.href,
+            p_support_metadata: {
                 kind: isDeviceLimit ? "device_limit" : "license_support",
                 lock_reason: lockReason,
                 requested_device_id: getDeviceId(),
@@ -95,13 +93,9 @@ export default function Locked() {
         };
 
         try {
-            let { error } = await supabase.from("support_tickets").insert(payload);
-            if (error && /support_metadata|schema cache|column/i.test(String(error.message || ""))) {
-                const { support_metadata: _metadata, ...fallbackPayload } = payload;
-                const retry = await supabase.from("support_tickets").insert(fallbackPayload);
-                error = retry.error;
-            }
+            const { data, error } = await supabase.rpc("create_support_ticket_as_locked_user", payload);
             if (error) throw error;
+            if (data?.error) throw new Error(data.error);
             setCheckMessage("Talebiniz super admin paneline dustu. Onaylandiginda bu ekrandan Tekrar Dene ile giris yapabilirsiniz.");
         } catch (e: any) {
             setCheckMessage(e?.message || "Talep olusturulamadi. Lutfen internet baglantinizi kontrol edip tekrar deneyin.");
