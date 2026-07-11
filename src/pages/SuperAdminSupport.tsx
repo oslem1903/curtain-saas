@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
-import { 
-    MessageSquare, 
-    Search, 
+import {
+    MessageSquare,
+    Search,
     Building2,
     Send,
     User,
@@ -13,7 +13,8 @@ import {
     MonitorSmartphone,
     Plus,
     Trash2,
-    X
+    X,
+    RefreshCw
 } from "lucide-react";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
@@ -82,53 +83,79 @@ export default function SuperAdminSupport() {
         loadTickets();
     }, []);
 
+    // Realtime subscription for support_tickets changes
+    useEffect(() => {
+        const channel = supabase.channel('super-admin-support-tickets');
+
+        channel.on(
+            'postgres_changes',
+            {
+                event: '*',
+                schema: 'public',
+                table: 'support_tickets',
+            },
+            () => {
+                // Reload tickets on any INSERT/UPDATE/DELETE
+                loadTickets();
+            }
+        ).subscribe();
+
+        // Cleanup: unsubscribe when component unmounts
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, []);
+
     const [loadErr, setLoadErr] = useState("");
 
     async function loadTickets() {
         setLoading(true);
         setLoadErr("");
         try {
-            // 1. Gömülü join'lerle dene (FK ilişkileri kuruluysa en hızlı yol)
-            let { data, error } = await supabase
+            // Plain select: always get tickets without joins first
+            const { data: plainData, error: plainError } = await supabase
                 .from('support_tickets')
-                .select('*, company:companies(name), profile:profiles(full_name)')
+                .select('*')
                 .order('created_at', { ascending: false });
 
-            // 2. profiles FK'sı yoksa PostgREST tüm sorguyu reddeder —
-            //    join'siz oku, firma/kullanıcı adlarını ayrıca çek.
-            if (error) {
-                const plain = await supabase
-                    .from('support_tickets')
-                    .select('*')
-                    .order('created_at', { ascending: false });
-                if (plain.error) throw plain.error;
+            if (plainError) throw plainError;
 
-                const rows = (plain.data ?? []) as SupportTicket[];
-                const companyIds = Array.from(new Set(rows.map((r) => r.company_id).filter(Boolean)));
-                const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean)));
+            const rows = (plainData ?? []) as SupportTicket[];
 
-                const [companiesRes, profilesRes] = await Promise.all([
-                    companyIds.length > 0
-                        ? supabase.from('companies').select('id, name').in('id', companyIds)
-                        : Promise.resolve({ data: [] as any[] }),
-                    userIds.length > 0
-                        ? supabase.from('profiles').select('user_id, full_name').in('user_id', userIds)
-                        : Promise.resolve({ data: [] as any[] }),
-                ]);
-
-                const companyMap = new Map(((companiesRes.data ?? []) as any[]).map((c) => [c.id, c.name]));
-                const profileMap = new Map(((profilesRes.data ?? []) as any[]).map((p) => [p.user_id, p.full_name]));
-
-                data = rows.map((r) => ({
-                    ...r,
-                    company: { name: companyMap.get(r.company_id) || "Firma" },
-                    profile: { full_name: profileMap.get(r.user_id) || "Kullanıcı" },
-                })) as any;
+            // If no data, set empty array and return
+            if (rows.length === 0) {
+                setTickets([]);
+                return;
             }
 
-            setTickets((data ?? []) as SupportTicket[]);
+            // Extract unique company and user IDs
+            const companyIds = Array.from(new Set(rows.map((r) => r.company_id).filter(Boolean)));
+            const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean)));
+
+            // Fetch company and profile data in parallel
+            const [companiesRes, profilesRes] = await Promise.all([
+                companyIds.length > 0
+                    ? supabase.from('companies').select('id, name').in('id', companyIds)
+                    : Promise.resolve({ data: [] as any[] }),
+                userIds.length > 0
+                    ? supabase.from('profiles').select('user_id, full_name').in('user_id', userIds)
+                    : Promise.resolve({ data: [] as any[] }),
+            ]);
+
+            // Build lookup maps
+            const companyMap = new Map(((companiesRes.data ?? []) as any[]).map((c) => [c.id, c.name]));
+            const profileMap = new Map(((profilesRes.data ?? []) as any[]).map((p) => [p.user_id, p.full_name]));
+
+            // Enrich rows with company and profile data
+            const enrichedData = rows.map((r) => ({
+                ...r,
+                company: { name: companyMap.get(r.company_id) || "Firma" },
+                profile: { full_name: profileMap.get(r.user_id) || "Kullanıcı" },
+            })) as SupportTicket[];
+
+            setTickets(enrichedData);
         } catch (e: any) {
-            console.error(e);
+            console.error("loadTickets error:", e);
             setLoadErr(
                 /support_tickets|does not exist|schema cache/i.test(String(e?.message || ""))
                     ? "Destek tablosu bulunamadı. supabase_fix_support_tickets.sql dosyasını SQL Editor'da çalıştırın."
@@ -284,6 +311,14 @@ export default function SuperAdminSupport() {
                     <h1 className="text-3xl font-black text-slate-900 dark:text-white">Destek / Hata Merkezi</h1>
                     <p className="text-slate-500 mt-1">Kullanıcıların bildirdiği problemleri, hataları ve istekleri tek merkezden takip edin.</p>
                 </div>
+                <button
+                    onClick={() => loadTickets()}
+                    disabled={loading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-medium transition-colors"
+                >
+                    <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+                    Yenile
+                </button>
             </div>
 
             {loadErr && (

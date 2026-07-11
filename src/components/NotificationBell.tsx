@@ -174,7 +174,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
 
             const supportRes = await supabase
                 .from("support_tickets")
-                .select("id,title,subject,created_at,status")
+                .select("id,title,created_at,status")
                 .neq("status", "closed")
                 .order("created_at", { ascending: false })
                 .limit(5);
@@ -184,7 +184,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
                     items.push({
                         id: `support-${row.id}`,
                         title: "Yeni destek talebi",
-                        message: row.title || row.subject || "Destek talebi",
+                        message: row.title || "Destek talebi",
                         type: "info",
                         created_at: row.created_at || new Date().toISOString(),
                         target: "#/super-admin/support",

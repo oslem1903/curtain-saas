@@ -17,7 +17,7 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { logAction } from "../utils/audit";
-import { createFinanceService } from "../services/finance";
+import { createFinanceService } from "../services/finance/index";
 
 
 function startOfDay(d: Date) {
