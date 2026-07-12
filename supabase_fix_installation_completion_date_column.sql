@@ -1,168 +1,26 @@
 -- ============================================================================
--- MIGRATION: Fix update_installation_completion() to Create Earnings
--- DATE: 2026-07-11 (FINAL: Atomicity + Canonical Status)
--- STATUS: Analysis & Code Ready (NOT Applied to Production)
+-- HOTFIX: Correct column name in update_installation_completion function
+-- FILE: supabase_fix_installation_completion_date_column.sql
+-- DATE: 2026-07-12 (Post-deployment)
+-- PURPOSE: Fix schema mismatch - production uses 'completed_at', not 'completion_timestamp'
+-- STATUS: HOTFIX (urgent, minimal change only)
 -- ============================================================================
--- PURPOSE: Extend update_installation_completion() to automatically create
--- installer_earnings and installer_transactions records when installation
--- job is marked as 'completed'.
+-- ROOT CAUSE:
+-- Production installation_jobs table has 'completed_at' column (used by existing code).
+-- Migration incorrectly used 'completion_timestamp' (non-existent column).
+-- Result: Function fails at runtime when trying to update completion_timestamp.
 --
--- CHANGES:
--- 1. Only canonical status: 'completed' (no installation_completed support)
--- 2. Atomicity: exception raises (no JSON error in exception handler)
--- 3. Fixed installer_transactions INSERT (schema alignment)
--- 4. Pre-check queries A1-A6 (before deployment validation)
--- 5. UNIQUE constraint on (company_id, installation_job_id)
---
--- BACKWARD COMPATIBILITY: ✅
--- - Function signature unchanged (uuid, uuid, text, uuid, text)
--- - Return type unchanged (JSON)
--- - Frontend must call RPC for completion path
---
--- ATOMICITY: ✅
--- - All writes atomic: success returns JSON, any error raises exception
--- - Transaction rollback automatic on exception
+-- FIX: Change 'completion_timestamp' → 'completed_at' in function body only.
+-- No other changes to function logic, signature, or other objects.
 -- ============================================================================
 
 BEGIN TRANSACTION;
 
 -- ============================================================================
--- PRE-DEPLOYMENT VALIDATION QUERIES (Run on production BEFORE migration)
+-- STEP 1: UPDATE FUNCTION - Fix completion_timestamp → completed_at
 -- ============================================================================
-
--- A1: Check for duplicate installer_earnings
-DO $$
-DECLARE
-    v_duplicate_count integer;
-BEGIN
-    SELECT COUNT(*)
-    INTO v_duplicate_count
-    FROM (
-        SELECT company_id, installation_job_id
-        FROM public.installer_earnings
-        WHERE installation_job_id IS NOT NULL
-        GROUP BY company_id, installation_job_id
-        HAVING COUNT(*) > 1
-    ) dupes;
-
-    IF v_duplicate_count > 0 THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: Found % duplicate (company_id, installation_job_id) pairs. Manual cleanup required.', v_duplicate_count;
-    END IF;
-    RAISE NOTICE 'PRE-CHECK A1 PASSED: No duplicates found';
-END;
-$$;
-
--- A2: Verify calculate_commission_for_job exists
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public' AND p.proname = 'calculate_commission_for_job'
-    ) THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: calculate_commission_for_job() function not found.';
-    END IF;
-    RAISE NOTICE 'PRE-CHECK A2 PASSED: calculate_commission_for_job exists';
-END;
-$$;
-
--- A3: Verify installer_earnings table columns
-DO $$
-DECLARE
-    v_column_count integer;
-BEGIN
-    SELECT COUNT(*)
-    INTO v_column_count
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'installer_earnings'
-    AND column_name IN ('id', 'company_id', 'installer_id', 'installation_job_id', 'order_id',
-                        'job_completed_date', 'earning_type', 'quantity', 'area_m2', 'quantity_rate',
-                        'area_rate', 'quantity_earning', 'area_earning', 'manual_earning', 'total_earning');
-
-    IF v_column_count < 15 THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: installer_earnings missing required columns.';
-    END IF;
-    RAISE NOTICE 'PRE-CHECK A3 PASSED: installer_earnings schema OK';
-END;
-$$;
-
--- A4: Verify installer_transactions table columns
-DO $$
-DECLARE
-    v_column_count integer;
-BEGIN
-    SELECT COUNT(*)
-    INTO v_column_count
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'installer_transactions'
-    AND column_name IN ('id', 'company_id', 'installer_id', 'transaction_date', 'transaction_type', 'amount', 'description');
-
-    IF v_column_count < 7 THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: installer_transactions missing required columns.';
-    END IF;
-    RAISE NOTICE 'PRE-CHECK A4 PASSED: installer_transactions schema OK';
-END;
-$$;
-
--- A5: Check UNIQUE constraint status
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.table_constraints
-        WHERE table_schema = 'public' AND table_name = 'installer_earnings'
-        AND constraint_name = 'installer_earnings_company_job_unique'
-    ) THEN
-        RAISE NOTICE 'PRE-CHECK A5 PASSED: Constraint does not exist, will be created';
-    ELSE
-        RAISE NOTICE 'INFO A5: UNIQUE constraint already exists, skipping creation';
-    END IF;
-END;
-$$;
-
--- A6: Verify authorization functions
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'is_super_admin') THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: is_super_admin() function not found.';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'is_company_admin') THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: is_company_admin() function not found.';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'is_company_accounting') THEN
-        RAISE EXCEPTION 'PRE-CHECK FAILED: is_company_accounting() function not found.';
-    END IF;
-    RAISE NOTICE 'PRE-CHECK A6 PASSED: All authorization functions exist';
-END;
-$$;
-
--- ============================================================================
--- STEP 1: ADD UNIQUE CONSTRAINT
--- ============================================================================
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.table_constraints
-        WHERE table_schema = 'public' AND table_name = 'installer_earnings'
-        AND constraint_name = 'installer_earnings_company_job_unique'
-    ) THEN
-        ALTER TABLE public.installer_earnings
-        ADD CONSTRAINT installer_earnings_company_job_unique
-        UNIQUE (company_id, installation_job_id);
-        RAISE NOTICE 'CONSTRAINT CREATED: installer_earnings_company_job_unique';
-    END IF;
-END;
-$$;
-
--- ============================================================================
--- STEP 2: ENHANCED FUNCTION - update_installation_completion()
--- ============================================================================
--- ATOMICITY DESIGN:
---   1. Security checks + input validation (no writes)
---   2. Pre-check queries (SELECT only, with row lock)
---   3. WRITE OPERATIONS (if any error → exception → transaction rollback)
---   4. Exception raises automatically (atomicity guaranteed)
---   5. No partial state possible
---   6. Return JSON only on success
+-- Only change: Use 'completed_at' column (production schema)
+-- Everything else unchanged: atomicity, exception handling, etc.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.update_installation_completion(
@@ -394,20 +252,14 @@ END;
 $$;
 
 -- ============================================================================
--- STEP 3: GRANT PERMISSIONS
--- ============================================================================
-
-GRANT EXECUTE ON FUNCTION public.update_installation_completion(uuid, uuid, text, uuid, text)
-TO authenticated;
-
--- ============================================================================
--- STEP 4: UPDATE FUNCTION COMMENT
+-- STEP 2: UPDATE FUNCTION COMMENT
 -- ============================================================================
 
 COMMENT ON FUNCTION public.update_installation_completion(uuid, uuid, text, uuid, text) IS
-'Atomically complete installation: update job status, create earnings via calculate_commission_for_job(), '
+'Atomically complete installation: update job status (completed_at), create earnings via calculate_commission_for_job(), '
 'insert earnings and transaction records, optionally update order. All operations atomic: all succeed or all fail. '
-'Authorization: admin or accountant role required. Rate limited: 1 completion per 3 seconds.';
+'Authorization: admin or accountant role required. Rate limited: 1 completion per 3 seconds. '
+'NOTE: Uses completed_at column (not completion_timestamp) to match production schema.';
 
 -- ============================================================================
 -- END TRANSACTION
@@ -422,19 +274,15 @@ COMMIT;
 NOTIFY pgrst, 'reload schema';
 
 -- ============================================================================
--- POST-MIGRATION VERIFICATION QUERIES
+-- VERIFICATION
 -- ============================================================================
--- 1. Verify function signature unchanged:
---    SELECT pg_get_functiondef('public.update_installation_completion(uuid,uuid,text,uuid,text)'::regprocedure);
---
--- 2. Verify UNIQUE constraint exists:
---    SELECT constraint_name FROM information_schema.table_constraints
---    WHERE table_schema='public' AND table_name='installer_earnings'
---    AND constraint_name='installer_earnings_company_job_unique';
---
--- 3. Test basic call (production):
---    SELECT public.update_installation_completion(
---        'company_id'::uuid, 'job_id'::uuid, 'completed',
---        'order_id'::uuid, 'montaj_tamamlandi'
---    );
+-- After applying this hotfix, run:
+-- SELECT public.update_installation_completion(
+--     'company_id'::uuid,
+--     'job_id'::uuid,
+--     'completed',
+--     'order_id'::uuid,
+--     'montaj_tamamlandi'
+-- );
+-- Should return JSON with success=true and no column-not-found error.
 -- ============================================================================
