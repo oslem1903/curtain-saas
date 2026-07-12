@@ -293,6 +293,36 @@ export default function InstallationTracking() {
     try {
       const ctx = await getEffectiveTenantContext();
       if (ctx.readOnly) throw new Error("Firma lisansı aktif değil veya sadece okuma modunda.");
+
+      // COMPLETION PATH: Use RPC for atomic earnings creation + status update
+      if (patch.status === "completed") {
+        const { data: rpcResult, error: rpcError } = await supabase.rpc(
+          'update_installation_completion',
+          {
+            p_company_id: ctx.company_id,
+            p_job_id: row.id,
+            p_new_status: 'completed',
+            p_order_id: row.order_id,
+            p_order_new_status: nextOrderStatus || 'montaj_tamamlandi'
+          }
+        );
+
+        if (rpcError) throw rpcError;
+        if (!rpcResult?.success) {
+          throw new Error(rpcResult?.error || 'Montaj tamamlanırken bilinmeyen hata oluştu');
+        }
+
+        // RPC handled: job status update + earnings creation + order status update (if applicable)
+        // Update local state to reflect completion
+        setRows((prev) => prev.map((item) =>
+          item.id === row.id
+            ? { ...item, status: 'completed', updated_at: new Date().toISOString() }
+            : item
+        ));
+        return;
+      }
+
+      // OTHER STATUS PATHS: Direct table update (unchanged)
       const { error } = await supabase
         .from("installation_jobs")
         .update({ ...patch, updated_at: new Date().toISOString() })
@@ -300,27 +330,15 @@ export default function InstallationTracking() {
         .eq("company_id", ctx.company_id);
       if (error) throw error;
 
-      // Tamamlanınca hakediş zamanını işle; tamamlandıdan geri alınırsa temizle
-      // (kolon yoksa sessizce geçer — Montajcı Cari hakedişi status alanından hesaplar)
-      if (patch.status === "completed") {
-        await supabase.from("installation_jobs")
-          .update({ completed_at: new Date().toISOString() })
-          .eq("id", row.id).eq("company_id", ctx.company_id)
-          .then(() => {}, () => {});
-      } else if (patch.status && row.status === "completed") {
-        await supabase.from("installation_jobs")
-          .update({ completed_at: null })
-          .eq("id", row.id).eq("company_id", ctx.company_id)
-          .then(() => {}, () => {});
-      }
-
       if (nextOrderStatus) {
         await supabase.from("orders").update({ status: nextOrderStatus }).eq("id", row.order_id).eq("company_id", ctx.company_id);
       }
 
       setRows((prev) => prev.map((item) => item.id === row.id ? { ...item, ...patch } : item));
     } catch (e: any) {
-      alert(e?.message ?? "Montaj kaydı güncellenemedi.");
+      const errorMsg = e?.message ?? "Montaj kaydı güncellenemedi.";
+      alert(errorMsg);
+      console.error("updateJob error:", e);
     } finally {
       setBusyId(null);
     }
