@@ -7,15 +7,16 @@ import { normalizeRole, type RoleState } from "../auth/roles";
 import { logAction } from "../utils/audit";
 import { notifyPaymentReceived } from "../services/notificationManager";
 import { createFinanceService } from "../services/finance";
-import { 
-    Plus, 
-    Trash2, 
+import {
+    Plus,
+    Trash2,
     Phone,
     Image as ImageIcon,
     PackageCheck,
     Pencil,
     X,
     Camera as CameraIcon,
+    CheckCircle2,
 } from "lucide-react";
 
 
@@ -261,6 +262,8 @@ export default function OrderDetail() {
     const [installationJob, setInstallationJob] = useState<InstallationJobRow | null>(null);
     const [workflowMessage, setWorkflowMessage] = useState("");
     const [workflowError, setWorkflowError] = useState("");
+    const [completionLoading, setCompletionLoading] = useState(false);
+    const [showCompletionConfirm, setShowCompletionConfirm] = useState(false);
 
     // Maliyet giriş alanları
     const [mechanismCostInput, setMechanismCostInput] = useState("");
@@ -303,6 +306,7 @@ export default function OrderDetail() {
         setLoading(true);
         try {
             const { data: o } = await supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("id", id).single();
+            // eslint-disable-next-line prefer-const
             let { data: i, error: itemsErr } = await supabase
                 .from("order_items")
                 .select("*, suppliers(id, name)")
@@ -1251,6 +1255,48 @@ export default function OrderDetail() {
         }
     }
 
+    async function handleCompleteInstallation() {
+        if (!order?.company_id || !installationJob?.id || !id) return;
+        if (!installationJob.assigned_staff_id) {
+            setWorkflowError("Montajı tamamlamak için montajcı atayın.");
+            return;
+        }
+        if (installationJob.status === "completed") {
+            setWorkflowError("Bu montaj zaten tamamlanmış.");
+            return;
+        }
+        if (completionLoading || saving) return;
+
+        setCompletionLoading(true);
+        setWorkflowError("");
+        setWorkflowMessage("");
+        try {
+            const { data: rpcResult, error: rpcError } = await supabase.rpc(
+                'update_installation_completion',
+                {
+                    p_company_id: order.company_id,
+                    p_job_id: installationJob.id,
+                    p_new_status: 'completed',
+                    p_order_id: id,
+                    p_order_new_status: 'montaj_tamamlandi'
+                }
+            );
+
+            if (rpcError) throw rpcError;
+            if (!rpcResult?.success) {
+                throw new Error(rpcResult?.error || 'Montaj tamamlanamadı');
+            }
+
+            setWorkflowMessage('✅ Montaj tamamlandı. Montajcı hakedişi otomatik oluşturuldu.');
+            setShowCompletionConfirm(false);
+            await loadData();
+        } catch (e: any) {
+            setWorkflowError(e?.message ?? 'Montaj tamamlanamadı.');
+        } finally {
+            setCompletionLoading(false);
+        }
+    }
+
     const currentInstallerId = installationJob?.assigned_staff_id || order?.assigned_to || "";
 
     return (
@@ -1378,24 +1424,83 @@ export default function OrderDetail() {
                 {workflowMessage ? <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{workflowMessage}</div> : null}
 
                 {(role === "admin" || role === "accountant") ? (
-                    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/40 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                            <div className="text-xs font-black uppercase tracking-widest text-slate-400">Montaj İş Akışı</div>
-                            <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
-                                {installationJob ? `Bu sipariş montaj takibinde (${installationJob.status || "waiting"}).` : "Üretim tamamlandıysa siparişi montaj takibine aktarın."}
+                    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/40">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-widest text-slate-400">Montaj İş Akışı</div>
+                                <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
+                                    {installationJob ? (
+                                        installationJob.status === "completed"
+                                            ? "✅ Bu montaj tamamlanmış."
+                                            : `Bu sipariş montaj takibinde (${installationJob.status || "waiting"}).`
+                                    ) : "Üretim tamamlandıysa siparişi montaj takibine aktarın."}
+                                </div>
                             </div>
+                            <button
+                                type="button"
+                                onClick={handleMarkInstallationReady}
+                                disabled={saving || Boolean(installationJob)}
+                                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 text-sm font-black text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                            >
+                                <PackageCheck className="h-5 w-5" />
+                                {installationJob ? "Montaj Takibinde" : "Montaja Hazır"}
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={handleMarkInstallationReady}
-                            disabled={saving || Boolean(installationJob)}
-                            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 text-sm font-black text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                        >
-                            <PackageCheck className="h-5 w-5" />
-                            {installationJob ? "Montaj Takibinde" : "Montaja Hazır"}
-                        </button>
+
+                        {installationJob && installationJob.status !== "completed" && (
+                            <div className="flex flex-col sm:flex-row gap-3">
+                                {!installationJob.assigned_staff_id ? (
+                                    <div className="w-full sm:w-auto text-sm font-bold text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-200 rounded-xl px-4 py-2">
+                                        ⚠️ Montajı tamamlamak için önce montajcı atayın.
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCompletionConfirm(true)}
+                                        disabled={completionLoading || saving || !installationJob.assigned_staff_id}
+                                        className="flex-1 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
+                                    >
+                                        {completionLoading ? "⏳ Tamamlanıyor..." : "✅ Montaj Tamamlandı"}
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 ) : null}
+
+                {showCompletionConfirm && installationJob && (
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                            <div className="flex justify-center mb-4">
+                                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
+                                    <CheckCircle2 className="h-8 w-8 text-emerald-600" />
+                                </div>
+                            </div>
+                            <h2 className="text-center text-lg font-black text-slate-900 dark:text-white mb-2">Montaj Tamamlansın mı?</h2>
+                            <p className="text-center text-sm text-slate-600 dark:text-slate-400 mb-4">
+                                <strong>{order.customers?.name || "Bu sipariş"}</strong> için montajı tamamlamak ve montajcı hakedişini otomatik oluşturmak istiyor musunuz?
+                            </p>
+                            <div className="flex gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCompletionConfirm(false)}
+                                    disabled={completionLoading}
+                                    className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm font-black text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleCompleteInstallation}
+                                    disabled={completionLoading}
+                                    className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60 shadow-lg shadow-emerald-600/20"
+                                >
+                                    {completionLoading ? "İşleniyor..." : "✅ Evet, Tamamla"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {showPaymentForm ? (
                     <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10">

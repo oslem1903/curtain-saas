@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { CalendarClock, Check, CheckCircle2, ClipboardList, Filter, MapPin, Phone, RefreshCcw, Search, UserCheck, X, TrendingUp } from "lucide-react";
+import { CalendarClock, ClipboardList, Filter, MapPin, Phone, RefreshCcw, Search, UserCheck, X, TrendingUp } from "lucide-react";
 
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import FieldInfoGallery from "../components/FieldInfoGallery";
@@ -114,8 +114,6 @@ export default function InstallationTracking() {
   const [modalStaff, setModalStaff] = useState("");
   const [modalStatus, setModalStatus] = useState<InstallationStatus>("waiting");
   const [modalNote, setModalNote] = useState("");
-  // Completion confirmation modal
-  const [confirmCompleteRow, setConfirmCompleteRow] = useState<JobRow | null>(null);
 
   const loadInstallerEarnings = useCallback(async (installerId: string) => {
     try {
@@ -294,33 +292,6 @@ export default function InstallationTracking() {
       const ctx = await getEffectiveTenantContext();
       if (ctx.readOnly) throw new Error("Firma lisansı aktif değil veya sadece okuma modunda.");
 
-      // COMPLETION PATH: Use RPC for atomic earnings creation + status update
-      if (patch.status === "completed") {
-        const { data: rpcResult, error: rpcError } = await supabase.rpc(
-          'update_installation_completion',
-          {
-            p_company_id: ctx.company_id,
-            p_job_id: row.id,
-            p_new_status: 'completed',
-            p_order_id: row.order_id,
-            p_order_new_status: nextOrderStatus || 'montaj_tamamlandi'
-          }
-        );
-
-        if (rpcError) throw rpcError;
-        if (!rpcResult?.success) {
-          throw new Error(rpcResult?.error || 'Montaj tamamlanırken bilinmeyen hata oluştu');
-        }
-
-        // RPC handled: job status update + earnings creation + order status update (if applicable)
-        // Update local state to reflect completion
-        setRows((prev) => prev.map((item) =>
-          item.id === row.id
-            ? { ...item, status: 'completed', updated_at: new Date().toISOString() }
-            : item
-        ));
-        return;
-      }
 
       // OTHER STATUS PATHS: Direct table update (unchanged)
       const { error } = await supabase
@@ -394,9 +365,6 @@ export default function InstallationTracking() {
     closeModal();
   }
 
-  async function markCompleted(row: JobRow) {
-    setConfirmCompleteRow(row);
-  }
 
   function assignedName(row: JobRow) {
     if (!row.assigned_staff_id) return "Atanmadı";
@@ -425,58 +393,12 @@ export default function InstallationTracking() {
           Montajcı Ata
         </button>
         <button type="button" onClick={() => openStatusModal(row)} disabled={busyId === row.id} className="min-h-10 rounded-xl bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-60">Durum Güncelle</button>
-        {row.status !== "completed" && (
-          <button type="button" onClick={() => markCompleted(row)} disabled={busyId === row.id} className="col-span-2 min-h-10 rounded-xl bg-emerald-600 px-3 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-60 md:col-span-1">
-            <Check className="inline h-3.5 w-3.5 mr-1" />Tamamlandı
-          </button>
-        )}
       </div>
     );
   }
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
-      {/* Montajı Tamamla Onay Modalı */}
-      {confirmCompleteRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl dark:bg-slate-900 overflow-hidden">
-            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-6 text-center">
-              <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
-                <CheckCircle2 className="h-8 w-8 text-emerald-600" />
-              </div>
-              <h2 className="text-lg font-black text-slate-900 dark:text-white">Montajı Tamamla</h2>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                <strong>{confirmCompleteRow.customer_name || "Bu sipariş"}</strong> montaj tamamlandı olarak işaretlensin mi?
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                Onaylanınca sipariş ve montajcı kaydı senkron güncellenecek.
-              </p>
-            </div>
-            <div className="flex gap-3 p-4">
-              <button
-                type="button"
-                onClick={() => setConfirmCompleteRow(null)}
-                disabled={busyId === confirmCompleteRow.id}
-                className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60"
-              >
-                İptal
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const row = confirmCompleteRow;
-                  setConfirmCompleteRow(null);
-                  await updateJob(row, { status: "completed" }, "montaj_tamamlandi");
-                }}
-                disabled={busyId === confirmCompleteRow.id}
-                className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60 shadow-lg shadow-emerald-600/20"
-              >
-                {busyId === confirmCompleteRow.id ? "İşleniyor..." : "✅ Evet, Tamamla"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Modaller */}
       {modalType === "date" && modalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
