@@ -1132,6 +1132,7 @@ export const Accounting = () => {
     }
 
     async function saveCollection() {
+        if (saving) return;
         if (!companyId) return;
         if (!collectionOrderId) { alert("Sipariş seç."); return; }
         const amount = Number(collectionAmount);
@@ -1153,6 +1154,9 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
+            // Çift tıklama / ağ retry'de aynı tahsilatın iki kez kaydedilmesini
+            // engellemek için tekil idempotency anahtarı üret (bkz. saveIncome).
+            idempotencyKeyRef.current = crypto.randomUUID();
 
             // Use atomic RPC function for order payment
             const finance = createFinanceService();
@@ -1162,7 +1166,7 @@ export const Accounting = () => {
                 amount,
                 method: collectionMethod as any || undefined,
                 note: collectionNote || "Sipariş tahsilatı",
-                idempotencyKey: undefined
+                idempotencyKey: idempotencyKeyRef.current
             });
 
             if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Tahsilat kaydedilemedi.");
@@ -1186,6 +1190,7 @@ export const Accounting = () => {
             alert(e?.message ?? "Tahsilat kaydedilemedi.");
         } finally {
             setSaving(false);
+            idempotencyKeyRef.current = null;
         }
     }
 
