@@ -1141,17 +1141,8 @@ export const Accounting = () => {
         const order = orderIncomeOptions.find((o) => o.id === collectionOrderId);
         if (!order) { alert("Sipariş bulunamadı."); return; }
 
-        const total = Number(order.total_amount ?? 0);
-        const paid = Number(order.paid_amount ?? 0);
-        const remaining = order.remaining_amount != null
-            ? Number(order.remaining_amount)
-            : Math.max(total - paid, 0);
-
-        if (amount > remaining + 0.01) {
-            alert(`Bu siparişin kalan borcu ${formatTL(remaining)}. Daha yüksek tahsilat giremezsiniz.`);
-            return;
-        }
-
+        // Fazla tahsilat KABUL edilir ve müşteri alacağı olarak gösterilir
+        // (OrderDetail.handleAddPayment ve backend RPC ile birebir aynı davranış).
         try {
             setSaving(true);
             // Çift tıklama / ağ retry'de aynı tahsilatın iki kez kaydedilmesini
@@ -1186,6 +1177,13 @@ export const Accounting = () => {
             setCollectionDueDate("");
             setCollectionDate(new Date().toISOString().slice(0, 10));
             await loadData();
+
+            // Fazla tahsilatta müşteri alacağını bildir; normal tahsilatta
+            // mevcut sessiz davranış korunur.
+            const overpayment = result.data.overpaymentAmount ?? 0;
+            if (overpayment > 0) {
+                alert(`Tahsilat kaydedildi. Müşteri alacaklı: ${formatTL(overpayment)}`);
+            }
         } catch (e: any) {
             alert(e?.message ?? "Tahsilat kaydedilemedi.");
         } finally {
