@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { createFinanceService } from "../services/finance";
 import { useNavigate } from "react-router-dom";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
@@ -588,17 +589,8 @@ export default function Customers() {
         setCollectSuccessState(null);
     }
 
-    /** payments satırını ekler; customer_id kolonu yoksa o alan olmadan tekrar dener. */
-    async function insertPaymentRow(row: Record<string, any>): Promise<string> {
-        let { error } = await supabase.from("payments").insert(row);
-        if (error && /customer_id/i.test(String(error.message || ""))) {
-            const { customer_id: _omit, ...rest } = row;
-            ({ error } = await supabase.from("payments").insert(rest));
-        }
-        return error ? String(error.message || "") : "";
-    }
-
     async function submitCollect() {
+        if (collectSaving) return;
         if (!collectCustomer) return;
         const amount = Number(collectAmount);
         if (!Number.isFinite(amount) || amount <= 0) {
@@ -617,8 +609,8 @@ export default function Customers() {
         setCollectError("");
         try {
             const customer = collectCustomer;
-            const dateIso = new Date(`${collectDate || todayStr()}T12:00:00`).toISOString();
-            const baseNote = collectNote.trim();
+            const collectionDate = new Date(`${collectDate || todayStr()}T12:00:00`).toISOString();
+            const baseNote = collectNote.trim() || "Müşteri tahsilatı";
 
             // Müşterinin açık siparişlerini en eskiden başlayarak getir (FIFO dağıtım)
             const { data: orders, error: ordersErr } = await supabase
@@ -632,68 +624,51 @@ export default function Customers() {
 
             if (ordersErr) throw ordersErr;
 
-            // Kasaya giren toplam tutarı önce gelir (income) olarak kaydet — en kısıt-riskli adım.
-            // Başarısız olursa hiçbir sipariş bakiyesi değiştirilmeden hata gösterilir.
-            const incomeRes = await supabase.from("income").insert({
-                company_id: companyId,
-                income_date: dateIso,
-                amount,
-                payment_method: collectMethod || null,
-                description: `Tahsilat - ${customer.name || "Müşteri"}`,
-                note: baseNote || null,
-                source: "order_payment",
-                order_id: null,
-            });
-            if (incomeRes.error) throw incomeRes.error;
+            const orderRemaining = (o: { total_amount: number | null; paid_amount: number | null; remaining_amount: number | null }) =>
+                o.remaining_amount != null
+                    ? Number(o.remaining_amount)
+                    : Math.max(Number(o.total_amount ?? 0) - Number(o.paid_amount ?? 0), 0);
 
-            let remainingToApply = amount;
-
-            for (const order of orders ?? []) {
-                if (remainingToApply <= 0.005) break;
-                const total = Number(order.total_amount ?? 0);
-                const paid = Number(order.paid_amount ?? 0);
-                const rem = order.remaining_amount != null
-                    ? Number(order.remaining_amount)
-                    : Math.max(total - paid, 0);
-                if (rem <= 0.005) continue;
-
-                const applied = Math.min(remainingToApply, rem);
-                const nextPaid = paid + applied;
-                const nextRem = Math.max(rem - applied, 0);
-
-                const upd = await supabase
-                    .from("orders")
-                    .update({ paid_amount: nextPaid, remaining_amount: nextRem })
-                    .eq("id", order.id)
-                    .eq("company_id", companyId);
-                if (upd.error) throw upd.error;
-
-                await insertPaymentRow({
-                    company_id: companyId,
-                    customer_id: customer.id,
-                    order_id: order.id,
-                    payment_date: dateIso,
-                    amount: applied,
-                    method: collectMethod || null,
-                    note: baseNote || "Müşteri tahsilatı",
-                });
-
-                remainingToApply -= applied;
+            // Yalnızca bakiyesi olan açık siparişler (FIFO sırası korunur)
+            const openOrders = (orders ?? []).filter((o) => orderRemaining(o) > 0.005);
+            if (openOrders.length === 0) {
+                throw new Error("Bu müşterinin açık (bakiyeli) siparişi yok. Avans/ön tahsilat için sipariş bazlı tahsilat ekranını kullanın.");
             }
 
-            const overpayment = Math.max(remainingToApply, 0);
+            const totalRemaining = openOrders.reduce((s, o) => s + orderRemaining(o), 0);
+            const overpayment = Math.max(amount - totalRemaining, 0);
 
-            // Fazla ödeme (avans) — herhangi bir siparişe sığmayan kısım müşteri alacağı olarak işlenir.
-            if (overpayment > 0.005) {
-                await insertPaymentRow({
-                    company_id: companyId,
-                    customer_id: customer.id,
-                    order_id: null,
-                    payment_date: dateIso,
-                    amount: overpayment,
-                    method: collectMethod || null,
-                    note: [baseNote, "Fazla ödeme / Avans"].filter(Boolean).join(" — "),
+            // Tüm para yazma işlemi atomik RPC (customer_record_collection) üzerinden.
+            // Her sipariş için ayrı idempotency anahtarı: aynı batch iki kez gönderilse
+            // bile RPC her satırı replay eder, mükerrer kayıt oluşmaz.
+            const finance = createFinanceService();
+            const batchKey = crypto.randomUUID();
+
+            let remainingToApply = amount;
+            for (let i = 0; i < openOrders.length; i++) {
+                if (remainingToApply <= 0.005) break;
+                const order = openOrders[i];
+                const rem = orderRemaining(order);
+                const isLast = i === openOrders.length - 1;
+                // Son açık sipariş kalan tutarın tamamını üstlenir; fazlası RPC
+                // tarafında o siparişin fazla tahsilatı (müşteri alacağı) olarak işlenir.
+                const share = isLast ? remainingToApply : Math.min(remainingToApply, rem);
+                if (share <= 0.005) continue;
+
+                const res = await finance.customerCollections.recordCollection({
+                    companyId,
+                    orderId: order.id,
+                    amount: share,
+                    method: (collectMethod || undefined) as any,
+                    date: collectionDate,
+                    note: baseNote,
+                    idempotencyKey: `${batchKey}:${order.id}`,
                 });
+                if (res.status !== "success") {
+                    throw new Error(res.status === "error" ? res.error.message : "Tahsilat kaydedilemedi.");
+                }
+
+                remainingToApply -= share;
             }
 
             const newRemaining = Math.max(prevRemaining - amount, 0);
