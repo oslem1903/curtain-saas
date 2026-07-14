@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, UserCog, Wallet, X, Printer, FileSpreadsheet, Download, Briefcase, CalendarCheck, Phone, CheckCircle2, TrendingUp, Users, HandCoins } from "lucide-react";
+import { ChevronDown, ChevronUp, UserCog, Wallet, X, Printer, FileSpreadsheet, Download, Briefcase, CalendarCheck, Phone, CheckCircle2, TrendingUp, Users, HandCoins, Plus } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
+import { ManualEarningModal } from "../components/ManualEarningModal";
 
 const financeService = createFinanceService();
 
@@ -48,6 +49,18 @@ type InstallerTx = {
     expense_id: string | null;
 };
 
+type InstallerEarning = {
+    id: string;
+    installer_id: string;
+    installation_job_id: string | null;
+    order_id: string | null;
+    earning_type: string;
+    total_earning: number;
+    job_completed_date: string | null;
+    created_at: string;
+    metadata: { description?: string | null } | null;
+};
+
 function formatTL(n: number) {
     return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(n);
 }
@@ -88,9 +101,11 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
     const [employees, setEmployees] = useState<Employee[]>([]);
     const [jobs, setJobs] = useState<Job[]>([]);
     const [txs, setTxs] = useState<InstallerTx[]>([]);
+    const [earnings, setEarnings] = useState<InstallerEarning[]>([]);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [needsMigration, setNeedsMigration] = useState(false);
+    const [addEarningModalId, setAddEarningModalId] = useState<string | null>(null);
 
     const [openBalanceId, setOpenBalanceId] = useState<string | null>(null);
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -194,6 +209,20 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             } else {
                 setTxs((txRes.data ?? []) as InstallerTx[]);
             }
+
+            // Load manual earnings (earning_type='manual' AND installation_job_id IS NULL)
+            const earningsRes = await supabase
+                .from("installer_earnings")
+                .select("id, installer_id, installation_job_id, order_id, earning_type, total_earning, job_completed_date, created_at, metadata")
+                .eq("company_id", ctx.company_id)
+                .eq("earning_type", "manual")
+                .is("installation_job_id", null)
+                .order("created_at", { ascending: false });
+            if (earningsRes.error) {
+                setEarnings([]);
+            } else {
+                setEarnings((earningsRes.data ?? []) as InstallerEarning[]);
+            }
         } catch (e: any) {
             setErr(e?.message ?? "Montajcı cari verileri yüklenemedi.");
         } finally {
@@ -219,9 +248,25 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         employees.forEach((emp) => {
             const empJobs = jobsForInstaller(emp);
             const completedJobs = empJobs.filter((j) => j.status === "completed");
-            const earned = completedJobs.reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+
+            // Automatic earned (from completed jobs)
+            const automaticEarned = completedJobs.reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+
+            // Manual earned (from manual earnings entries)
+            const manualEarned = earnings
+                .filter(e => e.installer_id === emp.id && e.earning_type === 'manual' && e.installation_job_id === null)
+                .reduce((a, e) => a + Number(e.total_earning ?? 0), 0);
+
+            // Total earned (automatic + manual)
+            const earned = automaticEarned + manualEarned;
+
             const empTxs = txs.filter((t) => emp.allIds.includes(t.installer_id));
-            const paid = empTxs.reduce((a, t) => a + (t.transaction_type === "payment" ? Number(t.amount) : -Number(t.amount)), 0);
+
+            // Paid (exclude 'earning' type transactions)
+            const paid = empTxs
+                .filter(t => t.transaction_type !== 'earning')
+                .reduce((a, t) => a + (t.transaction_type === "payment" ? Number(t.amount) : -Number(t.amount)), 0);
+
             map[emp.id] = {
                 earned,
                 paid,
@@ -232,7 +277,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             };
         });
         return map;
-    }, [employees, jobsForInstaller, txs]);
+    }, [employees, jobsForInstaller, txs, earnings]);
 
     function handleExportExcel(emp: Employee, lines: any[]) {
         if (lines.length === 0) return;
@@ -438,6 +483,28 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             setErr(msg.includes("installer_record_payment")
                 ? "Montajcı ödeme servisi bulunamadı. supabase_installer_payment_finance_rpc.sql dosyasını SQL Editor'da çalıştırın."
                 : "Ödeme kaydedilemedi. Lütfen tekrar deneyin.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function handleAddEarning(emp: Employee, amount: number, date: string, description: string) {
+        setSaving(true);
+        try {
+            const result = await financeService.installerPayments.addManualEarning({
+                companyId,
+                installerId: emp.id,
+                amount,
+                earningDate: date,
+                description,
+                idempotencyKey: crypto.randomUUID(),
+            });
+            if (result.status === "error") throw result.error;
+
+            setAddEarningModalId(null);
+            await load();
+        } catch (e: any) {
+            throw e?.message || "Hakediş kaydedilemedi. Lütfen tekrar deneyin.";
         } finally {
             setSaving(false);
         }
@@ -681,6 +748,13 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                     </button>
                                     <button
                                         type="button"
+                                        onClick={() => setAddEarningModalId(emp.id)}
+                                        className="w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-4 py-3 md:py-3 text-sm font-black text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100 transition dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-500"
+                                    >
+                                        <Plus className="h-4 w-4" /> Hakediş Ekle
+                                    </button>
+                                    <button
+                                        type="button"
                                         onClick={() => setOpenBalanceId(isOpen ? null : emp.id)}
                                         className={`w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 md:py-3 text-sm font-bold shadow-sm transition ${
                                             isOpen ? "bg-slate-800 text-white border-slate-800 dark:bg-white dark:text-slate-900" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -740,7 +814,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
 
                                     {/* Birleşik Ekstre (Ledger) */}
                                     {(() => {
-                                        type LedgerLine = { id: string; date: string; desc: string; debit: number; credit: number; type: "job"|"payment"|"cancel"; raw: any; };
+                                        type LedgerLine = { id: string; date: string; desc: string; debit: number; credit: number; type: "job"|"payment"|"cancel"|"earning"; raw: any; };
                                         const lines: LedgerLine[] = [];
                                         
                                         empJobs.filter((j) => j.status === "completed").forEach((j) => {
@@ -755,24 +829,46 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                             });
                                         });
 
-                                        empTxs.forEach((t) => {
-                                            const amt = Number(t.amount ?? 0);
-                                            lines.push({
-                                                id: t.id,
-                                                date: t.transaction_date?.slice(0, 10) || "",
-                                                desc: t.description || (t.transaction_type === "cancel" ? "Ödeme İptali" : "Ödeme"),
-                                                debit: t.transaction_type === "cancel" ? amt : 0,
-                                                credit: t.transaction_type === "payment" ? amt : 0,
-                                                type: t.transaction_type as "payment"|"cancel",
-                                                raw: t,
+                                        // 'earning' tipi hareketler manuel hakedişin denetim aynasıdır;
+                                        // ekstre satırı olarak aşağıda installer_earnings'ten (kanonik
+                                        // kaynak) eklenir — burada çift satır olmasın diye hariç tutulur.
+                                        empTxs
+                                            .filter((t) => t.transaction_type !== "earning")
+                                            .forEach((t) => {
+                                                const amt = Number(t.amount ?? 0);
+                                                lines.push({
+                                                    id: t.id,
+                                                    date: t.transaction_date?.slice(0, 10) || "",
+                                                    desc: t.description || (t.transaction_type === "cancel" ? "Ödeme İptali" : "Ödeme"),
+                                                    debit: t.transaction_type === "cancel" ? amt : 0,
+                                                    credit: t.transaction_type === "payment" ? amt : 0,
+                                                    type: t.transaction_type as "payment"|"cancel",
+                                                    raw: t,
+                                                });
                                             });
-                                        });
+
+                                        // Manuel hakediş satırları (installer_earnings: earning_type='manual',
+                                        // installation_job_id IS NULL). Her satır kendi tutarını Borç (+) olarak
+                                        // gösterir ve running balance'a kronolojik olarak katkı verir.
+                                        earnings
+                                            .filter((e) => emp.allIds.includes(e.installer_id) && e.earning_type === "manual" && e.installation_job_id === null)
+                                            .forEach((e) => {
+                                                lines.push({
+                                                    id: e.id,
+                                                    date: (e.job_completed_date || e.created_at)?.slice(0, 10) || "",
+                                                    desc: e.metadata?.description ? `Manuel Hakediş: ${e.metadata.description}` : "Manuel Hakediş",
+                                                    debit: Number(e.total_earning ?? 0),
+                                                    credit: 0,
+                                                    type: "earning",
+                                                    raw: e,
+                                                });
+                                            });
 
                                         if (lines.length === 0) {
                                             return <div className="text-sm text-slate-500 text-center py-6">Henüz hakediş veya ödeme hareketi yok.</div>;
                                         }
 
-                                        lines.sort((a, b) => a.date.localeCompare(b.date) || (a.type === "job" ? -1 : 1));
+                                        lines.sort((a, b) => a.date.localeCompare(b.date) || ((a.type === "job" || a.type === "earning") ? -1 : 1));
                                         
                                         let running = 0;
                                         const withBalance = lines.map((l) => {
@@ -850,6 +946,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                     const isJob = l.type === "job";
                                                                     const isPayment = l.type === "payment";
                                                                     const isCancel = l.type === "cancel";
+                                                                    const isEarning = l.type === "earning";
                                                                     const d = isJob ? draftFor(l.raw) : null;
                                                                     const isAuto = isJob && d && (d.price_type === "m2" || d.price_type === "adet");
                                                                     const dirty = isJob && d && Boolean(drafts[l.raw.id]);
@@ -858,8 +955,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                         <tr key={l.id + l.type} className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors ${isCancel ? 'bg-red-50/30 dark:bg-red-900/10' : isPayment ? 'bg-emerald-50/30 dark:bg-emerald-900/10' : ''}`}>
                                                                             <td className="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-400">{l.date ? formatDate(l.date) : "—"}</td>
                                                                             <td className="px-4 py-3">
-                                                                                <div className={`font-bold ${isPayment ? 'text-emerald-700 dark:text-emerald-400' : isCancel ? 'text-red-700 dark:text-red-400' : 'text-slate-800 dark:text-slate-200'}`}>
-                                                                                    {isPayment ? "Ödeme Yapıldı" : isCancel ? "Ödeme İptali" : "Montaj Tamamlandı"}
+                                                                                <div className={`font-bold ${isPayment ? 'text-emerald-700 dark:text-emerald-400' : isCancel ? 'text-red-700 dark:text-red-400' : isEarning ? 'text-amber-700 dark:text-amber-400' : 'text-slate-800 dark:text-slate-200'}`}>
+                                                                                    {isPayment ? "Ödeme Yapıldı" : isCancel ? "Ödeme İptali" : isEarning ? "Manuel Hakediş" : "Montaj Tamamlandı"}
                                                                                 </div>
                                                                                 <div className="text-xs text-slate-500 mt-0.5 max-w-[280px] truncate" title={l.desc}>
                                                                                     {l.desc}
@@ -916,6 +1013,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                                     </div>
                                                                                 ) : isCancel ? (
                                                                                     <span className="font-bold text-red-600">+ {formatTL(l.debit)}</span>
+                                                                                ) : isEarning ? (
+                                                                                    <span className="font-black text-amber-600 dark:text-amber-400">+ {formatTL(l.debit)}</span>
                                                                                 ) : (
                                                                                     <span className="text-slate-300">—</span>
                                                                                 )}
@@ -1043,6 +1142,15 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                         </button>
                                     </div>
                                 </div>
+                            )}
+
+                            {/* Hakediş Ekle Modal */}
+                            {addEarningModalId === emp.id && (
+                                <ManualEarningModal
+                                    employee={emp}
+                                    onSave={(amount, date, description) => handleAddEarning(emp, amount, date, description)}
+                                    onCancel={() => setAddEarningModalId(null)}
+                                />
                             )}
                         </div>
                     );

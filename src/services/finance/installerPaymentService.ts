@@ -68,9 +68,27 @@ export type CancelInstallerPaymentRecord = {
   alreadyExisted: boolean;
 };
 
+export type AddManualEarningParams = TenantContext & {
+  installerId: string;
+  amount: Money;
+  earningDate: IsoDate;  // YYYY-MM-DD
+  description?: string;
+  idempotencyKey?: string;
+};
+
+export type ManualEarningRecord = {
+  earningId: string;
+  transactionId: string;
+  installerId: string;
+  amount: Money;
+  balance: Money;
+  alreadyExisted: boolean;
+};
+
 export interface InstallerPaymentService {
   recordPayment(params: RecordInstallerPaymentParams): Promise<FinanceResult<InstallerPaymentRecord>>;
   cancelPayment(params: CancelInstallerPaymentParams): Promise<FinanceResult<CancelInstallerPaymentRecord>>;
+  addManualEarning(params: AddManualEarningParams): Promise<FinanceResult<ManualEarningRecord>>;
 }
 
 // ----------------------------------------------------------------------------
@@ -95,6 +113,16 @@ type CancelPaymentRpcResponse = {
   already_existed: boolean;
 };
 
+type AddManualEarningRpcResponse = {
+  earning_id: string;
+  transaction_id: string;
+  installer_id: string;
+  amount: number;
+  balance: number;
+  already_existed: boolean;
+  status: string;
+};
+
 function mapRecordResponse(r: RecordPaymentRpcResponse): InstallerPaymentRecord {
   return {
     transactionId: r.transaction_id,
@@ -114,6 +142,17 @@ function mapCancelResponse(r: CancelPaymentRpcResponse): CancelInstallerPaymentR
     installerId: r.installer_id,
     amount: Number(r.amount),
     newBalance: Number(r.new_balance),
+    alreadyExisted: r.already_existed,
+  };
+}
+
+function mapManualEarningResponse(r: AddManualEarningRpcResponse): ManualEarningRecord {
+  return {
+    earningId: r.earning_id,
+    transactionId: r.transaction_id,
+    installerId: r.installer_id,
+    amount: Number(r.amount),
+    balance: Number(r.balance),
     alreadyExisted: r.already_existed,
   };
 }
@@ -194,6 +233,30 @@ export function createInstallerPaymentService(deps: FinanceServiceDeps): Install
 
       if (rpcResult.status !== "success") return rpcResult;
       return financeSuccess(mapCancelResponse(rpcResult.data));
+    },
+
+    async addManualEarning(params) {
+      if (!params.installerId) {
+        return financeFailure(new FinanceError("invalid_reference", "installerId gerekli."));
+      }
+      if (!Number.isFinite(params.amount) || params.amount <= 0) {
+        return financeFailure(new FinanceError("invalid_amount", "Tutar sıfırdan büyük olmalı."));
+      }
+      if (!params.earningDate) {
+        return financeFailure(new FinanceError("invalid_reference", "Tarih gerekli."));
+      }
+
+      const rpcResult = await callRpc<AddManualEarningRpcResponse>("add_manual_installer_earning", {
+        p_company_id: params.companyId,
+        p_installer_id: params.installerId,
+        p_amount: params.amount,
+        p_earning_date: params.earningDate,
+        p_description: params.description ?? null,
+        p_idempotency_key: params.idempotencyKey ?? null,
+      });
+
+      if (rpcResult.status !== "success") return rpcResult;
+      return financeSuccess(mapManualEarningResponse(rpcResult.data));
     },
   };
 }

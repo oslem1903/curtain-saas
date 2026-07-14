@@ -70,6 +70,8 @@ DECLARE
     v_earned NUMERIC;
     v_paid NUMERIC;
     v_new_balance NUMERIC;
+    v_automatic_earned NUMERIC;
+    v_manual_earned NUMERIC;
 BEGIN
     IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
@@ -99,15 +101,28 @@ BEGIN
         LIMIT 1;
 
         IF FOUND THEN
-            SELECT COALESCE(SUM(ij.installer_fee), 0) INTO v_earned
+            -- Idempotency replay: recalculate balance (may have changed since first request)
+            SELECT COALESCE(SUM(ij.installer_fee), 0)
+            INTO v_automatic_earned
             FROM installation_jobs ij
             WHERE ij.assigned_staff_id = v_existing.installer_id AND ij.status = 'completed';
 
-            SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount ELSE -it.amount END), 0)
+            SELECT COALESCE(SUM(ie.total_earning), 0)
+            INTO v_manual_earned
+            FROM installer_earnings ie
+            WHERE ie.installer_id = v_existing.installer_id
+              AND ie.company_id = p_company_id
+              AND ie.earning_type = 'manual'
+              AND ie.installation_job_id IS NULL;
+
+            SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount WHEN it.transaction_type = 'cancel' THEN -it.amount ELSE 0 END), 0)
             INTO v_paid
             FROM installer_transactions it
-            WHERE it.installer_id = v_existing.installer_id AND it.company_id = p_company_id;
+            WHERE it.installer_id = v_existing.installer_id
+              AND it.company_id = p_company_id
+              AND it.transaction_type NOT IN ('earning');
 
+            v_earned := v_automatic_earned + v_manual_earned;
             v_new_balance := GREATEST(v_earned - v_paid, 0);
 
             RETURN jsonb_build_object(
@@ -143,15 +158,47 @@ BEGIN
     -- 3) Bakiye SADECE yukaridaki iki insert basariyla tamamlandiktan sonra
     --    hesaplanir (montajci bakiyesi zaten stored bir kolon degil, her
     --    zaman ledger'dan turetilir — "guncelleme" degil "hesaplama"dir).
-    SELECT COALESCE(SUM(ij.installer_fee), 0) INTO v_earned
-    FROM installation_jobs ij
-    WHERE ij.assigned_staff_id = p_installer_id AND ij.status = 'completed';
+    --
+    --    UPDATED for manual earnings support:
+    --    Balance = automatic_earned + manual_earned - paid
+    --    Where:
+    --    - automatic_earned = SUM(installation_jobs.installer_fee) WHERE status='completed'
+    --    - manual_earned = SUM(installer_earnings.total_earning) WHERE earning_type='manual' AND installation_job_id IS NULL
+    --    - paid = SUM(payment - cancel) excludes 'earning' type transactions
 
-    SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount ELSE -it.amount END), 0)
+    -- Automatic earned (from completed jobs)
+    SELECT COALESCE(SUM(ij.installer_fee), 0)
+    INTO v_automatic_earned
+    FROM installation_jobs ij
+    WHERE ij.assigned_staff_id = p_installer_id
+      AND ij.status = 'completed'
+      AND ij.company_id = p_company_id;
+
+    -- Manual earned (from manual earnings entries)
+    SELECT COALESCE(SUM(ie.total_earning), 0)
+    INTO v_manual_earned
+    FROM installer_earnings ie
+    WHERE ie.installer_id = p_installer_id
+      AND ie.company_id = p_company_id
+      AND ie.earning_type = 'manual'
+      AND ie.installation_job_id IS NULL;
+
+    -- Paid (exact formula: exclude 'earning' type transactions)
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN it.transaction_type = 'payment' THEN it.amount
+            WHEN it.transaction_type = 'cancel' THEN -it.amount
+            ELSE 0
+        END
+    ), 0)
     INTO v_paid
     FROM installer_transactions it
-    WHERE it.installer_id = p_installer_id AND it.company_id = p_company_id;
+    WHERE it.installer_id = p_installer_id
+      AND it.company_id = p_company_id
+      AND it.transaction_type NOT IN ('earning');
 
+    -- Balance = automatic + manual - paid
+    v_earned := v_automatic_earned + v_manual_earned;
     v_new_balance := GREATEST(v_earned - v_paid, 0);
 
     RETURN jsonb_build_object(
@@ -189,6 +236,8 @@ DECLARE
     v_earned NUMERIC;
     v_paid NUMERIC;
     v_new_balance NUMERIC;
+    v_automatic_earned NUMERIC;
+    v_manual_earned NUMERIC;
 BEGIN
     IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
@@ -213,15 +262,30 @@ BEGIN
         LIMIT 1;
 
         IF FOUND THEN
-            SELECT COALESCE(SUM(ij.installer_fee), 0) INTO v_earned
+            -- Automatic earned (from completed jobs)
+            SELECT COALESCE(SUM(ij.installer_fee), 0)
+            INTO v_automatic_earned
             FROM installation_jobs ij
             WHERE ij.assigned_staff_id = v_existing_replay.installer_id AND ij.status = 'completed';
 
-            SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount ELSE -it.amount END), 0)
+            -- Manual earned (from manual earnings entries)
+            SELECT COALESCE(SUM(ie.total_earning), 0)
+            INTO v_manual_earned
+            FROM installer_earnings ie
+            WHERE ie.installer_id = v_existing_replay.installer_id
+              AND ie.company_id = p_company_id
+              AND ie.earning_type = 'manual'
+              AND ie.installation_job_id IS NULL;
+
+            -- Paid (exclude 'earning' type transactions)
+            SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount WHEN it.transaction_type = 'cancel' THEN -it.amount ELSE 0 END), 0)
             INTO v_paid
             FROM installer_transactions it
-            WHERE it.installer_id = v_existing_replay.installer_id AND it.company_id = p_company_id;
+            WHERE it.installer_id = v_existing_replay.installer_id
+              AND it.company_id = p_company_id
+              AND it.transaction_type NOT IN ('earning');
 
+            v_earned := v_automatic_earned + v_manual_earned;
             v_new_balance := GREATEST(v_earned - v_paid, 0);
 
             RETURN jsonb_build_object(
@@ -280,15 +344,47 @@ BEGIN
 
     -- 3) Bakiye SADECE yukaridaki insert'ler basariyla tamamlandiktan sonra
     --    hesaplanir.
-    SELECT COALESCE(SUM(ij.installer_fee), 0) INTO v_earned
-    FROM installation_jobs ij
-    WHERE ij.assigned_staff_id = v_original.installer_id AND ij.status = 'completed';
+    --
+    --    Balance formula (same as installer_record_payment):
+    --    Balance = automatic_earned + manual_earned - paid
+    --    Where:
+    --    - automatic_earned = SUM(installation_jobs.installer_fee) WHERE status='completed'
+    --    - manual_earned = SUM(installer_earnings.total_earning) WHERE earning_type='manual' AND installation_job_id IS NULL
+    --    - paid = SUM(payment - cancel) excludes 'earning' type transactions
 
-    SELECT COALESCE(SUM(CASE WHEN it.transaction_type = 'payment' THEN it.amount ELSE -it.amount END), 0)
+    -- Automatic earned (from completed jobs)
+    SELECT COALESCE(SUM(ij.installer_fee), 0)
+    INTO v_automatic_earned
+    FROM installation_jobs ij
+    WHERE ij.assigned_staff_id = v_original.installer_id
+      AND ij.status = 'completed'
+      AND ij.company_id = p_company_id;
+
+    -- Manual earned (from manual earnings entries)
+    SELECT COALESCE(SUM(ie.total_earning), 0)
+    INTO v_manual_earned
+    FROM installer_earnings ie
+    WHERE ie.installer_id = v_original.installer_id
+      AND ie.company_id = p_company_id
+      AND ie.earning_type = 'manual'
+      AND ie.installation_job_id IS NULL;
+
+    -- Paid (exact formula: exclude 'earning' type transactions)
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN it.transaction_type = 'payment' THEN it.amount
+            WHEN it.transaction_type = 'cancel' THEN -it.amount
+            ELSE 0
+        END
+    ), 0)
     INTO v_paid
     FROM installer_transactions it
-    WHERE it.installer_id = v_original.installer_id AND it.company_id = p_company_id;
+    WHERE it.installer_id = v_original.installer_id
+      AND it.company_id = p_company_id
+      AND it.transaction_type NOT IN ('earning');
 
+    -- Balance = automatic + manual - paid
+    v_earned := v_automatic_earned + v_manual_earned;
     v_new_balance := GREATEST(v_earned - v_paid, 0);
 
     RETURN jsonb_build_object(
