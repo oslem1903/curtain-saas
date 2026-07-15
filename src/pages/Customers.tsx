@@ -35,7 +35,9 @@ import {
     FileText,
     FileSignature,
     ClipboardCheck,
-    HelpCircle
+    HelpCircle,
+    Printer,
+    Download
 } from "lucide-react";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
@@ -111,6 +113,79 @@ function formatTL(value: number) {
         currency: "TRY",
         maximumFractionDigits: 2,
     }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatStmtDate(iso: string | null) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("tr-TR");
+}
+
+// ── Müşteri Cari Ekstresi satırı ─────────────────────────────
+// Kaynak: orders (Borç +) + gerçek payments satırları (Alacak −).
+// orders.paid_amount/remaining_amount CACHE'İ KULLANILMAZ — hareketler
+// doğrudan sipariş ve tahsilat kayıtlarından türetilir.
+type StatementRow = {
+    id: string;
+    date: string;
+    label: string;
+    debit: number;   // Borç (+): sipariş tutarı veya tahsilat iptali (borcu geri açar)
+    credit: number;  // Alacak (−): tahsilat
+    type: "order" | "payment" | "reversal";
+    balance: number; // kronolojik running balance
+};
+
+function buildCustomerStatement(customerId: string, orders: any[], payments: any[]): StatementRow[] {
+    const rows: Omit<StatementRow, "balance">[] = [];
+
+    // Sipariş → order_id/müşteri eşlemesi (RPC tahsilatları customer_id taşımaz,
+    // order_id üzerinden müşteriye bağlanır).
+    const orderCustomer = new Map<string, string | null>();
+    for (const o of orders) {
+        if (o?.id) orderCustomer.set(o.id, o.customer_id ?? null);
+    }
+
+    // Borç (+): müşterinin siparişleri (taslak/iptal hariç)
+    for (const o of orders) {
+        if (o?.customer_id !== customerId) continue;
+        if (o?.status === "draft" || o?.status === "cancelled") continue;
+        const total = Number(o?.total_amount ?? 0);
+        if (total <= 0) continue;
+        rows.push({
+            id: `order-${o.id}`,
+            date: o?.created_at ?? "",
+            label: `Sipariş #${String(o.id).slice(0, 8).toUpperCase()}`,
+            debit: total,
+            credit: 0,
+            type: "order",
+        });
+    }
+
+    // Alacak (−): gerçek tahsilat satırları.
+    // NOT: Tahsilat iptali (reverses_payment_id) prod şemasında yok; şimdilik
+    // tüm tahsilatlar Alacak (−) olarak işlenir (reversal mantığı devre dışı).
+    for (const p of payments) {
+        const cid = p?.customer_id ?? (p?.order_id ? orderCustomer.get(p.order_id) : null);
+        if (cid !== customerId) continue;
+        const amount = Number(p?.amount ?? 0);
+        if (amount <= 0) continue;
+        rows.push({
+            id: `pay-${p.id}`,
+            date: p?.payment_date ?? "",
+            label: p?.note || "Tahsilat",
+            debit: 0,
+            credit: amount,
+            type: "payment",
+        });
+    }
+
+    // Kronolojik sırala (aynı tarihte borç önce), running balance hesapla.
+    rows.sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.type === "payment" ? 1 : -1));
+    let running = 0;
+    return rows.map((r) => {
+        running = Math.round((running + r.debit - r.credit) * 100) / 100;
+        return { ...r, balance: running };
+    });
 }
 
 /** DB unique constraint hatasını kullanıcı dostu mesaja çevirir */
@@ -301,6 +376,9 @@ export default function Customers() {
     const [collectError, setCollectError] = useState("");
     const [toast, setToast] = useState("");
 
+    // Cari ekstre modal state
+    const [statementCustomer, setStatementCustomer] = useState<Customer | null>(null);
+
     // Debounce search query
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -342,11 +420,12 @@ export default function Customers() {
                     .eq("company_id", ctx.company_id)),
                 withoutDeleted(supabase
                     .from("payments")
-                    .select("id, created_at, customer_id, order_id, amount, payment_date, method, note")
+                    .select("id, customer_id, order_id, amount, payment_date, method, note")
                     .eq("company_id", ctx.company_id))
             ]);
 
             if (custRes.error) throw custRes.error;
+            if (paymentsRes.error) throw paymentsRes.error;
 
             setTotalPages(Math.ceil((custRes.count || 0) / PAGE_SIZE));
 
@@ -587,6 +666,136 @@ export default function Customers() {
         setCollectNote("");
         setCollectError("");
         setCollectSuccessState(null);
+    }
+
+    // ── Cari ekstre (statement) ─────────────────────────────
+    const statementRows = useMemo(
+        () => (statementCustomer ? buildCustomerStatement(statementCustomer.id, allOrders, allPayments) : []),
+        [statementCustomer, allOrders, allPayments],
+    );
+
+    const statementTotals = useMemo(() => {
+        const salesTotal = statementRows
+            .filter((r) => r.type === "order")
+            .reduce((s, r) => s + r.debit, 0);
+        // Net tahsilat = tahsilatlar − iptaller
+        const paidNet = statementRows.reduce(
+            (s, r) => s + r.credit - (r.type === "reversal" ? r.debit : 0),
+            0,
+        );
+        const balance = Math.round((salesTotal - paidNet) * 100) / 100;
+        return { salesTotal, paidNet, balance };
+    }, [statementRows]);
+
+    function exportStatementCSV() {
+        if (!statementCustomer || statementRows.length === 0) return;
+        const headers = ["Tarih", "Açıklama", "Borç (+)", "Alacak (-)", "Bakiye"];
+        const rows = statementRows.map((r) => [
+            formatStmtDate(r.date),
+            r.label,
+            r.debit > 0 ? r.debit.toFixed(2) : "0.00",
+            r.credit > 0 ? r.credit.toFixed(2) : "0.00",
+            r.balance.toFixed(2),
+        ]);
+        const content = [headers, ...rows].map((row) => row.join(";")).join("\n");
+        const blob = new Blob(["﻿" + content], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute(
+            "download",
+            `musteri_${(statementCustomer.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`,
+        );
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    function exportStatementPDF() {
+        if (!statementCustomer || statementRows.length === 0) return;
+        const rows = statementRows
+            .map(
+                (r) => `
+                    <tr>
+                        <td>${formatStmtDate(r.date)}</td>
+                        <td>${r.label}</td>
+                        <td style="text-align: right; color: #dc2626;">${
+                            r.debit > 0
+                                ? (r.type === "reversal" ? `+ ${formatTL(r.debit)} (iptal)` : `+ ${formatTL(r.debit)}`)
+                                : "—"
+                        }</td>
+                        <td style="text-align: right; color: #16a34a;">${r.credit > 0 ? `− ${formatTL(r.credit)}` : "—"}</td>
+                        <td style="text-align: right; font-weight: bold; color: ${r.balance > 0 ? "#b91c1c" : "#15803d"};">${formatTL(r.balance)}</td>
+                    </tr>`,
+            )
+            .join("");
+
+        const printWindow = window.open("", "_blank", "width=1200,height=800");
+        if (!printWindow) return;
+        printWindow.document.write(`
+            <html>
+                <head>
+                    <title>Müşteri Cari Ekstresi - ${statementCustomer.name || ""}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 30px; color: #1e293b; background: #fff; }
+                        .header { display: flex; justify-content: space-between; border-bottom: 2px solid #cbd5e1; padding-bottom: 20px; margin-bottom: 30px; }
+                        .title h1 { margin: 0; font-size: 24px; font-weight: 800; color: #0f172a; }
+                        .title p { margin: 5px 0 0 0; font-size: 14px; color: #64748b; }
+                        .details { font-size: 14px; line-height: 1.6; }
+                        .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; }
+                        .summary-card { padding: 15px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; }
+                        .summary-card .label { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #64748b; }
+                        .summary-card .val { font-size: 18px; font-weight: 800; margin-top: 5px; color: #0f172a; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                        th, td { padding: 12px 10px; border-bottom: 1px solid #cbd5e1; font-size: 12px; text-align: left; }
+                        th { background: #f1f5f9; font-weight: bold; color: #475569; border-top: 1px solid #cbd5e1; }
+                        .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <div class="title">
+                            <h1>MÜŞTERİ CARİ EKSTRESİ</h1>
+                            <p>${statementCustomer.name || "Müşteri"}</p>
+                        </div>
+                        <div class="details">
+                            <div><strong>Tarih:</strong> ${new Date().toLocaleDateString("tr-TR")}</div>
+                        </div>
+                    </div>
+                    <div class="summary-grid">
+                        <div class="summary-card">
+                            <div class="label">Toplam Sipariş (Borç)</div>
+                            <div class="val" style="color: #dc2626;">${formatTL(statementTotals.salesTotal)}</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="label">Toplam Tahsilat</div>
+                            <div class="val" style="color: #16a34a;">${formatTL(statementTotals.paidNet)}</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="label">${statementTotals.balance < 0 ? "Müşteri Alacağı" : "Kalan Bakiye"}</div>
+                            <div class="val" style="color: ${statementTotals.balance > 0 ? "#b91c1c" : "#15803d"};">${formatTL(Math.abs(statementTotals.balance))}</div>
+                        </div>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 100px;">Tarih</th>
+                                <th>Açıklama</th>
+                                <th style="text-align: right; width: 130px;">Borç (+)</th>
+                                <th style="text-align: right; width: 130px;">Alacak (−)</th>
+                                <th style="text-align: right; width: 130px;">Bakiye</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                    <div class="footer">Bu döküm sistem tarafından otomatik oluşturulmuştur. © PerdePRO</div>
+                </body>
+            </html>
+        `);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => printWindow.print(), 400);
     }
 
     async function submitCollect() {
@@ -932,7 +1141,7 @@ export default function Customers() {
         // 4. Payments
         const cPayments = allPayments.filter(p => p.customer_id === selectedCustomer.id);
         cPayments.forEach(pay => {
-            const dateStr = pay.payment_date || pay.created_at || new Date().toISOString();
+            const dateStr = pay.payment_date || new Date().toISOString();
             const methodLabel = PAYMENT_METHODS.find(m => m.value === pay.method)?.label || pay.method || "Diğer";
             events.push({
                 id: `pay-${pay.id}`,
@@ -985,7 +1194,7 @@ export default function Customers() {
         if (!selectedCustomerId) return [];
         return allPayments
             .filter(p => p.customer_id === selectedCustomerId)
-            .sort((a, b) => new Date(b.payment_date || b.created_at || 0).getTime() - new Date(a.payment_date || a.created_at || 0).getTime());
+            .sort((a, b) => new Date(b.payment_date || 0).getTime() - new Date(a.payment_date || 0).getTime());
     }, [allPayments, selectedCustomerId]);
 
     const activeCustomerCrmNotes = useMemo(() => {
@@ -1344,6 +1553,11 @@ export default function Customers() {
                                         {canSeeFinancial ? (
                                             <button onClick={() => openCollect(c)} className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition shadow-sm" title="Tahsilat Yap">
                                                 <Wallet className="w-4 h-4" /> <span>Tahsilat Yap</span>
+                                            </button>
+                                        ) : null}
+                                        {canSeeFinancial ? (
+                                            <button onClick={() => setStatementCustomer(c)} className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 font-bold text-xs transition shadow-sm" title="Cari Ekstre">
+                                                <FileText className="w-4 h-4" /> <span>Ekstre</span>
                                             </button>
                                         ) : null}
                                         <button onClick={() => startEdit(c)} className="inline-flex items-center justify-center p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition shadow-sm" title="Müşteri Düzenle">
@@ -1809,6 +2023,83 @@ export default function Customers() {
                     </div>
                 </div>
             )}
+
+            {/* Müşteri Cari Ekstre Modal */}
+            {statementCustomer ? (
+                <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/60 backdrop-blur-xs p-0 sm:items-center sm:p-4 animate-fadeIn">
+                    <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 border border-slate-200 dark:border-slate-800">
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                            <div>
+                                <h3 className="flex items-center gap-2 text-lg font-black text-slate-900 dark:text-white">
+                                    <FileText className="h-5 w-5 text-primary-600" /> Cari Ekstre
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-0.5">{statementCustomer.name || "Müşteri"}</p>
+                            </div>
+                            <button onClick={() => setStatementCustomer(null)} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800" title="Kapat">
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        {/* Özet kartlar */}
+                        <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="rounded-2xl border border-red-200 bg-red-50 p-3 dark:border-red-900/40 dark:bg-red-950/20">
+                                <div className="text-[10px] font-bold uppercase text-red-600">Toplam Sipariş</div>
+                                <div className="mt-1 text-base font-black text-red-800 dark:text-red-200">{formatTL(statementTotals.salesTotal)}</div>
+                            </div>
+                            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+                                <div className="text-[10px] font-bold uppercase text-emerald-600">Toplam Tahsilat</div>
+                                <div className="mt-1 text-base font-black text-emerald-800 dark:text-emerald-200">{formatTL(statementTotals.paidNet)}</div>
+                            </div>
+                            <div className={`rounded-2xl border p-3 ${statementTotals.balance < 0 ? "border-sky-200 bg-sky-50 dark:border-sky-900/40 dark:bg-sky-950/20" : "border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/20"}`}>
+                                <div className={`text-[10px] font-bold uppercase ${statementTotals.balance < 0 ? "text-sky-600" : "text-amber-600"}`}>{statementTotals.balance < 0 ? "Müşteri Alacağı" : "Kalan Bakiye"}</div>
+                                <div className={`mt-1 text-base font-black ${statementTotals.balance < 0 ? "text-sky-800 dark:text-sky-200" : "text-amber-800 dark:text-amber-200"}`}>{formatTL(Math.abs(statementTotals.balance))}</div>
+                            </div>
+                        </div>
+
+                        {/* Dışa aktar */}
+                        <div className="flex flex-wrap justify-end gap-2 mb-3">
+                            <button onClick={exportStatementPDF} disabled={statementRows.length === 0} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                                <Printer className="h-4 w-4" /> PDF
+                            </button>
+                            <button onClick={exportStatementCSV} disabled={statementRows.length === 0} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                                <Download className="h-4 w-4" /> Excel/CSV
+                            </button>
+                        </div>
+
+                        {/* Hareket tablosu */}
+                        <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800">
+                            {statementRows.length === 0 ? (
+                                <div className="p-8 text-center text-sm text-slate-500">Bu müşteri için hareket bulunamadı.</div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
+                                                <th className="px-3 py-2.5 text-left text-[11px] font-black uppercase text-slate-500">Tarih</th>
+                                                <th className="px-3 py-2.5 text-left text-[11px] font-black uppercase text-slate-500">Açıklama</th>
+                                                <th className="px-3 py-2.5 text-right text-[11px] font-black uppercase text-slate-500">Borç (+)</th>
+                                                <th className="px-3 py-2.5 text-right text-[11px] font-black uppercase text-slate-500">Alacak (−)</th>
+                                                <th className="px-3 py-2.5 text-right text-[11px] font-black uppercase text-slate-500">Bakiye</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                            {statementRows.map((r) => (
+                                                <tr key={r.id} className={`${r.type === "payment" ? "bg-emerald-50/30 dark:bg-emerald-900/10" : r.type === "reversal" ? "bg-red-50/30 dark:bg-red-900/10" : ""}`}>
+                                                    <td className="px-3 py-2.5 whitespace-nowrap text-slate-600 dark:text-slate-400">{formatStmtDate(r.date)}</td>
+                                                    <td className="px-3 py-2.5 font-bold text-slate-800 dark:text-slate-200">{r.label}</td>
+                                                    <td className="px-3 py-2.5 text-right font-bold text-red-600">{r.debit > 0 ? `+ ${formatTL(r.debit)}` : <span className="text-slate-300">—</span>}</td>
+                                                    <td className="px-3 py-2.5 text-right font-bold text-emerald-600">{r.credit > 0 ? `− ${formatTL(r.credit)}` : <span className="text-slate-300">—</span>}</td>
+                                                    <td className={`px-3 py-2.5 text-right font-black ${r.balance > 0 ? "text-red-600 dark:text-red-400" : r.balance < 0 ? "text-sky-600 dark:text-sky-400" : "text-emerald-600 dark:text-emerald-400"}`}>{formatTL(r.balance)}{r.balance < 0 ? " (Alacak)" : ""}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
 
             {/* Enhanced Collection Modal */}
             {collectCustomer ? (
