@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
 import { useNavigate } from "react-router-dom";
@@ -373,6 +373,13 @@ export default function Customers() {
     const [collectMethod, setCollectMethod] = useState("nakit");
     const [collectNote, setCollectNote] = useState("");
     const [collectSaving, setCollectSaving] = useState(false);
+    // Tahsilat "niyeti" başına stabil idempotency anahtarı. Hata/yeniden denemede
+    // korunur (mükerrer tahsilat olmaz); tahsilat içeriği değişince yeni niyet başlar.
+    const collectIntentKeyRef = useRef<string | null>(null);
+    useEffect(() => {
+        // İçerik değişti → yeni tahsilat niyeti; sonraki denemede taze anahtar üretilir.
+        collectIntentKeyRef.current = null;
+    }, [collectCustomer?.id, collectAmount, collectDate, collectMethod, collectNote]);
     const [collectError, setCollectError] = useState("");
     const [toast, setToast] = useState("");
 
@@ -851,7 +858,9 @@ export default function Customers() {
             // Her sipariş için ayrı idempotency anahtarı: aynı batch iki kez gönderilse
             // bile RPC her satırı replay eder, mükerrer kayıt oluşmaz.
             const finance = createFinanceService();
-            const batchKey = crypto.randomUUID();
+            // Niyet başına stabil anahtar: yeniden denemede aynı kalır → RPC replay eder.
+            if (!collectIntentKeyRef.current) collectIntentKeyRef.current = crypto.randomUUID();
+            const batchKey = collectIntentKeyRef.current;
 
             let remainingToApply = amount;
             for (let i = 0; i < openOrders.length; i++) {
@@ -879,6 +888,9 @@ export default function Customers() {
 
                 remainingToApply -= share;
             }
+
+            // Tüm siparişler başarıyla işlendi → niyet tamamlandı, anahtarı temizle.
+            collectIntentKeyRef.current = null;
 
             const newRemaining = Math.max(prevRemaining - amount, 0);
 

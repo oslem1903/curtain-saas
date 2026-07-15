@@ -293,6 +293,11 @@ export const Accounting = () => {
 
     const [saving, setSaving] = useState(false);
     const idempotencyKeyRef = useRef<string | null>(null);
+    // customer_record_collection yollarında niyet başına stabil idempotency anahtarı
+    // (hata/yanıt kaybında korunur → mükerrer tahsilat olmaz). Diğer handler'lar
+    // (gider/tedarikçi) paylaşılan idempotencyKeyRef'i kullanmaya devam eder.
+    const incomeIntentKeyRef = useRef<string | null>(null);
+    const collectionIntentKeyRef = useRef<string | null>(null);
 
     const [incomeAmount, setIncomeAmount] = useState("");
     const [incomeSourceType, setIncomeSourceType] = useState<"order" | "other">("order");
@@ -300,6 +305,10 @@ export const Accounting = () => {
     const [incomeDescription, setIncomeDescription] = useState("");
     const [incomePaymentMethod, setIncomePaymentMethod] = useState("");
     const [incomeNote, setIncomeNote] = useState("");
+    useEffect(() => {
+        // Gelir/tahsilat içeriği değişti → yeni niyet; sonraki denemede taze anahtar.
+        incomeIntentKeyRef.current = null;
+    }, [incomeAmount, incomeSourceType, incomeOrderId, incomeDescription, incomePaymentMethod, incomeNote]);
 
     const [expenseAmount, setExpenseAmount] = useState("");
     const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -958,6 +967,11 @@ export const Accounting = () => {
     };
 
 
+    useEffect(() => {
+        // Tahsilat içeriği değişti → yeni niyet; sonraki denemede taze anahtar.
+        collectionIntentKeyRef.current = null;
+    }, [collectionOrderId, collectionAmount, collectionMethod, collectionNote, collectionDueDate, collectionDate]);
+
     async function saveIncome() {
         if (saving) return;
         if (!companyId) return;
@@ -972,7 +986,9 @@ export const Accounting = () => {
 
         try {
             setSaving(true);
-            idempotencyKeyRef.current = crypto.randomUUID();
+            // Niyet başına stabil anahtar: hata/yanıt kaybında korunur, yeniden
+            // denemede aynı kalır → RPC replay eder, mükerrer kayıt olmaz.
+            if (!incomeIntentKeyRef.current) incomeIntentKeyRef.current = crypto.randomUUID();
 
             const amount = Number(incomeAmount);
             if (!Number.isFinite(amount) || amount <= 0) {
@@ -997,7 +1013,7 @@ export const Accounting = () => {
                     amount,
                     method: incomePaymentMethod as any || undefined,
                     note: incomeNote || incomeDescription || undefined,
-                    idempotencyKey: idempotencyKeyRef.current
+                    idempotencyKey: incomeIntentKeyRef.current
                 });
 
                 if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Gelir kaydedilemedi.");
@@ -1020,7 +1036,7 @@ export const Accounting = () => {
                     p_note: incomeNote || null,
                     p_source: source,
                     p_create_transaction: true,
-                    p_idempotency_key: idempotencyKeyRef.current,
+                    p_idempotency_key: incomeIntentKeyRef.current,
                 });
 
                 if (error) throw error;
@@ -1035,6 +1051,9 @@ export const Accounting = () => {
                 }).catch(err => console.error("Audit log failed:", err));
             }
 
+            // Başarılı → niyet tamamlandı, anahtarı temizle.
+            incomeIntentKeyRef.current = null;
+
             setIncomeAmount("");
             setIncomeSourceType("order");
             setIncomeOrderId("");
@@ -1048,7 +1067,6 @@ export const Accounting = () => {
             alert(e?.message ?? "Gelir kaydedilemedi.");
         } finally {
             setSaving(false);
-            idempotencyKeyRef.current = null;
         }
     }
 
@@ -1146,8 +1164,8 @@ export const Accounting = () => {
         try {
             setSaving(true);
             // Çift tıklama / ağ retry'de aynı tahsilatın iki kez kaydedilmesini
-            // engellemek için tekil idempotency anahtarı üret (bkz. saveIncome).
-            idempotencyKeyRef.current = crypto.randomUUID();
+            // engellemek için niyet başına stabil idempotency anahtarı (bkz. saveIncome).
+            if (!collectionIntentKeyRef.current) collectionIntentKeyRef.current = crypto.randomUUID();
 
             // Use atomic RPC function for order payment
             const finance = createFinanceService();
@@ -1157,7 +1175,7 @@ export const Accounting = () => {
                 amount,
                 method: collectionMethod as any || undefined,
                 note: collectionNote || "Sipariş tahsilatı",
-                idempotencyKey: idempotencyKeyRef.current
+                idempotencyKey: collectionIntentKeyRef.current
             });
 
             if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Tahsilat kaydedilemedi.");
@@ -1169,6 +1187,9 @@ export const Accounting = () => {
                 order_id: collectionOrderId,
                 timestamp: new Date().toISOString()
             }).catch(err => console.error("Audit log failed:", err));
+
+            // Başarılı → niyet tamamlandı, anahtarı temizle.
+            collectionIntentKeyRef.current = null;
 
             setCollectionOrderId("");
             setCollectionAmount("");
@@ -1188,7 +1209,6 @@ export const Accounting = () => {
             alert(e?.message ?? "Tahsilat kaydedilemedi.");
         } finally {
             setSaving(false);
-            idempotencyKeyRef.current = null;
         }
     }
 

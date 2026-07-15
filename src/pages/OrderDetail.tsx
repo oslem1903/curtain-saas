@@ -257,6 +257,10 @@ export default function OrderDetail() {
     const [paymentAmount, setPaymentAmount] = useState("");
     const [paymentMethod, setPaymentMethod] = useState("nakit");
     const [paymentNote, setPaymentNote] = useState("");
+    useEffect(() => {
+        // Tahsilat içeriği değişti → yeni niyet; sonraki denemede taze anahtar üretilir.
+        idempotencyKeyRef.current = null;
+    }, [paymentAmount, paymentMethod, paymentNote]);
     const [paymentError, setPaymentError] = useState("");
     const [paymentSuccess, setPaymentSuccess] = useState("");
     const [installationJob, setInstallationJob] = useState<InstallationJobRow | null>(null);
@@ -1125,7 +1129,9 @@ export default function OrderDetail() {
         setPaymentError("");
         setPaymentSuccess("");
         try {
-            idempotencyKeyRef.current = crypto.randomUUID();
+            // Niyet başına stabil anahtar: hata/yanıt kaybında korunur, yeniden
+            // denemede aynı kalır → RPC replay eder, mükerrer tahsilat olmaz.
+            if (!idempotencyKeyRef.current) idempotencyKeyRef.current = crypto.randomUUID();
             // Use atomic RPC function for payment recording
             const finance = createFinanceService();
             const result = await finance.customerCollections.recordCollection({
@@ -1138,6 +1144,9 @@ export default function OrderDetail() {
             });
 
             if (result.status !== "success") throw new Error(result.status === "error" ? result.error.message : "Ödeme kaydedilemedi.");
+
+            // Başarılı → idempotency niyeti tamamlandı, anahtarı temizle.
+            idempotencyKeyRef.current = null;
 
             const overpayment = result.data.overpaymentAmount ?? 0;
 
@@ -1170,7 +1179,6 @@ export default function OrderDetail() {
             setPaymentError(e?.message ?? "Ödeme kaydedilemedi.");
         } finally {
             setSaving(false);
-            idempotencyKeyRef.current = null;
         }
     }
 
