@@ -198,6 +198,11 @@ function computeLineItem(params: {
     min_area?: number;
     rounding_rule?: number;
     waste_rate?: number;
+    // Ürün tipine özgü kurallar (NewOrder ile birebir). Diğer tiplerde etkisiz.
+    product_type?: string | null;
+    pile?: string | null;              // "2" | "3" (tül/fon)
+    mechanism?: string | null;         // "reducer" | "standard" (jaluzi/picasso)
+    control_type?: string | null;      // "tape" | "corded" (jaluzi/picasso)
 }) {
     const w = Math.max(0, params.width_cm);
     const h = Math.max(0, params.height_cm);
@@ -213,8 +218,22 @@ function computeLineItem(params: {
     if (waste > 0) area = area * (1 + waste / 100);
     const minArea = Math.max(0, params.min_area ?? 0);
     // Eski taban (min 1 m²) korunur; ürün min. alanı bundan büyükse o uygulanır
-    const effectiveArea = Math.max(area, 1, minArea);
-    const line_total = effectiveArea * unit * qty;
+    let effectiveArea = Math.max(area, 1, minArea);
+    let line_total = effectiveArea * unit * qty;
+
+    // Ürün tipine özgü kurallar (NewOrder ile birebir) ----------------------
+    if (params.product_type === "tul" || params.product_type === "fon") {
+        // Tül/Fon: en × pile + 15 cm dikim payı → kumaş metresi (yükseklik hariç).
+        const pile = params.pile === "3" ? 3 : 2;
+        effectiveArea = (w * pile + 15) / 100;
+        line_total = effectiveArea * unit * qty;
+    } else if (params.product_type === "jalousie" || params.product_type === "picasso") {
+        // Jaluzi/Picasso: alan bazlı tutara redüktör ve kurdele çarpanları.
+        const mf = params.mechanism === "reducer" ? 1.12 : 1;
+        const cf = params.control_type === "tape" ? 1.05 : 1;
+        line_total = line_total * mf * cf;
+    }
+
     const supplier_total_cost = purchaseUnit * effectiveArea * qty;
     const profit = line_total - supplier_total_cost;
     return { area_m2: effectiveArea, line_total, supplier_total_cost, profit };
@@ -304,6 +323,11 @@ export default function OrderDetail() {
     const [pMinArea, setPMinArea] = useState(0);
     const [pRounding, setPRounding] = useState(0);
     const [pWaste, setPWaste] = useState(0);
+    // Tül/fon pile ve jaluzi mekanizma/kontrol: fiyatı etkiler; düzenlemede kalemin
+    // kayıtlı değerleri korunur ki sadece not/renk değişince tutar sapmasın.
+    const [pPile, setPPile] = useState<"2" | "3">("2");
+    const [pMechanism, setPMechanism] = useState<"reducer" | "standard">("standard");
+    const [pControlType, setPControlType] = useState<"corded" | "tape">("corded");
 
     async function loadData() {
         if (!id) return;
@@ -502,7 +526,11 @@ export default function OrderDetail() {
         min_area: pMinArea,
         rounding_rule: pRounding,
         waste_rate: pWaste,
-    }), [pWidth, pHeight, pQty, pPrice, pPurchaseCost, pMinArea, pRounding, pWaste]);
+        product_type: pType,
+        pile: pPile,
+        mechanism: pMechanism,
+        control_type: pControlType,
+    }), [pWidth, pHeight, pQty, pPrice, pPurchaseCost, pMinArea, pRounding, pWaste, pType, pPile, pMechanism, pControlType]);
 
     const orderPhotoUrls = useMemo(() => {
         const urls = new Set<string>();
@@ -532,6 +560,9 @@ export default function OrderDetail() {
         setPMinArea(0);
         setPRounding(0);
         setPWaste(0);
+        setPPile("2");
+        setPMechanism("standard");
+        setPControlType("corded");
         setItemFormError("");
         setPhoto(null);
         setPhotoPreview("");
@@ -558,10 +589,13 @@ export default function OrderDetail() {
         const textNote = item.note ? item.note.replace(/https?:\/\/[^\s)]+/g, "").trim() : "";
         setPNote(textNote);
 
-        // product_options içinden model/renk al
+        // product_options içinden model/renk + fiyatı etkileyen tip alanlarını al
         const opts = item.product_options ?? {};
         setPModelName(opts.model_name ?? opts.product_name ?? "");
         setPColorName(opts.color_name ?? "");
+        setPPile(opts.pile === "3" ? "3" : "2");
+        setPMechanism(opts.mechanism === "reducer" ? "reducer" : "standard");
+        setPControlType(opts.control_type === "tape" ? "tape" : "corded");
         // Mevcut satır düzenlenirken kayıtlı ölçü/tutar korunur (yeni hesap kuralı uygulanmaz)
         setPProductId("");
         setPMinArea(0);
@@ -817,7 +851,7 @@ export default function OrderDetail() {
         const q = Math.max(1, safeNumber(pQty, 1));
         const u = safeNumber(pPrice);
         const purchaseUnit = safeNumber(pPurchaseCost);
-        const computed = computeLineItem({ width_cm: w, height_cm: h, qty: q, unit_price: u, supplier_unit_cost: purchaseUnit, min_area: pMinArea, rounding_rule: pRounding, waste_rate: pWaste });
+        const computed = computeLineItem({ width_cm: w, height_cm: h, qty: q, unit_price: u, supplier_unit_cost: purchaseUnit, min_area: pMinArea, rounding_rule: pRounding, waste_rate: pWaste, product_type: pType, pile: pPile, mechanism: pMechanism, control_type: pControlType });
 
         if (w <= 0 || h <= 0) throw new Error("En ve boy 0'dan büyük olmalı.");
         if (u <= 0) throw new Error("Birim fiyat 0'dan büyük olmalı.");
@@ -843,6 +877,9 @@ export default function OrderDetail() {
                 product_name: pModelName.trim() || "",
                 model_name: pModelName.trim() || "",
                 color_name: pColorName.trim() || "",
+                pile: pPile,
+                mechanism: pMechanism,
+                control_type: pControlType,
             },
         };
     }
