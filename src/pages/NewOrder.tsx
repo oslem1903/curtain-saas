@@ -861,10 +861,13 @@ export default function NewOrder() {
             }
             const firstSupplierId = fabricSupplierId || itemsComputed.find((it) => it.supplier_id)?.supplier_id || "";
             const supplierExpenseAmount = itemsComputed.reduce((acc, it) => acc + safeNumber(it.supplier_total_cost), 0);
-            if (supplierExpenseAmount > 0 && firstSupplierId) await createSupplierExpense({ company_id: companyId, amount: supplierExpenseAmount, category: "Kumaş / Ürün", supplier_id: firstSupplierId, orderId, customerName });
-            await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
+            // Teklif (quoted) henüz kabul edilmiş sipariş değildir: tedarikçi gideri
+            // ve satış faturası oluşturulmaz; gerçek sipariş durumuna geçilince oluşur.
+            if (status !== "quoted" && supplierExpenseAmount > 0 && firstSupplierId) await createSupplierExpense({ company_id: companyId, amount: supplierExpenseAmount, category: "Kumaş / Ürün", supplier_id: firstSupplierId, orderId, customerName });
+            if (status !== "quoted") await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
             const cariWarnings: string[] = [];
             for (const it of itemsComputed) {
+                if (status === "quoted") break; // Teklifte tedarikçi cari borcu oluşturulmaz
                 const suppId = it.supplier_id || fabricSupplierId;
                 const cost = it.supplier_total_cost;
                 if (!suppId) continue;

@@ -145,10 +145,11 @@ function buildCustomerStatement(customerId: string, orders: any[], payments: any
         if (o?.id) orderCustomer.set(o.id, o.customer_id ?? null);
     }
 
-    // Borç (+): müşterinin siparişleri (taslak/iptal hariç)
+    // Borç (+): müşterinin siparişleri (taslak/iptal/teklif hariç)
+    // Teklif (quoted) kabul edilmiş sipariş sayılmaz → müşteri cari borcu oluşturmaz.
     for (const o of orders) {
         if (o?.customer_id !== customerId) continue;
-        if (o?.status === "draft" || o?.status === "cancelled") continue;
+        if (o?.status === "draft" || o?.status === "cancelled" || o?.status === "quoted") continue;
         const total = Number(o?.total_amount ?? 0);
         if (total <= 0) continue;
         rows.push({
