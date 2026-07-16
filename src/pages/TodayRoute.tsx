@@ -306,6 +306,9 @@ export default function TodayRoute() {
               .eq("id", job.id);
           }
         }
+
+        // Montaj tamamlandı → sipariş durumunu da güncelle (InstallationTracking:305 ile birebir aynı mantık)
+        await supabase.from("orders").update({ status: "montaj_tamamlandi" }).eq("id", row.order_id).eq("company_id", ctx.company_id);
       }
 
       setRows((prev) => (removeWhenDone ? prev.filter((r) => r.id !== row.id) : prev.map((r) => (r.id === row.id ? { ...r, status } : r))));
