@@ -188,6 +188,25 @@ function productLabel(t: ProductType | string | null | undefined) {
     }
 }
 
+// installer_fee hesabı için alan — TodayRoute.jobArea ile BİREBİR AYNI.
+function jobArea(job: any) {
+  let w = Number(job.width || 0);
+  let h = Number(job.height || 0);
+  if (w <= 0 || h <= 0) return 0;
+  const minW = Number(job.min_width || 0);
+  const minH = Number(job.min_height || 0);
+  const minArea = Number(job.min_area || 0);
+
+  if (minW > 0 && w < minW) w = minW;
+  if (minH > 0 && h < minH) h = minH;
+
+  let area = (w * h) / 10000;
+  if (minArea > 0 && area < minArea) {
+      area = minArea;
+  }
+  return area * Math.max(1, Number(job.qty ?? 1));
+}
+
 function computeLineItem(params: {
     width_cm: number;
     height_cm: number;
@@ -1330,6 +1349,31 @@ export default function OrderDetail() {
             if (rpcError) throw rpcError;
             if (!rpcResult?.success) {
                 throw new Error(rpcResult?.error || 'Montaj tamamlanamadı');
+            }
+
+            // Montajcı carisi installer_fee'den beslendiği için, RPC sonrası
+            // TodayRoute ile BİREBİR AYNI formülle installer_fee'yi yaz.
+            const { data: fullJob } = await supabase
+                .from("installation_jobs")
+                .select("*")
+                .eq("id", installationJob.id)
+                .eq("company_id", order.company_id)
+                .maybeSingle();
+            if (fullJob) {
+                let fee = Number(fullJob.installer_fee || 0);
+                const rate = Number(fullJob.unit_rate || 0);
+                if (fee === 0 && rate > 0) {
+                    if (fullJob.price_type === "m2") {
+                        fee = Math.round(jobArea(fullJob) * rate * 100) / 100;
+                    } else if (fullJob.price_type === "adet") {
+                        const q = Math.max(1, Number(fullJob.qty || 1));
+                        fee = Math.round(q * rate * 100) / 100;
+                    }
+                }
+                await supabase.from("installation_jobs")
+                    .update({ installer_fee: fee > 0 ? fee : null })
+                    .eq("id", installationJob.id)
+                    .eq("company_id", order.company_id);
             }
 
             setWorkflowMessage('✅ Montaj tamamlandı. Montajcı hakedişi otomatik oluşturuldu.');

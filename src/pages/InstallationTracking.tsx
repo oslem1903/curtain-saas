@@ -50,6 +50,25 @@ const STATUS_OPTIONS: Array<{ value: InstallationStatus; label: string; orderSta
   { value: "completed", label: "Montaj Tamamlandı", orderStatus: "montaj_tamamlandi" },
 ];
 
+// installer_fee hesabı için alan — TodayRoute.jobArea ile BİREBİR AYNI.
+function jobArea(job: any) {
+  let w = Number(job.width || 0);
+  let h = Number(job.height || 0);
+  if (w <= 0 || h <= 0) return 0;
+  const minW = Number(job.min_width || 0);
+  const minH = Number(job.min_height || 0);
+  const minArea = Number(job.min_area || 0);
+
+  if (minW > 0 && w < minW) w = minW;
+  if (minH > 0 && h < minH) h = minH;
+
+  let area = (w * h) / 10000;
+  if (minArea > 0 && area < minArea) {
+      area = minArea;
+  }
+  return area * Math.max(1, Number(job.qty ?? 1));
+}
+
 // Montaj takibi sekmeleri — mevcut installation_jobs verisinden türetilir (ekstra sorgu yok):
 //   tamamlanan → job kanonik olarak COMPLETED (order.ts köprüsüyle, legacy değerler dahil)
 //   atanan     → tamamlanmamış + montajcı atanmış
@@ -292,11 +311,35 @@ export default function InstallationTracking() {
       const ctx = await getEffectiveTenantContext();
       if (ctx.readOnly) throw new Error("Firma lisansı aktif değil veya sadece okuma modunda.");
 
+      // Montaj tamamlanınca montajcı hakedişi (installer_fee) — TodayRoute ile
+      // BİREBİR AYNI hesap; cari installer_fee'den beslendiği için burada yazılır.
+      const feePatch: Record<string, unknown> = {};
+      if (patch.status === "completed") {
+        const { data: fullJob } = await supabase
+          .from("installation_jobs")
+          .select("*")
+          .eq("id", row.id)
+          .eq("company_id", ctx.company_id)
+          .maybeSingle();
+        if (fullJob) {
+          let fee = Number(fullJob.installer_fee || 0);
+          const rate = Number(fullJob.unit_rate || 0);
+          if (fee === 0 && rate > 0) {
+            if (fullJob.price_type === "m2") {
+              fee = Math.round(jobArea(fullJob) * rate * 100) / 100;
+            } else if (fullJob.price_type === "adet") {
+              const q = Math.max(1, Number(fullJob.qty || 1));
+              fee = Math.round(q * rate * 100) / 100;
+            }
+          }
+          feePatch.installer_fee = fee > 0 ? fee : null;
+        }
+      }
 
       // OTHER STATUS PATHS: Direct table update (unchanged)
       const { error } = await supabase
         .from("installation_jobs")
-        .update({ ...patch, updated_at: new Date().toISOString() })
+        .update({ ...patch, ...feePatch, updated_at: new Date().toISOString() })
         .eq("id", row.id)
         .eq("company_id", ctx.company_id);
       if (error) throw error;
