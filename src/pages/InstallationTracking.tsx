@@ -334,6 +334,11 @@ export default function InstallationTracking() {
           }
           feePatch.installer_fee = fee > 0 ? fee : null;
         }
+      } else if (patch.status && patch.status !== "completed") {
+        // Montaj tamamlanmış durumdan çıkarılıyor (iptal / geri alma) → montajcı
+        // hakedişi geri alınır: installer_fee sıfırlanır. Cari installer_fee'den
+        // beslendiği için, sipariş durumu da nextOrderStatus ile kendiliğinden düzelir.
+        feePatch.installer_fee = null;
       }
 
       // OTHER STATUS PATHS: Direct table update (unchanged)
