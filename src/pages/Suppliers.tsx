@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
     Plus, Truck, Mail, MapPin, Wallet, DollarSign,
     TrendingUp, X, Edit3, AlertCircle, Search, Package
@@ -108,6 +109,7 @@ function StatCard({ label, value, icon, color, onClick }: StatCardProps) {
 }
 
 export const Suppliers = () => {
+    const nav = useNavigate();
     const [suppliers, setSuppliers] = useState<Supplier[]>([]);
     const [balances, setBalances] = useState<SupplierBalance[]>([]);
     const [loading, setLoading] = useState(true);
@@ -834,7 +836,7 @@ export const Suppliers = () => {
                                     {/* Actions */}
                                     <div className="px-8 py-5 border-t border-slate-150 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/30 grid grid-cols-2 gap-3">
                                         <button
-                                            onClick={() => openSupplierDetail(supplier)}
+                                            onClick={() => nav(`/suppliers/${supplier.id}`)}
                                             className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs font-bold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-primary-300 dark:hover:border-primary-900/50 transition-all"
                                         >
                                             <Wallet className="w-4 h-4" />
