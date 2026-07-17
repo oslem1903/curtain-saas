@@ -1376,7 +1376,7 @@ export default function OrderDetail() {
                     .eq("company_id", order.company_id);
             }
 
-            setWorkflowMessage('✅ Montaj tamamlandı. Montajcı hakedişi otomatik oluşturuldu.');
+            setWorkflowMessage('✅ Montaj tamamlandı.');
             setShowCompletionConfirm(false);
             await loadData();
         } catch (e: any) {

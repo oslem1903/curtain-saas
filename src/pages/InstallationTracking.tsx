@@ -353,6 +353,17 @@ export default function InstallationTracking() {
         await supabase.from("orders").update({ status: nextOrderStatus }).eq("id", row.order_id).eq("company_id", ctx.company_id);
       }
 
+      // Montaj tamamlanınca bağlı montaj randevusunu da tamamla — TodayRoute ile
+      // BİREBİR AYNI (status=done, done=true, done_at). Zaten done ise tekrar yazma.
+      if (patch.status === "completed" && row.order_id) {
+        await supabase.from("appointments")
+          .update({ status: "done", done: true, done_at: new Date().toISOString() })
+          .eq("order_id", row.order_id)
+          .eq("company_id", ctx.company_id)
+          .eq("type", "installation")
+          .neq("status", "done");
+      }
+
       setRows((prev) => prev.map((item) => item.id === row.id ? { ...item, ...patch } : item));
     } catch (e: any) {
       const errorMsg = e?.message ?? "Montaj kaydı güncellenemedi.";
