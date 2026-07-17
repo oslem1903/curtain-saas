@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
     ArrowLeft, TrendingUp, Wallet, CreditCard, History, Download,
-    AlertCircle, Loader2, Calendar, Package
+    AlertCircle, Loader2, Calendar, Package, Printer
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 
@@ -223,6 +223,130 @@ export default function InstallerEarningsDetail() {
         } finally {
             setLoading(false);
         }
+    }
+
+    // Cari ekstresi dışa aktarımı — InstallerLedger PDF/CSV deseniyle birebir.
+    function handleExportExcel() {
+        if (ledger.length === 0) return;
+        const headers = ["Tarih", "Sipariş", "Müşteri", "Açıklama", "Montaj Ücreti (+)", "Ödeme (−)", "Bakiye"];
+        const rows = ledger.map((e) => {
+            const debit = e.transaction_type === "payment" ? 0 : e.amount;
+            const credit = e.transaction_type === "payment" ? e.amount : 0;
+            return [
+                formatDate(e.transaction_date),
+                e.order_id ? e.order_id.slice(0, 8).toUpperCase() : "—",
+                e.customer_name || "—",
+                e.description || "",
+                debit > 0 ? debit.toFixed(2) : "0.00",
+                credit > 0 ? credit.toFixed(2) : "0.00",
+                e.running_balance.toFixed(2),
+            ];
+        });
+        const content = [headers, ...rows].map((r) => r.join(";")).join("\n");
+        const blob = new Blob(["﻿" + content], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `montajci_${(installer?.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    function handleExportPDF() {
+        if (ledger.length === 0 || !summary) return;
+        const dates = ledger.map((e) => e.transaction_date).filter(Boolean).sort();
+        const donem = dates.length > 0 ? `${formatDate(dates[0])} – ${formatDate(dates[dates.length - 1])}` : "—";
+        const rows = ledger
+            .map((e) => {
+                const debit = e.transaction_type === "payment" ? 0 : e.amount;
+                const credit = e.transaction_type === "payment" ? e.amount : 0;
+                return `
+                    <tr>
+                        <td>${formatDate(e.transaction_date)}</td>
+                        <td>${e.order_id ? e.order_id.slice(0, 8).toUpperCase() : "—"}</td>
+                        <td>${e.customer_name || "—"}</td>
+                        <td>${e.description || ""}</td>
+                        <td style="text-align: right; color: #dc2626;">${debit > 0 ? `+ ${formatMoney(debit)}` : "—"}</td>
+                        <td style="text-align: right; color: #16a34a;">${credit > 0 ? `− ${formatMoney(credit)}` : "—"}</td>
+                        <td style="text-align: right; font-weight: bold; color: ${e.running_balance > 0 ? "#b91c1c" : e.running_balance < 0 ? "#1d4ed8" : "#15803d"};">${formatMoney(e.running_balance)}${e.running_balance < 0 ? " (Avans)" : ""}</td>
+                    </tr>`;
+            })
+            .join("");
+
+        const printWindow = window.open("", "_blank", "width=1200,height=800");
+        if (!printWindow) return;
+        printWindow.document.write(`
+            <html>
+                <head>
+                    <title>Montajcı Cari Ekstresi - ${installer?.name || ""}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 30px; color: #1e293b; background: #fff; }
+                        .header { display: flex; justify-content: space-between; border-bottom: 2px solid #cbd5e1; padding-bottom: 20px; margin-bottom: 30px; }
+                        .title h1 { margin: 0; font-size: 24px; font-weight: 800; color: #0f172a; }
+                        .title p { margin: 5px 0 0 0; font-size: 14px; color: #64748b; }
+                        .details { font-size: 14px; line-height: 1.6; text-align: right; }
+                        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+                        .summary-card { padding: 15px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; }
+                        .summary-card .label { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #64748b; }
+                        .summary-card .val { font-size: 18px; font-weight: 800; margin-top: 5px; color: #0f172a; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                        th, td { padding: 12px 10px; border-bottom: 1px solid #cbd5e1; font-size: 12px; text-align: left; }
+                        th { background: #f1f5f9; font-weight: bold; color: #475569; border-top: 1px solid #cbd5e1; }
+                        .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <div class="title">
+                            <h1>MONTAJCI CARİ EKSTRESİ</h1>
+                            <p>${installer?.name || "Montajcı"}</p>
+                        </div>
+                        <div class="details">
+                            <div><strong>Tarih:</strong> ${new Date().toLocaleDateString("tr-TR")}</div>
+                            <div><strong>Dönem:</strong> ${donem}</div>
+                        </div>
+                    </div>
+                    <div class="summary-grid">
+                        <div class="summary-card">
+                            <div class="label">Toplam Hakediş</div>
+                            <div class="val">${formatMoney(summary.total_earnings)}</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="label">Toplam Ödenen</div>
+                            <div class="val" style="color: #16a34a;">${formatMoney(summary.total_paid)}</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="label">Kalan Bakiye</div>
+                            <div class="val" style="color: ${summary.balance > 0 ? "#dc2626" : "#16a34a"};">${formatMoney(summary.balance)}</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="label">Avans</div>
+                            <div class="val" style="color: #2563eb;">${formatMoney(summary.total_adjustments)}</div>
+                        </div>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 90px;">Tarih</th>
+                                <th>Sipariş</th>
+                                <th>Müşteri</th>
+                                <th>Açıklama</th>
+                                <th style="text-align: right; width: 120px;">Montaj Ücreti (+)</th>
+                                <th style="text-align: right; width: 110px;">Ödeme (−)</th>
+                                <th style="text-align: right; width: 120px;">Bakiye</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                    <div class="footer">Bu döküm sistem tarafından otomatik oluşturulmuştur. © PerdePRO</div>
+                </body>
+            </html>
+        `);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => printWindow.print(), 500);
     }
 
     if (loading) {
@@ -452,14 +576,20 @@ export default function InstallerEarningsDetail() {
                     Yenile
                 </button>
                 <button
-                    onClick={() => {
-                        // Export functionality
-                        alert("Excel dışa aktarma işlevi yakında eklenecek");
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+                    onClick={handleExportPDF}
+                    disabled={ledger.length === 0}
+                    className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 transition flex items-center gap-2"
+                >
+                    <Printer className="h-4 w-4" />
+                    PDF / Yazdır
+                </button>
+                <button
+                    onClick={handleExportExcel}
+                    disabled={ledger.length === 0}
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition flex items-center gap-2"
                 >
                     <Download className="h-4 w-4" />
-                    Dışa Aktar
+                    Excel / CSV
                 </button>
             </div>
         </div>
