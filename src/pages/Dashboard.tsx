@@ -355,7 +355,7 @@ export const Dashboard = () => {
         supabase.from("installation_jobs").select("id,order_id,customer_name,status,scheduled_date,scheduled_time,total_amount").eq("company_id", ctx.company_id).gte("scheduled_date", todayStr).lte("scheduled_date", weekEnd).order("scheduled_date", { ascending: true }),
         supabase.from("orders").select("id,created_at,status,total_amount,paid_amount,remaining_amount,customer:customers(name)").eq("company_id", ctx.company_id).order("created_at", { ascending: false }).limit(8),
         supabase.from("orders").select("id,remaining_amount,total_amount,paid_amount,payment_due_date,customer:customers(name)").eq("company_id", ctx.company_id).not("payment_due_date", "is", null),
-        supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id).eq("transaction_type", "debt").not("due_date", "is", null),
+        supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id).eq("transaction_type", "debt"),
         supabase.from("customers").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id),
         supabase.from("income").select("amount,income_date").eq("company_id", ctx.company_id).gte("income_date", todayStart.toISOString()).lte("income_date", todayEnd.toISOString()),
         supabase.from("installation_jobs").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id).eq("status", "completed"),
