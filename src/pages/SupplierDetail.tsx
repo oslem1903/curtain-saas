@@ -248,11 +248,27 @@ export default function SupplierDetail() {
         });
     }, [transactions]);
 
+    const filteredRowsWithBalance = useMemo(() => {
+        return rowsWithBalance.filter(({ tx }) => {
+            if (!dateFrom && !dateTo) return true;
+            const d = String(tx.transaction_date).slice(0, 10);
+            const inRange = (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo);
+            return inRange;
+        });
+    }, [rowsWithBalance, dateFrom, dateTo]);
+
+    const filteredTotals = useMemo(() => {
+        const debt = filteredRowsWithBalance.reduce((sum, { tx }) => sum + (tx.transaction_type === "debt" ? tx.amount : 0), 0);
+        const paid = filteredRowsWithBalance.reduce((sum, { tx }) => sum + (tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? tx.amount : 0), 0);
+        const reversal = filteredRowsWithBalance.reduce((sum, { tx }) => sum + (tx.transaction_type === "payment_reversal" ? tx.amount : 0), 0);
+        return { debt, paid, reversal };
+    }, [filteredRowsWithBalance]);
+
     function handleExportExcel() {
-        if (rowsWithBalance.length === 0) return;
+        if (filteredRowsWithBalance.length === 0) return;
 
         const headers = ["Tarih", "Açıklama", "Evrak No", "Borç (+)", "Ödeme (-)", "Bakiye"];
-        const rows = [...rowsWithBalance].reverse().map(({ tx, balance: bal }) => [
+        const rows = [...filteredRowsWithBalance].reverse().map(({ tx, balance: bal }) => [
             formatDate(tx.transaction_date),
             tx.description || "",
             tx.reference_no || "",
@@ -278,9 +294,9 @@ export default function SupplierDetail() {
     }
 
     function handleExportPDF() {
-        if (rowsWithBalance.length === 0) return;
+        if (filteredRowsWithBalance.length === 0) return;
 
-        const rows = [...rowsWithBalance]
+        const rows = [...filteredRowsWithBalance]
             .reverse()
             .map(
                 ({ tx, balance: bal }) => `
@@ -571,8 +587,10 @@ export default function SupplierDetail() {
                             </thead>
                             <tbody>
                                 {(() => {
-                                    const rows = [...rowsWithBalance].reverse();
-                                    return rows.map(({ tx, balance: bal }, i) => (
+                                    const rows = [...filteredRowsWithBalance].reverse();
+                                    return rows.length === 0 ? (
+                                        <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">Bu tarih aralığında hareket yok.</td></tr>
+                                    ) : rows.map(({ tx, balance: bal }, i) => (
                                         <tr key={tx.id} className={`border-b border-slate-50 dark:border-slate-800 ${i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/50"}`}>
                                             <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(tx.transaction_date)}</td>
                                             <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{tx.description || "—"}</td>
@@ -619,12 +637,14 @@ export default function SupplierDetail() {
                                 })()}
                             </tbody>
                             <tfoot>
-                                <tr className="border-t-2 border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
-                                    <td colSpan={4} className="px-4 py-3 text-xs font-black uppercase text-slate-500">Toplam</td>
-                                    <td className="px-4 py-3 text-right font-black text-red-700">{formatTL(totalDebt)}</td>
-                                    <td className="px-4 py-3 text-right font-black text-emerald-700">{formatTL(totalPaid + totalCancel - totalPaymentReversal)}</td>
-                                    <td className={`px-4 py-3 text-right font-black ${balance > 0 ? "text-red-700" : "text-emerald-700"}`}>{formatTL(balance)}</td>
-                                </tr>
+                                {filteredRowsWithBalance.length > 0 && (
+                                    <tr className="border-t-2 border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
+                                        <td colSpan={4} className="px-4 py-3 text-xs font-black uppercase text-slate-500">Toplam (Filtrelenmiş)</td>
+                                        <td className="px-4 py-3 text-right font-black text-red-700">{formatTL(filteredTotals.debt)}</td>
+                                        <td className="px-4 py-3 text-right font-black text-emerald-700">{formatTL(filteredTotals.paid + filteredTotals.reversal)}</td>
+                                        <td className={`px-4 py-3 text-right font-black ${balance > 0 ? "text-red-700" : "text-emerald-700"}`}>{formatTL(balance)}</td>
+                                    </tr>
+                                )}
                             </tfoot>
                         </table>
                     </div>
