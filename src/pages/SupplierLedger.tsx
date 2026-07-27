@@ -49,6 +49,67 @@ function formatDateTR(iso?: string | null) {
     }
 }
 
+type DueDateStatus = "no-due" | "no-debt" | "overdue" | "today" | "upcoming" | null;
+
+function getDueDateStatus(dueDate: string | null | undefined, rowType: "debt" | "payment", runningBalance: number): DueDateStatus {
+    if (rowType !== "debt") return null;
+    if (runningBalance <= 0) return "no-debt";
+    if (!dueDate) return "no-due";
+
+    const today = new Date().toISOString().slice(0, 10);
+    const due = dueDate.slice(0, 10);
+
+    if (due < today) return "overdue";
+    if (due === today) return "today";
+    return "upcoming";
+}
+
+function renderDueDateBadge(status: DueDateStatus, dueDate?: string | null): React.ReactNode {
+    if (!status) return null;
+
+    if (status === "no-due") {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                Vade Yok
+            </span>
+        );
+    }
+
+    if (status === "no-debt") return null;
+
+    if (status === "overdue" && dueDate) {
+        const today = new Date().toISOString().slice(0, 10);
+        const due = dueDate.slice(0, 10);
+        const daysAgo = Math.floor((new Date(today).getTime() - new Date(due).getTime()) / (1000 * 60 * 60 * 24));
+        return (
+            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                {daysAgo}d geçti
+            </span>
+        );
+    }
+
+    if (status === "today") {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                Bugün vadeli
+            </span>
+        );
+    }
+
+    if (status === "upcoming" && dueDate) {
+        const today = new Date().toISOString().slice(0, 10);
+        const due = dueDate.slice(0, 10);
+        const daysLeft = Math.floor((new Date(due).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
+        return (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                {daysLeft}d kaldı
+            </span>
+        );
+    }
+
+    return null;
+}
+
 async function resolveCompanyId(): Promise<string | null> {
     const demoCompanyId = localStorage.getItem("demo_company_id");
     if (demoCompanyId) return demoCompanyId;
@@ -570,7 +631,13 @@ export default function SupplierLedger() {
                 ) : (
                     <>
                     <div className="space-y-3 md:hidden">
-                        {ledgerRows.map((r) => (
+                        {ledgerRows.map((r, idx) => {
+                            let balance = 0;
+                            for (let i = 0; i <= idx; i++) {
+                                balance += ledgerRows[i].debt - ledgerRows[i].payment;
+                            }
+                            const status = getDueDateStatus(r.due_date, r.row_type, balance);
+                            return (
                             <div
                                 key={r.id}
                                 className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/30"
@@ -615,8 +682,15 @@ export default function SupplierLedger() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {status && (
+                                    <div className="mt-2">
+                                        {renderDueDateBadge(status, r.due_date)}
+                                    </div>
+                                )}
                             </div>
-                        ))}
+                            );
+                        })}
                         <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                             <div className="flex items-center justify-between text-sm">
                                 <span className="font-semibold text-slate-700 dark:text-slate-300">Toplam Borc</span>
@@ -633,19 +707,26 @@ export default function SupplierLedger() {
                         </div>
                     </div>
                     <div className="hidden md:block overflow-x-auto">
-                        <table className="w-full min-w-[900px] text-sm">
+                        <table className="w-full min-w-[1000px] text-sm">
                             <thead>
                                 <tr className="border-b border-slate-200 dark:border-slate-800 text-left">
                                     <th className="py-3 pr-4">Tarih</th>
                                     <th className="py-3 pr-4">Tür</th>
                                     <th className="py-3 pr-4">Açıklama</th>
                                     <th className="py-3 pr-4">Vade</th>
+                                    <th className="py-3 pr-4">Durum</th>
                                     <th className="py-3 pr-4 text-right">Borç</th>
                                     <th className="py-3 pr-4 text-right">Ödeme</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {ledgerRows.map((r) => (
+                                {ledgerRows.map((r, idx) => {
+                                    let balance = 0;
+                                    for (let i = 0; i <= idx; i++) {
+                                        balance += ledgerRows[i].debt - ledgerRows[i].payment;
+                                    }
+                                    const status = getDueDateStatus(r.due_date, r.row_type, balance);
+                                    return (
                                     <tr
                                         key={r.id}
                                         className="border-b border-slate-100 dark:border-slate-800"
@@ -673,6 +754,10 @@ export default function SupplierLedger() {
                                             {formatDateTR(r.due_date)}
                                         </td>
 
+                                        <td className="py-3 pr-4">
+                                            {renderDueDateBadge(status, r.due_date)}
+                                        </td>
+
                                         <td className="py-3 pr-4 text-right font-semibold text-red-600">
                                             {r.debt > 0 ? formatTL(r.debt) : "-"}
                                         </td>
@@ -681,13 +766,14 @@ export default function SupplierLedger() {
                                             {r.payment > 0 ? formatTL(r.payment) : "-"}
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
 
                             <tfoot>
                                 <tr className="border-t-2 border-slate-300 dark:border-slate-700">
                                     <td
-                                        colSpan={4}
+                                        colSpan={5}
                                         className="py-4 pr-4 font-bold text-slate-900 dark:text-white"
                                     >
                                         Toplam
@@ -701,7 +787,7 @@ export default function SupplierLedger() {
                                 </tr>
                                 <tr>
                                     <td
-                                        colSpan={5}
+                                        colSpan={6}
                                         className="py-2 pr-4 text-right font-semibold text-slate-700 dark:text-slate-300"
                                     >
                                         Kalan Bakiye
