@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
 
@@ -18,6 +19,7 @@ type SupplierTxRow = {
     amount: number | null;
     description: string | null;
     payment_method: string | null;
+    due_date: string | null;
 };
 
 type LedgerRow = {
@@ -27,6 +29,7 @@ type LedgerRow = {
     description: string;
     debt: number;
     payment: number;
+    due_date: string | null;
 };
 
 function formatTL(n: number) {
@@ -77,6 +80,7 @@ export default function SupplierLedger() {
     const [showQuickPaymentModal, setShowQuickPaymentModal] = useState(false);
     const [showQuickExpenseModal, setShowQuickExpenseModal] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [exporting, setExporting] = useState(false);
 
     const [quickPaymentAmount, setQuickPaymentAmount] = useState("");
     const [quickPaymentMethod, setQuickPaymentMethod] = useState("");
@@ -137,7 +141,7 @@ export default function SupplierLedger() {
 
         const tx = await supabase
             .from("supplier_transactions")
-            .select("id, transaction_date, transaction_type, amount, description, payment_method")
+            .select("id, transaction_date, transaction_type, amount, description, payment_method, due_date")
             .eq("company_id", companyId)
             .eq("supplier_id", selectedSupplierId)
             .order("transaction_date", { ascending: false });
@@ -160,6 +164,83 @@ export default function SupplierLedger() {
         }
 
         setLoading(false);
+    }
+
+    async function handleExportExcel() {
+        if (!selectedSupplierId || !selectedSupplierName) return;
+
+        try {
+            setExporting(true);
+
+            // Calculate running balance for each row
+            let runningBalance = 0;
+            const dataRows = ledgerRows.map((r) => {
+                runningBalance += r.debt - r.payment;
+                return {
+                    "Tarih": formatDateTR(r.date),
+                    "Vade": formatDateTR(r.due_date),
+                    "Açıklama": r.description,
+                    "Borç": r.debt > 0 ? formatTL(r.debt) : "-",
+                    "Ödeme": r.payment > 0 ? formatTL(r.payment) : "-",
+                    "Bakiye": formatTL(runningBalance),
+                };
+            });
+
+            // Header info
+            const headerData = [
+                ["Tedarikçi Cari Ekstesi"],
+                [],
+                ["Tedarikçi:", selectedSupplierName],
+                ["Toplam Borç:", formatTL(totalDebt)],
+                ["Toplam Ödeme:", formatTL(totalPayment)],
+                ["Kalan Bakiye:", formatTL(remaining)],
+                ["Dışa Aktarma Tarihi:", formatDateTR(new Date().toISOString())],
+                [],
+            ];
+
+            // Combine header + column titles + data
+            const sheetData = [
+                ...headerData,
+                Object.keys(dataRows[0] || {}),
+                ...dataRows.map(r => Object.values(r)),
+            ];
+
+            // Create worksheet
+            const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+            // Set column widths
+            ws['!cols'] = [
+                { wch: 14 }, // Tarih
+                { wch: 14 }, // Vade
+                { wch: 32 }, // Açıklama
+                { wch: 14 }, // Borç
+                { wch: 14 }, // Ödeme
+                { wch: 14 }, // Bakiye
+            ];
+
+            // Create workbook
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Tedarikçi Cari");
+
+            // Generate safe filename (replace Turkish chars)
+            const safeName = selectedSupplierName
+                .replace(/ç/g, "c").replace(/Ç/g, "C")
+                .replace(/ğ/g, "g").replace(/Ğ/g, "G")
+                .replace(/ı/g, "i").replace(/İ/g, "I")
+                .replace(/ö/g, "o").replace(/Ö/g, "O")
+                .replace(/ş/g, "s").replace(/Ş/g, "S")
+                .replace(/ü/g, "u").replace(/Ü/g, "U")
+                .replace(/[^a-zA-Z0-9_-]/g, "_");
+
+            const today = new Date().toISOString().slice(0, 10);
+            const filename = `Tedarikci_Cari_${safeName}_${today}.xlsx`;
+
+            XLSX.writeFile(wb, filename);
+        } catch (e: any) {
+            alert("Excel dışa aktarma başarısız: " + (e?.message || ""));
+        } finally {
+            setExporting(false);
+        }
     }
 
     async function saveQuickSupplierPayment() {
@@ -315,6 +396,7 @@ export default function SupplierLedger() {
             description: r.description || "Borç kaydı",
             debt: Number(r.amount ?? 0),
             payment: 0,
+            due_date: r.due_date,
         }));
 
         const payments: LedgerRow[] = paymentRows.map((r) => ({
@@ -326,6 +408,7 @@ export default function SupplierLedger() {
                 : r.description || "Ödeme",
             debt: 0,
             payment: Number(r.amount ?? 0),
+            due_date: r.due_date,
         }));
 
         return [...debts, ...payments].sort((a, b) => {
@@ -432,6 +515,14 @@ export default function SupplierLedger() {
                         >
                             Hızlı Borç / Gider Ekle
                         </button>
+
+                        <button
+                            onClick={handleExportExcel}
+                            disabled={!selectedSupplierId || exporting}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                        >
+                            {exporting ? "Dışa aktarılıyor..." : "Excel İndir"}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -504,7 +595,7 @@ export default function SupplierLedger() {
                                     </span>
                                 </div>
 
-                                <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
                                     <div>
                                         <div className="text-[11px] uppercase text-slate-400">Borc</div>
                                         <div className="font-semibold text-red-600">
@@ -515,6 +606,12 @@ export default function SupplierLedger() {
                                         <div className="text-[11px] uppercase text-slate-400">Odeme</div>
                                         <div className="font-semibold text-green-600">
                                             {r.payment > 0 ? formatTL(r.payment) : "-"}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] uppercase text-slate-400">Vade</div>
+                                        <div className="font-semibold text-slate-600 dark:text-slate-400">
+                                            {formatDateTR(r.due_date)}
                                         </div>
                                     </div>
                                 </div>
@@ -536,12 +633,13 @@ export default function SupplierLedger() {
                         </div>
                     </div>
                     <div className="hidden md:block overflow-x-auto">
-                        <table className="w-full min-w-[760px] text-sm">
+                        <table className="w-full min-w-[900px] text-sm">
                             <thead>
                                 <tr className="border-b border-slate-200 dark:border-slate-800 text-left">
                                     <th className="py-3 pr-4">Tarih</th>
                                     <th className="py-3 pr-4">Tür</th>
                                     <th className="py-3 pr-4">Açıklama</th>
+                                    <th className="py-3 pr-4">Vade</th>
                                     <th className="py-3 pr-4 text-right">Borç</th>
                                     <th className="py-3 pr-4 text-right">Ödeme</th>
                                 </tr>
@@ -571,6 +669,10 @@ export default function SupplierLedger() {
                                             {r.description}
                                         </td>
 
+                                        <td className="py-3 pr-4 text-slate-600 dark:text-slate-300">
+                                            {formatDateTR(r.due_date)}
+                                        </td>
+
                                         <td className="py-3 pr-4 text-right font-semibold text-red-600">
                                             {r.debt > 0 ? formatTL(r.debt) : "-"}
                                         </td>
@@ -585,7 +687,7 @@ export default function SupplierLedger() {
                             <tfoot>
                                 <tr className="border-t-2 border-slate-300 dark:border-slate-700">
                                     <td
-                                        colSpan={3}
+                                        colSpan={4}
                                         className="py-4 pr-4 font-bold text-slate-900 dark:text-white"
                                     >
                                         Toplam
@@ -599,7 +701,7 @@ export default function SupplierLedger() {
                                 </tr>
                                 <tr>
                                     <td
-                                        colSpan={4}
+                                        colSpan={5}
                                         className="py-2 pr-4 text-right font-semibold text-slate-700 dark:text-slate-300"
                                     >
                                         Kalan Bakiye
