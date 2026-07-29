@@ -408,24 +408,31 @@ export const Suppliers = () => {
 
     async function deleteSupplier() {
         if (!selectedSupplier) return;
-        // window.confirm kaldırıldığı için özel UI ile onay alınmalı ya da daha net olmalı
-        // Şimdilik silme onayı yerine doğrudan silmeyelim, ya da şimdilik doğrudan silebiliriz ama transaction için değil
+        // Soft delete via admin-controlled RPC
+        // Preserves supplier_transactions and historical data for audit
         try {
-            const { error } = await supabase
-                .from("suppliers")
-                .delete()
-                .eq("id", selectedSupplier.id)
-                .eq("company_id", selectedSupplier.company_id);
+            const { data, error } = await supabase.rpc("soft_delete_supplier", {
+                p_company_id: selectedSupplier.company_id,
+                p_supplier_id: selectedSupplier.id
+            });
 
             if (error) throw error;
 
-            setSelectedSupplier(null);
-            setSuccess("Tedarikçi silindi");
-            await loadSuppliers();
+            if (!data) throw new Error("Soft delete sonucu alınamadı");
+
+            const result = data as { success: boolean; already_deleted?: boolean };
+
+            if (result.already_deleted) {
+                setSuccess("Tedarikçi zaten pasif");
+            } else if (result.success) {
+                setSelectedSupplier(null);
+                setSuccess("Tedarikçi pasife alındı");
+                await loadSuppliers();
+            }
 
             setTimeout(() => setSuccess(""), 3000);
         } catch (e: any) {
-            alert(e?.message ?? "Tedarikçi silinemedi");
+            alert(e?.message ?? "Tedarikçi pasife alınamadı");
         }
     }
 
