@@ -8,7 +8,7 @@ type SupplierRow = { id: string; name: string };
 
 type TxRow = {
     supplier_id: string;
-    transaction_type: "debt" | "payment" | "cancel";
+    transaction_type: "debt" | "payment" | "cancel" | "payment_reversal";
     amount: number;
     transaction_date: string;
 };
@@ -96,43 +96,47 @@ export default function SupplierCariReport() {
         // Build per-supplier accumulators
         type Acc = {
             // Date-filtered totals (for table display)
-            filtDebt: number; filtPaid: number; filtLastDate: string | null;
+            filtDebt: number; filtPaid: number; filtReversal: number; filtLastDate: string | null;
             // Always-unfiltered: this month
-            tmDebt: number; tmPaid: number;
+            tmDebt: number; tmPaid: number; tmReversal: number;
             // Always-unfiltered: before this month
-            prevDebt: number; prevPaid: number;
+            prevDebt: number; prevPaid: number; prevReversal: number;
         };
 
         const map = new Map<string, Acc>();
         for (const s of suppliers) {
-            map.set(s.id, { filtDebt: 0, filtPaid: 0, filtLastDate: null, tmDebt: 0, tmPaid: 0, prevDebt: 0, prevPaid: 0 });
+            map.set(s.id, { filtDebt: 0, filtPaid: 0, filtReversal: 0, filtLastDate: null, tmDebt: 0, tmPaid: 0, tmReversal: 0, prevDebt: 0, prevPaid: 0, prevReversal: 0 });
         }
 
         for (const tx of allTxs) {
             const e = map.get(tx.supplier_id);
             if (!e) continue;
             const d = tx.transaction_date;
-            const isDebt    = tx.transaction_type === "debt";
-            const isCredit  = tx.transaction_type === "payment" || tx.transaction_type === "cancel";
+            const isDebt      = tx.transaction_type === "debt";
+            const isCredit    = tx.transaction_type === "payment" || tx.transaction_type === "cancel";
+            const isReversal  = tx.transaction_type === "payment_reversal";
 
             // Date-range filter (affects main totals in table)
             const inRange = (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo + "T23:59:59");
             if (inRange) {
-                if (isDebt)   e.filtDebt += tx.amount;
-                if (isCredit) e.filtPaid += tx.amount;
+                if (isDebt)     e.filtDebt += tx.amount;
+                if (isCredit)   e.filtPaid += tx.amount;
+                if (isReversal) e.filtReversal += tx.amount;
                 if (!e.filtLastDate || d > e.filtLastDate) e.filtLastDate = d;
             }
 
             // Bu Ay: unfiltered by user-date, only current month
             if (d >= monthStart) {
-                if (isDebt)   e.tmDebt += tx.amount;
-                if (isCredit) e.tmPaid += tx.amount;
+                if (isDebt)     e.tmDebt += tx.amount;
+                if (isCredit)   e.tmPaid += tx.amount;
+                if (isReversal) e.tmReversal += tx.amount;
             }
 
             // Önceki aylar: unfiltered
             if (d < monthStart) {
-                if (isDebt)   e.prevDebt += tx.amount;
-                if (isCredit) e.prevPaid += tx.amount;
+                if (isDebt)     e.prevDebt += tx.amount;
+                if (isCredit)   e.prevPaid += tx.amount;
+                if (isReversal) e.prevReversal += tx.amount;
             }
         }
 
@@ -144,9 +148,9 @@ export default function SupplierCariReport() {
                 name: s.name || "İsimsiz",
                 totalDebt:    e.filtDebt,
                 totalPaid:    e.filtPaid,
-                balance:      e.filtDebt - e.filtPaid,
-                thisMonthNet: Math.max(0, e.tmDebt - e.tmPaid),
-                overdueNet:   Math.max(0, e.prevDebt - e.prevPaid),
+                balance:      e.filtDebt - e.filtPaid + e.filtReversal,
+                thisMonthNet: Math.max(0, e.tmDebt - e.tmPaid + e.tmReversal),
+                overdueNet:   Math.max(0, e.prevDebt - e.prevPaid + e.prevReversal),
                 lastDate:     e.filtLastDate,
             };
         });

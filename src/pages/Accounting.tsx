@@ -757,7 +757,7 @@ export const Accounting = () => {
 
                 const debtMap: Record<
                     string,
-                    { name: string; totalDebt: number; totalPaid: number; supplier_id: string }
+                    { name: string; totalDebt: number; totalPaid: number; totalPaymentReversal: number; supplier_id: string }
                 > = {};
 
                 (supplierTxQuery.data ?? []).forEach((r: any) => {
@@ -769,11 +769,13 @@ export const Accounting = () => {
                             name: supplierNameMap[key] || "Tedarikçi",
                             totalDebt: 0,
                             totalPaid: 0,
+                            totalPaymentReversal: 0,
                         };
                     }
                     const amt = Number(r.amount ?? 0);
                     if (r.transaction_type === "debt") debtMap[key].totalDebt += amt;
                     else if (r.transaction_type === "payment" || r.transaction_type === "cancel" || r.transaction_type === "credit") debtMap[key].totalPaid += amt;
+                    else if (r.transaction_type === "payment_reversal") debtMap[key].totalPaymentReversal += amt;
                 });
 
                 const debtRows: SupplierDebtRow[] = Object.values(debtMap)
@@ -782,7 +784,7 @@ export const Accounting = () => {
                         name: x.name,
                         totalDebt: x.totalDebt,
                         totalPaid: x.totalPaid,
-                        remaining: Math.max(x.totalDebt - x.totalPaid, 0),
+                        remaining: Math.max(x.totalDebt - x.totalPaid + x.totalPaymentReversal, 0),
                     }))
                     .filter((x) => x.totalDebt > 0 || x.totalPaid > 0)
                     .sort((a, b) => b.remaining - a.remaining);
