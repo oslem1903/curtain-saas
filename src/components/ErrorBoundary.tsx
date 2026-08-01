@@ -32,22 +32,48 @@ export class ErrorBoundary extends Component<Props, State> {
         .eq('user_id', user.id)
         .maybeSingle();
 
-      await supabase.from('error_logs').insert({
-        company_id: cm?.company_id,
-        user_id: user.id,
-        error_message: error.message,
-        error_stack: error.stack,
-        page_url: window.location.href,
-        browser_info: {
-          userAgent: navigator.userAgent,
-          language: navigator.language,
-        },
-        device_info: {
-          platform: navigator.platform,
-          screen: `${window.screen.width}x${window.screen.height}`,
-        },
-        app_version: '1.0.0', // This could be dynamic
-      });
+      // Insert error log with actual database schema
+      try {
+        await supabase.from('error_logs').insert({
+          company_id: cm?.company_id,
+          user_id: user.id,
+          message: error.message || 'Unknown error',
+          stack: error.stack,
+          path: window.location.pathname,
+          user_agent: navigator.userAgent,
+          error_message: error.message,
+          error_stack: error.stack,
+          page_url: window.location.href,
+          browser_info: {
+            userAgent: navigator.userAgent,
+            language: navigator.language,
+          },
+          device_info: {
+            platform: navigator.platform,
+            screen: `${window.screen.width}x${window.screen.height}`,
+          },
+          app_version: '1.0.0',
+        });
+      } catch {
+        // Silently fail - don't break error boundary
+        console.error('Failed to log error to Supabase');
+      }
+
+      // Also record as activity
+      if (user.id) {
+        try {
+          await supabase.rpc('record_user_activity', {
+            p_activity_type: 'error',
+            p_company_id: cm?.company_id,
+            p_page: window.location.pathname,
+            p_action: 'uncaught_exception',
+            p_metadata: { message: error.message },
+          });
+        } catch {
+          // Silently fail
+          console.error('Failed to record error activity');
+        }
+      }
     } catch (e) {
       console.error('Failed to log error to Supabase:', e);
     }

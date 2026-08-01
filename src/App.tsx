@@ -54,6 +54,7 @@ import SuperAdminVersioning from "./pages/SuperAdminVersioning";
 import SuperAdminLicenseManagement from "./pages/SuperAdminLicenseManagement";
 import SuperAdminBackupCenter from "./pages/SuperAdminBackupCenter";
 import SuperAdminDatabaseHealth from "./pages/SuperAdminDatabaseHealth";
+import SuperAdminObservability from "./pages/SuperAdminObservability";
 import DeploymentWizard from "./pages/DeploymentWizard";
 import DeploymentHistory from "./pages/DeploymentHistory";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -536,6 +537,16 @@ export default function App() {
                   <SuperAdminGuard>
                     <RoleGate allow={["super_admin"]}>
                       <SuperAdminCompanies />
+                    </RoleGate>
+                  </SuperAdminGuard>
+                }
+              />
+                <Route
+                path="super-admin/observability"
+                element={
+                  <SuperAdminGuard>
+                    <RoleGate allow={["super_admin"]}>
+                      <SuperAdminObservability />
                     </RoleGate>
                   </SuperAdminGuard>
                 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { useActivityTracking } from "../hooks/useActivityTracking";
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -331,6 +332,9 @@ export const Layout = () => {
   const { isImpersonating, companyName: impersonatingCompanyName, readOnly: impersonationReadOnly, endSession } = useImpersonation();
   const isDemoWriteMode = realRole === "super_admin" && isSimulating && localStorage.getItem("demo_read_only") === "false";
   const [currentUserData, setCurrentUserData] = useState<{ userId: string, companyId: string } | null>(null);
+
+  // Track user activity (login, heartbeat)
+  useActivityTracking();
 
   useEffect(() => {
     getEffectiveTenantContext()
