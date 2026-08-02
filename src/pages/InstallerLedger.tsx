@@ -929,16 +929,16 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
 
                                                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                                                     <div className="overflow-x-auto">
-                                                        <table className="w-full text-sm">
+                                                        <table className="w-full min-w-[800px] text-sm">
                                                             <thead>
                                                                 <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
-                                                                    <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-wider text-slate-500">Tarih</th>
+                                                                    <th className="px-4 py-3 whitespace-nowrap text-left text-[11px] font-black uppercase tracking-wider text-slate-500">Tarih</th>
                                                                     <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-wider text-slate-500">İşlem / Açıklama</th>
                                                                     <th className="px-4 py-3 text-left text-[11px] font-black uppercase tracking-wider text-slate-500">Detay (m² / Fiyat)</th>
                                                                     <th className="px-4 py-3 text-right text-[11px] font-black uppercase tracking-wider text-slate-500">Borç (+) (Hakediş)</th>
                                                                     <th className="px-4 py-3 text-right text-[11px] font-black uppercase tracking-wider text-slate-500">Alacak (−) (Ödeme)</th>
                                                                     <th className="px-4 py-3 text-right text-[11px] font-black uppercase tracking-wider text-slate-500">Bakiye</th>
-                                                                    <th className="px-4 py-3 w-10"></th>
+                                                                    <th className="px-4 py-3 text-right text-[11px] font-black uppercase tracking-wider text-slate-500">İşlem</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -1035,10 +1035,11 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                                         type="button"
                                                                                         disabled={saving}
                                                                                         onClick={() => void cancelPayment(l.raw)}
-                                                                                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 disabled:opacity-50 transition"
+                                                                                        className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700 dark:hover:bg-red-700 disabled:opacity-50 transition"
                                                                                         title="Ödemeyi İptal Et"
                                                                                     >
-                                                                                        <X className="h-4 w-4" />
+                                                                                        <X className="h-3.5 w-3.5" />
+                                                                                        İptal
                                                                                     </button>
                                                                                 )}
                                                                             </td>
