@@ -27,7 +27,8 @@ import {
   ImagePlus,
   FilePlus2,
   Zap,
-  TrendingUp
+  TrendingUp,
+  Activity
 } from "lucide-react";
 
 
@@ -738,6 +739,7 @@ export const Layout = () => {
               <NavItem to="/super-admin/deployment/wizard" icon={Zap} label="Deployment Wizard" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/deployment/history" icon={TrendingUp} label="Deployment Geçmişi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/mobile" icon={MonitorSmartphone} label="Mobil Uygulama Yönetimi" onClick={closeMobileMenu} />
+              <NavItem to="/super-admin/observability" icon={Activity} label="Kullanım ve Hata İzleme" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/support" icon={LifeBuoy} label="Destek / Hata Merkezi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/updates" icon={Megaphone} label="Güncellemeler" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/notifications" icon={Megaphone} label="Bildirimler" onClick={closeMobileMenu} />

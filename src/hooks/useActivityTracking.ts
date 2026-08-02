@@ -22,19 +22,9 @@ export function useActivityTracking() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        // Call record_login RPC
+        // Call record_login RPC (handles user_activity insert + profiles update)
         try {
           await supabase.rpc('record_login');
-        } catch {
-          // Silently fail
-        }
-
-        // Also record as activity
-        try {
-          await supabase.rpc('record_user_activity', {
-            p_activity_type: 'login',
-            p_page: window.location.pathname,
-          });
         } catch {
           // Silently fail
         }

@@ -260,7 +260,7 @@ export default function SuperAdminMobileManagement({ section = "overview" }: Pro
     { label: "Eski sürüm kullanan firma", value: String(outdatedCompanies.length), note: `${companies.length} firma içinde`, icon: AlertTriangle, tone: "text-amber-600 bg-amber-50" },
     { label: "Aktif cihaz", value: String(activeDevices.length), note: `Toplam ${devices.length} kayıtlı cihaz`, icon: Smartphone, tone: "text-blue-600 bg-blue-50" },
     { label: "Son yayınlanan sürüm", value: latestPublished ? `v${latestPublished.version}` : `v${CURRENT_VERSION}`, note: latestPublished ? `Yayın: ${formatDate(latestPublished.published_at || latestPublished.release_date)}` : "Henüz yayın kaydı yok", icon: Rocket, tone: "text-emerald-600 bg-emerald-50" },
-    { label: "Güncelleme başarı oranı", value: `%${updateSuccess}`, note: "Firma bazlı hesaplanır", icon: Gauge, tone: "text-indigo-600 bg-indigo-50" },
+    { label: "Cihaz güncelleme oranı", value: `%${updateSuccess}`, note: "Kayıtlı cihazlar arasında", icon: Gauge, tone: "text-indigo-600 bg-indigo-50" },
   ];
 
   const updateTypes = [
