@@ -4,6 +4,7 @@ import { createFinanceService } from "../services/finance";
 import { useNavigate } from "react-router-dom";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
+import { EmptyState } from "../components/EmptyState";
 import {
     Edit3,
     Plus,
@@ -1452,9 +1453,21 @@ export default function Customers() {
                     </div>
                 )}
                 {!loading && filteredByFilter.length === 0 && (
-                    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 p-12 text-center text-slate-500">
-                        Kayıt bulunamadı.
-                    </div>
+                    customers.length === 0 ? (
+                        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 p-8">
+                            <EmptyState
+                              icon={Users}
+                              title="Henüz müşteriniz yok"
+                              description="İlk müşterinizi ekleyerek sipariş oluşturmaya başlayabilirsiniz."
+                              ctaLabel="+ Yeni Müşteri"
+                              ctaOnClick={() => setShowAddForm(!showAddForm)}
+                            />
+                        </div>
+                    ) : (
+                        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 p-12 text-center text-slate-500">
+                            Arama sonucu bulunamadı.
+                        </div>
+                    )
                 )}
 
                 {filteredByFilter.map((c) => {

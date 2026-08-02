@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { Package as PackageIcon } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { EmptyState } from "../components/EmptyState";
 
 async function getContext() {
     return getEffectiveTenantContext();
@@ -854,7 +856,19 @@ export default function Products() {
                     {loading ? (
                         <div className="text-sm text-slate-500">Ürünler yükleniyor...</div>
                     ) : filteredProducts.length === 0 ? (
-                        <div className="text-sm text-slate-500">Gösterilecek ürün bulunamadı.</div>
+                        products.length === 0 ? (
+                            <div className="py-8">
+                                <EmptyState
+                                  icon={PackageIcon}
+                                  title="Henüz ürün bulunmuyor"
+                                  description="Ürün listesi ve fiyatlandırmasını başlamak için yeni bir ürün ekleyin."
+                                  ctaLabel="+ Yeni Ürün"
+                                  ctaOnClick={() => { document.getElementById("product-form-panel")?.scrollIntoView({ behavior: "smooth" }); }}
+                                />
+                            </div>
+                        ) : (
+                            <div className="text-sm text-slate-500">Arama sonucu bulunamadı.</div>
+                        )
                     ) : (
                         <div className="space-y-3">
                             {filteredProducts.map((row) => (

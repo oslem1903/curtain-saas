@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Plus, Search, Filter, ArrowLeft, RefreshCw } from "lucide-react";
+import { Plus, Search, Filter, ArrowLeft, RefreshCw, ShoppingCart } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
 import { withoutDeleted } from "../utils/softDelete";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
+import { EmptyState } from "../components/EmptyState";
 
 /** -----------------------
  * Helpers
@@ -451,9 +452,21 @@ export default function Orders() {
                     ) : err ? (
                         <div className="p-8 text-center text-red-600">{err}</div>
                     ) : filtered.length === 0 ? (
-                        <div className="p-8 text-center text-slate-500 dark:text-slate-400">
-                            Sipariş bulunamadı. Başlamak için yeni bir sipariş oluşturun.
-                        </div>
+                        rows.length === 0 ? (
+                            <div className="p-8">
+                                <EmptyState
+                                  icon={ShoppingCart}
+                                  title="Henüz sipariş oluşturulmadı"
+                                  description="İlk siparişinizi oluşturarak süreci başlatın."
+                                  ctaLabel="+ Yeni Sipariş"
+                                  ctaHref="#/orders/new"
+                                />
+                            </div>
+                        ) : (
+                            <div className="p-8 text-center text-slate-500 dark:text-slate-400">
+                                Sipariş bulunamadı. Başlamak için yeni bir sipariş oluşturun.
+                            </div>
+                        )
                     ) : (
                         <div className="divide-y divide-slate-200 dark:divide-slate-800">
                             {filtered.map((o) => {

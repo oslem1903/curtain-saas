@@ -8,6 +8,7 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { withoutDeleted } from "../utils/softDelete";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
+import { EmptyState } from "../components/EmptyState";
 
 type Supplier = {
     id: string;
@@ -763,9 +764,21 @@ export const Suppliers = () => {
                 {loading ? (
                     <div className="text-center py-12 text-slate-500">Yükleniyor...</div>
                 ) : filteredSuppliers.length === 0 ? (
-                    <div className="text-center py-12 text-slate-500">
-                        {suppliers.length === 0 ? "Henüz tedarikçi yok" : "Arama sonucu bulunamadı"}
-                    </div>
+                    suppliers.length === 0 ? (
+                        <div className="p-8">
+                            <EmptyState
+                              icon={Truck}
+                              title="Henüz tedarikçi eklenmedi"
+                              description="Tedarikçiler ile çalışmaya başlamak için yeni bir tedarikçi ekleyin."
+                              ctaLabel="+ Tedarikçi Ekle"
+                              ctaHref="#/suppliers/new"
+                            />
+                        </div>
+                    ) : (
+                        <div className="text-center py-12 text-slate-500">
+                            Arama sonucu bulunamadı
+                        </div>
+                    )
                 ) : (
                     <div className="flex flex-col">
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
