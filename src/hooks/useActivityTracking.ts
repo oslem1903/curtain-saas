@@ -3,14 +3,17 @@ import { supabase } from '../supabaseClient';
 
 /**
  * Hook to track user activity:
- * - Record login on first load with valid session
+ * - Record login on first load with valid session (per-tab, sessionStorage-based)
  * - Send heartbeat every 5 minutes while user is active
  * - Log page views and errors via RPC
  *
  * Safe: silently fails if RPC calls fail, doesn't break user flow
  */
+function getCurrentPage(): string {
+  return window.location.hash || window.location.pathname || '/';
+}
+
 export function useActivityTracking() {
-  const hasRecordedLogin = useRef(false);
   const lastHeartbeatRef = useRef<number>(0);
 
   useEffect(() => {
@@ -22,11 +25,20 @@ export function useActivityTracking() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
+        const loginStorageKey = `activity_login_recorded:${user.id}`;
+
+        // Skip if already recorded in this tab session
+        if (sessionStorage.getItem(loginStorageKey)) {
+          return;
+        }
+
         // Call record_login RPC (handles user_activity insert + profiles update)
         try {
           await supabase.rpc('record_login');
+          // Only set key if RPC succeeded
+          sessionStorage.setItem(loginStorageKey, '1');
         } catch {
-          // Silently fail
+          // Silently fail - don't set key so we can retry on next mount
         }
       } catch (error) {
         console.error('Failed to record login:', error);
@@ -49,7 +61,7 @@ export function useActivityTracking() {
         try {
           await supabase.rpc('record_user_activity', {
             p_activity_type: 'heartbeat',
-            p_page: window.location.pathname,
+            p_page: getCurrentPage(),
           });
         } catch {
           // Silently fail
@@ -64,11 +76,8 @@ export function useActivityTracking() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user || !mounted) return;
 
-        // Record login only once
-        if (!hasRecordedLogin.current) {
-          hasRecordedLogin.current = true;
-          await recordLogin();
-        }
+        // Record login (sessionStorage prevents duplicate in same tab)
+        await recordLogin();
 
         // Set up heartbeat (every 5 minutes)
         heartbeatTimer = setInterval(recordHeartbeat, 5 * 60 * 1000);

@@ -22,6 +22,8 @@ export class ErrorBoundary extends Component<Props, State> {
   public async componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
 
+    const currentPage = window.location.hash || window.location.pathname || '/';
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -39,7 +41,7 @@ export class ErrorBoundary extends Component<Props, State> {
           user_id: user.id,
           message: error.message || 'Unknown error',
           stack: error.stack,
-          path: window.location.pathname,
+          path: currentPage,
           user_agent: navigator.userAgent,
           error_message: error.message,
           error_stack: error.stack,
