@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
-import { Upload, X, Check, Loader2, Bell, LifeBuoy } from "lucide-react";
+import { X, Check, Bell, LifeBuoy } from "lucide-react";
+import { CompanySettingsCard } from "../components/CompanySettingsCard";
+import { LicenseCard } from "../components/LicenseCard";
 
 type MyTicket = {
     id: string;
@@ -31,9 +33,6 @@ import {
 export const Settings = () => {
     const navigate = useNavigate();
     const [role, setRole] = useState<RoleState>("unknown");
-    const [companyId, setCompanyId] = useState<string | null>(null);
-    const [logoUrl, setLogoUrl] = useState<string | null>(null);
-    const [uploading, setUploading] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
     const [notificationSettings, setNotificationSettings] = useState(() => getNotificationSettings());
     const [myTickets, setMyTickets] = useState<MyTicket[]>([]);
@@ -49,25 +48,8 @@ export const Settings = () => {
                 .select("role")
                 .eq("user_id", user.id)
                 .maybeSingle();
-            
+
             setRole(normalizeRole(profile?.role));
-
-            const { data: member } = await supabase
-                .from("company_members")
-                .select("company_id")
-                .eq("user_id", user.id)
-                .maybeSingle();
-
-            if (member?.company_id) {
-                setCompanyId(member.company_id);
-                const { data: company } = await supabase
-                    .from("companies")
-                    .select("logo_url")
-                    .eq("id", member.company_id)
-                    .maybeSingle();
-                
-                setLogoUrl(company?.logo_url || null);
-            }
         }
         loadProfile();
     }, []);
@@ -80,13 +62,14 @@ export const Settings = () => {
             try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return;
-                let { data, error } = await supabase
+                const { data, error: ticketError } = await supabase
                     .from("support_tickets")
                     .select("id, title, status, admin_response, created_at")
                     .eq("user_id", user.id)
                     .order("created_at", { ascending: false })
                     .limit(20);
-                if (error) {
+                let ticketData = data;
+                if (ticketError) {
                     // admin_response kolonu henüz yoksa onsuz dene
                     const fb = await supabase
                         .from("support_tickets")
@@ -94,9 +77,9 @@ export const Settings = () => {
                         .eq("user_id", user.id)
                         .order("created_at", { ascending: false })
                         .limit(20);
-                    data = fb.data as any;
+                    ticketData = fb.data as any;
                 }
-                if (alive) setMyTickets((data ?? []) as MyTicket[]);
+                if (alive) setMyTickets((ticketData ?? []) as MyTicket[]);
             } catch {
                 // destek tablosu yoksa bölüm boş kalır
             } finally {
@@ -110,102 +93,6 @@ export const Settings = () => {
     async function handleLogout() {
         await supabase.auth.signOut();
         navigate("/login", { replace: true });
-    }
-
-    // Logoyu küçültüp data-URL'e çevirir (storage gerektirmeyen kalıcı yöntem)
-    function fileToResizedDataUrl(file: File, maxSize = 512): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const img = new Image();
-                img.onload = () => {
-                    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
-                    const canvas = document.createElement("canvas");
-                    canvas.width = Math.round(img.width * scale);
-                    canvas.height = Math.round(img.height * scale);
-                    const ctx = canvas.getContext("2d");
-                    if (!ctx) { reject(new Error("canvas yok")); return; }
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    resolve(canvas.toDataURL("image/png"));
-                };
-                img.onerror = () => reject(new Error("görsel okunamadı"));
-                img.src = String(reader.result);
-            };
-            reader.onerror = () => reject(new Error("dosya okunamadı"));
-            reader.readAsDataURL(file);
-        });
-    }
-
-    async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-        try {
-            setUploading(true);
-            setMessage(null);
-
-            if (!e.target.files || e.target.files.length === 0) return;
-            const file = e.target.files[0];
-
-            if (file.size > 5 * 1024 * 1024) {
-                setMessage({ type: 'error', text: 'Dosya çok büyük. Lütfen 5MB altında bir görsel seçin.' });
-                return;
-            }
-
-            let logoValue: string | null = null;
-
-            // 1. Önce Supabase Storage dene
-            try {
-                const fileExt = file.name.split('.').pop();
-                const filePath = `${companyId}-logo.${fileExt}`;
-                const { error: uploadError } = await supabase.storage
-                    .from('logos')
-                    .upload(filePath, file, { upsert: true });
-                if (!uploadError) {
-                    const { data: { publicUrl } } = supabase.storage
-                        .from('logos')
-                        .getPublicUrl(filePath);
-                    // Cache kırmak için sürüm parametresi ekle
-                    logoValue = `${publicUrl}?v=${Date.now()}`;
-                }
-            } catch {
-                // storage erişilemiyor — aşağıdaki yedek yöntem devreye girer
-            }
-
-            // 2. Storage başarısızsa: küçültülmüş base64 olarak kaydet (her zaman çalışır)
-            if (!logoValue) {
-                logoValue = await fileToResizedDataUrl(file);
-            }
-
-            const { error: updateError } = await supabase
-                .from('companies')
-                .update({ logo_url: logoValue })
-                .eq('id', companyId);
-
-            if (updateError) throw updateError;
-
-            setLogoUrl(logoValue);
-            setMessage({ type: 'success', text: 'Logo başarıyla güncellendi.' });
-        } catch {
-            setMessage({ type: 'error', text: 'Logo kaydedilemedi. Lütfen farklı bir görselle tekrar deneyin.' });
-        } finally {
-            setUploading(false);
-        }
-    }
-
-    async function handleRemoveLogo() {
-        try {
-            setUploading(true);
-            const { error } = await supabase
-                .from('companies')
-                .update({ logo_url: null })
-                .eq('id', companyId);
-
-            if (error) throw error;
-            setLogoUrl(null);
-            setMessage({ type: 'success', text: 'Logo kaldırıldı.' });
-        } catch {
-            setMessage({ type: 'error', text: 'Logo kaldırılamadı. Lütfen tekrar deneyin.' });
-        } finally {
-            setUploading(false);
-        }
     }
 
     function updateNotificationSettings(next: typeof notificationSettings) {
@@ -222,8 +109,6 @@ export const Settings = () => {
         });
     }
 
-    const isAdmin = role === "admin";
-
     return (
         <div className="mx-auto max-w-4xl space-y-6 pb-24">
             <div>
@@ -233,68 +118,21 @@ export const Settings = () => {
 
             {message && (
                 <div className={`p-4 rounded-xl flex items-center gap-3 ${
-                    message.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'
+                    message.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-200' : 'bg-red-50 text-red-700 border border-red-100 dark:bg-red-950/30 dark:text-red-200'
                 }`}>
                     {message.type === 'success' ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
                     <span className="text-sm font-medium">{message.text}</span>
                 </div>
             )}
 
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-                
-                {/* LOGO AYARLARI (Sadece Admin) */}
-                {isAdmin && (
-                    <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Kurumsal Logo</h3>
-                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                                    Sistem genelinde ve raporlarda görünecek şirket logonuzu yükleyin.
-                                </p>
-                            </div>
-                            
-                            <div className="flex flex-col items-center gap-4">
-                                <div className="relative group">
-                                    <div className="w-32 h-32 rounded-2xl bg-slate-50 dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden transition-all group-hover:border-primary-400">
-                                        {logoUrl ? (
-                                            <img src={logoUrl} alt="Company Logo" className="w-full h-full object-contain p-2" />
-                                        ) : (
-                                            <Upload className="w-8 h-8 text-slate-400" />
-                                        )}
-                                        {uploading && (
-                                            <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex items-center justify-center backdrop-blur-sm">
-                                                <Loader2 className="w-6 h-6 text-primary-600 animate-spin" />
-                                            </div>
-                                        )}
-                                    </div>
-                                    
-                                    {logoUrl && !uploading && (
-                                        <button 
-                                            onClick={handleRemoveLogo}
-                                            className="absolute -top-2 -right-2 p-1.5 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors shadow-sm"
-                                            title="Logoyu Kaldır"
-                                        >
-                                            <X className="w-4 h-4" />
-                                        </button>
-                                    )}
-                                </div>
+            {/* Company Settings Card */}
+            <CompanySettingsCard />
 
-                                <label className="relative cursor-pointer bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm flex items-center gap-2">
-                                    <Upload className="w-4 h-4" />
-                                    {logoUrl ? 'Logoyu Değiştir' : 'Logo Yükle'}
-                                    <input 
-                                        type="file" 
-                                        className="hidden" 
-                                        accept="image/*" 
-                                        onChange={handleLogoUpload} 
-                                        disabled={uploading}
-                                    />
-                                </label>
-                                <p className="text-[11px] text-slate-400">PNG, JPG veya SVG (Önerilen: Kare, max 2MB)</p>
-                            </div>
-                        </div>
-                    </div>
-                )}
+            {/* License Card */}
+            <LicenseCard />
+
+            {/* Profile & Personal Settings */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
 
                 {/* PROFIL */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
@@ -311,7 +149,7 @@ export const Settings = () => {
                     </div>
                 </div>
 
-                {/* GORUNUM */}
+                {/* NOTIFICATIONS */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
                     <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
                         <div className="flex-1">
@@ -359,7 +197,7 @@ export const Settings = () => {
                     </div>
                 </div>
 
-                {/* GORUNUM */}
+                {/* THEME */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
                     <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Görünüm</h3>
                     <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Koyu mod/Açık mod tercihlerinizi belirleyin.</p>
@@ -370,7 +208,7 @@ export const Settings = () => {
                     </div>
                 </div>
 
-                {/* DESTEK TALEPLERIM */}
+                {/* SUPPORT TICKETS */}
                 <div className="border-b border-slate-100 p-6 dark:border-slate-800 sm:p-8">
                     <div className="flex items-center gap-2">
                         <LifeBuoy className="h-5 w-5 text-primary-600" />
@@ -412,7 +250,7 @@ export const Settings = () => {
                     </div>
                 </div>
 
-                {/* CIKIS */}
+                {/* LOGOUT */}
                 <div className="bg-slate-50/50 p-6 dark:bg-slate-800/20 sm:p-8">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>

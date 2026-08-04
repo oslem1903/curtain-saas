@@ -12,12 +12,25 @@ type CompanyState = {
     plan_status: string | null;
     subscription_plan: string | null;
     max_users: number | null;
+    max_devices: number | null;
     enabled_modules: string[] | null;
     package_code?: string | null;
     branch_limit: number | null;
     trial_end: string | null;
     trial_ends_at: string | null;
     is_pilot: boolean | null;
+    onboarding_completed?: boolean;
+    onboarding_completed_at?: string | null;
+    subscription_status?: string;
+    license_expires_at?: string | null;
+    payment_reference?: string | null;
+    billing_note?: string | null;
+    phone: string | null;
+    email: string | null;
+    address: string | null;
+    tax_office: string | null;
+    tax_no: string | null;
+    logo_url: string | null;
 };
 
 export const CORE_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "catalogs", "staff"];
@@ -216,7 +229,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 const { data: demoCompany } = await withTimeout(
                     supabase
                         .from("companies")
-                        .select("id,name,is_active,read_only,plan_status,subscription_plan,max_users,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot")
+                        .select("id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url")
                         .eq("id", demoCompanyId)
                         .maybeSingle(),
                     "Demo firma kontrolu",
@@ -240,7 +253,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { data: member, error: memberError } = await withTimeout(
                 supabase
                     .from("company_members")
-                    .select("company_id,role,is_active,companies(id,name,is_active,read_only,plan_status,subscription_plan,max_users,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot)")
+                    .select("company_id,role,is_active,companies(id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url)")
                     .eq("user_id", sessionUser.id)
                     .order("created_at", { ascending: true })
                     .limit(1)
