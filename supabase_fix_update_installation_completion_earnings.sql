@@ -178,6 +178,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
+    v_job_id uuid;
     v_installer_id uuid;
     v_order_id uuid;
     v_commission_row record;
@@ -235,14 +236,14 @@ BEGIN
         assigned_staff_id,
         order_id
     INTO
-        p_job_id,
+        v_job_id,
         v_installer_id,
         v_order_id
     FROM public.installation_jobs
     WHERE id = p_job_id AND company_id = p_company_id
     FOR UPDATE;  -- Row-level lock prevents concurrent modifications
 
-    IF p_job_id IS NULL THEN
+    IF v_job_id IS NULL THEN
         RETURN json_build_object(
             'success', false,
             'error', 'Installation job not found',
@@ -263,7 +264,8 @@ BEGIN
     IF p_new_status = 'completed' THEN
         IF EXISTS (
             SELECT 1 FROM public.installer_earnings
-            WHERE installation_job_id = p_job_id
+            WHERE company_id = p_company_id
+              AND installation_job_id = v_job_id
             LIMIT 1
         ) THEN
             RETURN json_build_object(
@@ -274,6 +276,16 @@ BEGIN
         END IF;
     END IF;
 
+    -- 4. Order ID consistency validation
+    IF p_order_id IS NOT NULL AND v_order_id IS NOT NULL AND p_order_id <> v_order_id THEN
+        RETURN json_build_object(
+            'success', false,
+            'error', 'Order id mismatch: provided order does not match installation job',
+            'provided_order_id', p_order_id,
+            'actual_order_id', v_order_id
+        );
+    END IF;
+
     -- ========================================================================
     -- WRITE OPERATIONS: All-or-Nothing via Exception
     -- ========================================================================
@@ -281,7 +293,7 @@ BEGIN
     -- Client receives error (not JSON), atomicity guaranteed
     -- ========================================================================
 
-    -- 4. UPDATE installation_jobs status
+    -- 5. UPDATE installation_jobs status
     UPDATE public.installation_jobs
     SET
         status = p_new_status,
@@ -290,25 +302,25 @@ BEGIN
             ELSE completed_at
         END,
         updated_at = now()
-    WHERE id = p_job_id AND company_id = p_company_id;
+    WHERE id = v_job_id AND company_id = p_company_id;
 
-    -- 5. CREATE EARNINGS (only for completion status)
+    -- 6. CREATE EARNINGS (only for completion status)
     IF p_new_status = 'completed' AND v_installer_id IS NOT NULL THEN
 
-        -- 5a. Call calculate_commission_for_job to get earnings details
+        -- 6a. Call calculate_commission_for_job to get earnings details
         SELECT * INTO v_commission_row
         FROM public.calculate_commission_for_job(
-            p_job_id,
+            v_job_id,
             v_installer_id,
             p_company_id
         );
 
         -- Validate commission result
         IF v_commission_row IS NULL THEN
-            RAISE EXCEPTION 'calculate_commission_for_job returned NULL result for job %', p_job_id;
+            RAISE EXCEPTION 'calculate_commission_for_job returned NULL result for job %', v_job_id;
         END IF;
 
-        -- 5b. INSERT installer_earnings record
+        -- 6b. INSERT installer_earnings record
         INSERT INTO public.installer_earnings (
             company_id,
             installer_id,
@@ -328,7 +340,7 @@ BEGIN
         ) VALUES (
             p_company_id,
             v_installer_id,
-            p_job_id,
+            v_job_id,
             v_order_id,
             now(),
             COALESCE(v_commission_row.calculation_details->>'type', 'quantity'),
@@ -344,7 +356,7 @@ BEGIN
         )
         RETURNING id INTO v_earning_id;
 
-        -- 5c. INSERT installer_transactions record
+        -- 6c. INSERT installer_transactions record
         INSERT INTO public.installer_transactions (
             company_id,
             installer_id,
@@ -363,7 +375,7 @@ BEGIN
         RETURNING id INTO v_transaction_id;
     END IF;
 
-    -- 6. UPDATE orders status (if provided)
+    -- 7. UPDATE orders status (if provided)
     IF v_order_id IS NOT NULL AND p_order_new_status IS NOT NULL THEN
         UPDATE public.orders
         SET
@@ -378,7 +390,7 @@ BEGIN
 
     RETURN json_build_object(
         'success', true,
-        'job_id', p_job_id,
+        'job_id', v_job_id,
         'new_status', p_new_status,
         'earning_id', v_earning_id,
         'transaction_id', v_transaction_id,

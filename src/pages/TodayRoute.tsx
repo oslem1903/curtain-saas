@@ -21,24 +21,6 @@ type Row = {
   customer: { id?: string | null; name: string | null; phone: string | null } | { id?: string | null; name: string | null; phone: string | null }[] | null;
 };
 
-function jobArea(job: any) {
-  let w = Number(job.width || 0);
-  let h = Number(job.height || 0);
-  if (w <= 0 || h <= 0) return 0;
-  const minW = Number(job.min_width || 0);
-  const minH = Number(job.min_height || 0);
-  const minArea = Number(job.min_area || 0);
-
-  if (minW > 0 && w < minW) w = minW;
-  if (minH > 0 && h < minH) h = minH;
-
-  let area = (w * h) / 10000;
-  if (minArea > 0 && area < minArea) {
-      area = minArea;
-  }
-  return area * Math.max(1, Number(job.qty ?? 1));
-}
-
 type StaffRow = {
   user_id: string;
   full_name: string | null;
@@ -286,29 +268,24 @@ export default function TodayRoute() {
 
         if (jobs && jobs.length > 0) {
           for (const job of jobs) {
-            let fee = Number(job.installer_fee || 0);
-            const rate = Number(job.unit_rate || 0);
-            if (fee === 0 && rate > 0) {
-              if (job.price_type === "m2") {
-                fee = Math.round(jobArea(job) * rate * 100) / 100;
-              } else if (job.price_type === "adet") {
-                const q = Math.max(1, Number(job.qty || 1));
-                fee = Math.round(q * rate * 100) / 100;
+            // Use update_installation_completion RPC (handles earnings atomically)
+            const { data: rpcResult, error: rpcError } = await supabase.rpc(
+              'update_installation_completion',
+              {
+                p_company_id: ctx.company_id,
+                p_job_id: job.id,
+                p_new_status: 'completed',
+                p_order_id: row.order_id,
+                p_order_new_status: 'montaj_tamamlandi'
               }
+            );
+
+            if (rpcError) throw rpcError;
+            if (!rpcResult?.success) {
+              throw new Error(rpcResult?.error || 'Montaj tamamlanamadı');
             }
-            await supabase
-              .from("installation_jobs")
-              .update({
-                status: "completed",
-                completed_at: new Date().toISOString(),
-                installer_fee: fee > 0 ? fee : null,
-              })
-              .eq("id", job.id);
           }
         }
-
-        // Montaj tamamlandı → sipariş durumunu da güncelle (InstallationTracking:305 ile birebir aynı mantık)
-        await supabase.from("orders").update({ status: "montaj_tamamlandi" }).eq("id", row.order_id).eq("company_id", ctx.company_id);
       }
 
       setRows((prev) => (removeWhenDone ? prev.filter((r) => r.id !== row.id) : prev.map((r) => (r.id === row.id ? { ...r, status } : r))));
