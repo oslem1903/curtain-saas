@@ -8,6 +8,7 @@ import {
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { DELIVERY_DATE_LABEL, todayISO, isValidDeliveryDate, orderDeliveryFields } from "../utils/order";
 import { postSupplierDebt } from "../utils/supplierCari";
+import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ function parseGroupId(note: string | null): string | null {
   const m = note.match(/\[Grup:\s*([^\]]+)\]/);
   return m ? m[1].trim() : null;
 }
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -192,13 +194,13 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         const areaM2    = widthM * heightM;
         const lineTotal = areaM2 * qty * unitPrice;
         const supplierLineTotal = areaM2 * qty * supplierUnitCost;
-        
+
         totalLineTotal += lineTotal;
         totalSupplierLineTotal += supplierLineTotal;
 
         const isTulFon = row.product_type === "tul" || row.product_type === "fon";
         const productNote = [row.model_name, row.color_name, row.room_name].filter(Boolean).join(" / ") || null;
-        
+
         return {
           company_id: ctx.company_id,
           product_type: row.product_type || "stor",
@@ -286,7 +288,46 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         insertedItems = fullItemsData || [];
       }
 
+      // 3.5) Saha Bilgileri Fotoğrafları Transfer Et (Appointment → OrderItem)
+      const photoTransferWarnings: string[] = [];
+      try {
+        for (let i = 0; i < group.rows.length; i++) {
+          const apptRow = group.rows[i];
+          const orderItem = insertedItems[i];
+          if (!orderItem) continue;
+
+          const photoData = extractSahaBilgileriFromNote(apptRow.note);
+          if (photoData && photoData.photos && photoData.photos.length > 0) {
+            const photoRecords = photoData.photos.map((photo: any) => ({
+              order_item_id: orderItem.id,
+              appointment_id: apptRow.id,
+              image_url: photo.url || photo,
+              catalog_code: `${photoData.color || apptRow.color_name || ""} / ${photoData.model || apptRow.model_name || ""}`.trim() || null,
+              note: JSON.stringify({
+                color: photoData.color || apptRow.color_name,
+                model: photoData.model || apptRow.model_name,
+                room: apptRow.room_name,
+                fieldNotes: photoData.fieldNotes,
+              }),
+              company_id: ctx.company_id,
+            }));
+
+            if (photoRecords.length > 0) {
+              const { error: photoErr } = await supabase.from("catalog_code_photos").insert(photoRecords);
+              if (photoErr) photoTransferWarnings.push(`Ürün ${i + 1} fotoğrafları transfer edilemedi: ${photoErr.message}`);
+            }
+          }
+        }
+      } catch (photoTransferErr: any) {
+        photoTransferWarnings.push(`Saha Bilgileri aktarımında hata: ${photoTransferErr?.message || "Bilinmeyen hata"}`);
+      }
+
+      if (photoTransferWarnings.length > 0) {
+        alert(`Sipariş oluşturuldu, ancak aşağıdaki fotoğraflar aktarılamadı:\n\n${photoTransferWarnings.join("\n")}`);
+      }
+
       // 4) Tedarikçi borçları (Her kalem için ayrı ayrı işleyip order_item'a bağlayalım)
+      const supplierDebtWarnings: string[] = [];
       for (const item of insertedItems) {
         if (item.supplier_id && item.supplier_total_cost > 0) {
           try {
@@ -302,8 +343,14 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
               // Vade: supplier varsayılan vadesi/manuel giriş eklenince iletilir (şimdilik null).
               supplierDueDays: null,
             });
-          } catch (e) { console.warn("Supplier transaction insert failed:", e); }
+          } catch (e: any) {
+            supplierDebtWarnings.push(`${item.product_type}: Tedarikçi borcu kaydedilemedi (${e?.message || "Bilinmeyen hata"})`);
+          }
         }
+      }
+
+      if (supplierDebtWarnings.length > 0) {
+        alert(`Sipariş oluşturuldu, ancak aşağıdaki tedarikçi borçları kaydedilemedi:\n\n${supplierDebtWarnings.join("\n")}`);
       }
 
       // 5) Appointment'ları siparişe bağla

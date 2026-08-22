@@ -877,7 +877,6 @@ export default function NewOrder() {
                 const { error: cariErr } = await supabase.from("supplier_transactions").insert({ company_id: companyId, supplier_id: suppId, order_id: orderId, transaction_date: new Date().toISOString(), transaction_type: "debt", amount: cost, description: `${customerName} - ${it.product_name || productLabel(it.product_type)} sipariş maliyeti`, reference_no: orderId.slice(0, 8).toUpperCase() });
                 if (cariErr) cariWarnings.push(`Cari hareket oluşturulamadı: ${cariErr.message}`);
             }
-            if (cariWarnings.length > 0) console.warn("Cari uyarılar:", cariWarnings);
             // Quotes.tsx'ten "Siparişe Çevir" ile gelindiyse ölçü kaydına order_id yaz
             if (sourceAppointmentId) {
                 const { error: updErr } = await supabase
@@ -885,9 +884,15 @@ export default function NewOrder() {
                     .update({ order_id: orderId })
                     .eq("id", sourceAppointmentId)
                     .eq("company_id", companyId);
-                if (updErr) console.warn("Teklif order_id güncellenemedi:", updErr.message);
+                if (updErr) cariWarnings.push(`Ölçü kaydı güncellenemedi: ${updErr.message}`);
             }
-            alert(supplierPriceWarnings.length > 0 ? `Sipariş kaydedildi. Bazı alış fiyatları yazılamadı: ${supplierPriceWarnings.join(" | ")}` : "Sipariş başarıyla kaydedildi!");
+
+            const allWarnings = [...supplierPriceWarnings, ...cariWarnings];
+            if (allWarnings.length > 0) {
+              alert(`Sipariş kaydedildi, ancak şu uyarılar var:\n\n${allWarnings.join("\n")}`);
+            } else {
+              alert("Sipariş başarıyla kaydedildi!");
+            }
             // Teklif dönüşümüyse Teklifler sayfasına dön (Siparişe Çevrildi görünsün), değilse Siparişler'e
             nav(sourceAppointmentId ? "/quotes" : "/orders");
         } catch (e: any) {

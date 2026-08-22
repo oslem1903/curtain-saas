@@ -10,6 +10,22 @@ import { normalizeOrderStatus, ORDER_STATUS } from "../utils/order";
 
 type InstallationStatus = "waiting" | "planned" | "assigned" | "onway" | "installing" | "issue" | "completed";
 
+type InstallationItem = {
+  id: string;
+  product_type: string | null;
+  room: string | null;
+  width: number | null;
+  height: number | null;
+  qty?: number | null;
+  photos: Array<{ url: string; code: string; note: string }>;
+  metadata?: {
+    color?: string;
+    model?: string;
+    fieldNotes?: string;
+    room?: string;
+  };
+};
+
 type JobRow = {
   id: string;
   company_id: string | null;
@@ -31,6 +47,7 @@ type JobRow = {
   created_at: string | null;
   updated_at: string | null;
   field_info?: FieldInfo | null;
+  items?: InstallationItem[];
 };
 
 type StaffOption = {
@@ -183,23 +200,128 @@ export default function InstallationTracking() {
       }
 
       const jobRows = (data ?? []) as JobRow[];
-      // Saha bilgilerini (kartela, foto, sesli/montaj notu) order_items.product_options'tan eşle (order_id ile).
+      // Saha bilgilerini ve fotoğrafları per-item olarak yükle (order_item_id ile linking).
       try {
         const orderIds = Array.from(new Set(jobRows.map((r) => r.order_id).filter(Boolean)));
+
         if (orderIds.length > 0) {
-          const { data: itemRows } = await supabase
+          // Query order_items with EXPLICIT error handling
+          const { data: itemRows, error: itemError } = await supabase
             .from("order_items")
-            .select("order_id, product_options")
+            .select("id, order_id, product_type, room, width_cm, height_cm, qty, product_options")
             .in("order_id", orderIds);
+
+          if (itemError) {
+            console.error('INSTALLATION_ORDER_ITEMS_ERROR', itemError);
+            throw itemError;
+          }
+
+          // Fotoğrafları order_item_id'ye göre grupla (PER-ITEM)
+          const photosByItemId = new Map<string, Array<{ url: string; code: string; note: string }>>();
+          const itemIds = (itemRows ?? []).map((r: any) => r.id).filter(Boolean);
+
+
+          if (itemIds.length > 0) {
+            // Query catalog_code_photos with EXPLICIT error handling
+            const { data: photoRows, error: photoError } = await supabase
+              .from("catalog_code_photos")
+              .select("order_item_id, image_url, note, catalog_code")
+              .in("order_item_id", itemIds);
+
+            if (photoError) {
+              console.error('INSTALLATION_PHOTOS_ERROR', photoError);
+              throw photoError;
+            }
+
+
+            if (photoRows && photoRows.length > 0) {
+              for (const photoRow of photoRows) {
+                if (!photosByItemId.has(photoRow.order_item_id)) {
+                  photosByItemId.set(photoRow.order_item_id, []);
+                }
+                photosByItemId.get(photoRow.order_item_id)!.push({
+                  url: photoRow.image_url,
+                  code: photoRow.catalog_code || "",
+                  note: photoRow.note || "",
+                });
+              }
+            }
+          }
+
+          // Her order için items array'i oluştur
+          const itemsByOrderId = new Map<string, InstallationItem[]>();
+          (itemRows ?? []).forEach((itemRow: any) => {
+            if (!itemRow.order_id) {
+              console.warn('INSTALLATION_ITEM_NO_ORDER_ID', itemRow);
+              return;
+            }
+
+            const photos = photosByItemId.get(itemRow.id) || [];
+            const metadata: InstallationItem["metadata"] = {};
+
+            // Metadata'yı ilk fotoğrafın note JSON'ndan çıkart
+            if (photos.length > 0 && photos[0].note) {
+              try {
+                const parsed = typeof photos[0].note === "string"
+                  ? JSON.parse(photos[0].note)
+                  : photos[0].note;
+                if (parsed && typeof parsed === "object") {
+                  metadata.color = parsed.color || "";
+                  metadata.model = parsed.model || "";
+                  metadata.fieldNotes = parsed.fieldNotes || "";
+                  metadata.room = parsed.room || "";
+                }
+              } catch (parseErr) {
+                console.warn('INSTALLATION_METADATA_PARSE_ERROR', { itemId: itemRow.id, error: parseErr });
+              }
+            }
+
+            const item: InstallationItem = {
+              id: itemRow.id,
+              product_type: itemRow.product_type || null,
+              room: itemRow.room || null,
+              width: itemRow.width_cm || null,
+              height: itemRow.height_cm || null,
+              qty: itemRow.qty || null,
+              photos,
+              metadata,
+            };
+
+            if (!itemsByOrderId.has(itemRow.order_id)) {
+              itemsByOrderId.set(itemRow.order_id, []);
+            }
+            itemsByOrderId.get(itemRow.order_id)!.push(item);
+          });
+
+
+          // Items'ı her job'a ekle
+          jobRows.forEach((r) => {
+            const items = itemsByOrderId.get(r.order_id);
+            if (r.order_id && items) {
+              r.items = items;
+            }
+          });
+
+          // Eski sistem: product_options'tan field_info (backward compatibility)
           const infoByOrder = new Map<string, FieldInfo>();
           (itemRows ?? []).forEach((row: any) => {
             if (!row?.order_id || infoByOrder.has(row.order_id)) return;
             const fi = parseFieldInfo(row.product_options);
             if (hasFieldInfo(fi)) infoByOrder.set(row.order_id, fi);
           });
-          jobRows.forEach((r) => { if (r.order_id && infoByOrder.has(r.order_id)) r.field_info = infoByOrder.get(r.order_id) ?? null; });
+
+          jobRows.forEach((r) => {
+            if (r.order_id && infoByOrder.has(r.order_id)) {
+              r.field_info = infoByOrder.get(r.order_id) ?? null;
+            }
+          });
         }
-      } catch { /* order_items okunamazsa saha bilgisi atlanır, montaj listesi bozulmaz */ }
+      } catch (e) {
+        console.error('INSTALLATION_LOAD_ERROR', e);
+        /* order_items okunamazsa saha bilgisi atlanır, montaj listesi bozulmaz */
+      }
+
+
       setRows(jobRows);
 
       const { data: employees, error: empErr } = await supabase
@@ -652,9 +774,40 @@ export default function InstallationTracking() {
                       <div className="mt-1 text-xs text-slate-500">{formatMoney(row.total_amount)}</div>
                     </td>
                     <td className="px-4 py-4">
-                      <div className="font-bold">{row.product_type || "-"}</div>
-                      <div className="mt-1 text-xs text-slate-500">{row.room || "-"} / {row.width || "-"}x{row.height || "-"} cm</div>
-                      {row.field_info ? <FieldInfoGallery info={row.field_info} compact /> : null}
+                      {row.items && row.items.length > 0 ? (
+                        <div className="space-y-3">
+                          {row.items.map((item) => (
+                            <div key={item.id} className="pb-3 border-b border-slate-100 dark:border-slate-700 last:pb-0 last:border-0">
+                              <div className="font-bold">{item.product_type || "-"}</div>
+                              <div className="mt-1 text-xs text-slate-500">{item.room || "-"} / {item.width || "-"}x{item.height || "-"} cm</div>
+                              {item.photos.length > 0 && (
+                                <div className="mt-2 flex gap-2">
+                                  {item.photos.slice(0, 3).map((photo, idx) => (
+                                    <a key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-8 w-8 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                      <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                    </a>
+                                  ))}
+                                  {item.photos.length > 3 && (
+                                    <div className="h-8 w-8 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-xs font-bold text-slate-500">+{item.photos.length - 3}</div>
+                                  )}
+                                </div>
+                              )}
+                              {item.metadata && (item.metadata.color || item.metadata.model) && (
+                                <div className="mt-2 space-y-1 text-xs">
+                                  {item.metadata.color && <div><span className="font-bold text-slate-600 dark:text-slate-400">Renk:</span> {item.metadata.color}</div>}
+                                  {item.metadata.model && <div><span className="font-bold text-slate-600 dark:text-slate-400">Model:</span> {item.metadata.model}</div>}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="font-bold">{row.product_type || "-"}</div>
+                          <div className="mt-1 text-xs text-slate-500">{row.room || "-"} / {row.width || "-"}x{row.height || "-"} cm</div>
+                          {row.field_info ? <FieldInfoGallery info={row.field_info} compact /> : null}
+                        </>
+                      )}
                       {row.notes ? <div className="mt-1 max-w-[180px] truncate text-xs text-slate-400" title={row.notes ?? ""}>{row.notes}</div> : null}
                     </td>
                     <td className="px-4 py-4">
@@ -684,8 +837,40 @@ export default function InstallationTracking() {
                 <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
                   <div className="flex gap-2"><Phone className="mt-0.5 h-4 w-4 shrink-0" /> {row.phone || "-"}</div>
                   <div className="flex gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0" /> <span className="break-all">{row.address || "Adres yok"}</span></div>
-                  <div className="flex gap-2"><ClipboardList className="mt-0.5 h-4 w-4 shrink-0" /> {row.product_type || "-"} / {row.room || "-"} / {row.width || "-"}x{row.height || "-"} cm</div>
-                  {row.field_info ? <FieldInfoGallery info={row.field_info} /> : null}
+                  {row.items && row.items.length > 0 ? (
+                    <div className="mt-2 space-y-3">
+                      {row.items.map((item) => (
+                        <div key={item.id} className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                          <div className="font-bold text-sm">{item.product_type || "-"}</div>
+                          <div className="mt-1 text-xs text-slate-500">{item.room || "-"} / {item.width || "-"}x{item.height || "-"} cm</div>
+                          {item.photos.length > 0 && (
+                            <div className="mt-2 flex gap-2">
+                              {item.photos.slice(0, 4).map((photo, idx) => (
+                                <a key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-10 w-10 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                  <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                </a>
+                              ))}
+                              {item.photos.length > 4 && (
+                                <div className="h-10 w-10 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-xs font-bold text-slate-500">+{item.photos.length - 4}</div>
+                              )}
+                            </div>
+                          )}
+                          {item.metadata && (item.metadata.color || item.metadata.model || item.metadata.fieldNotes) && (
+                            <div className="mt-2 space-y-1 text-xs">
+                              {item.metadata.color && <div><span className="font-bold text-slate-600 dark:text-slate-400">Renk:</span> {item.metadata.color}</div>}
+                              {item.metadata.model && <div><span className="font-bold text-slate-600 dark:text-slate-400">Model:</span> {item.metadata.model}</div>}
+                              {item.metadata.fieldNotes && <div><span className="font-bold text-slate-600 dark:text-slate-400">Not:</span> {item.metadata.fieldNotes}</div>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex gap-2"><ClipboardList className="mt-0.5 h-4 w-4 shrink-0" /> {row.product_type || "-"} / {row.room || "-"} / {row.width || "-"}x{row.height || "-"} cm</div>
+                      {row.field_info ? <FieldInfoGallery info={row.field_info} /> : null}
+                    </>
+                  )}
                 </div>
                 {row.notes ? <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-800 line-clamp-3">{row.notes}</div> : null}
                 <div className="mt-3 text-xs font-bold text-slate-500">{formatDate(row.scheduled_date, row.scheduled_time)} / {assignedName(row)}</div>
