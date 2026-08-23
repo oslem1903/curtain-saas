@@ -478,11 +478,19 @@ export default function MeasurementEntry() {
         };
       });
 
-      // Clear existing group items
-      await supabase.from("appointments").delete().eq("company_id", ctx.company_id).ilike("note", `%[Grup: ${groupId}]%`);
-
-      const { error: insErr } = await supabase.from("appointments").insert(payloads);
-      if (insErr) throw insErr;
+      // Atomic replace: delete old group items + insert new ones in single transaction via RPC
+      const { data: rpcResult, error: rpcErr } = await supabase.rpc(
+        'replace_measurement_group',
+        {
+          p_company_id: ctx.company_id,
+          p_group_id: groupId,
+          p_payloads: payloads,
+        }
+      );
+      if (rpcErr) throw rpcErr;
+      if (!rpcResult?.success) {
+        throw new Error(rpcResult?.error || 'Ölçü grubu kaydedilemedi');
+      }
 
       setSuccess("✅ Ölçü grubu kaydedildi.");
       // Kaydetme sonrası ölçü anasayfasına yönlendir
