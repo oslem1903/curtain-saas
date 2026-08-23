@@ -541,9 +541,18 @@ export default function MeasurementEntry() {
             <label className="sm:col-span-2">
               <span className={labelCls}>Müşteri Seçin veya Yazın</span>
               <select value={customerId} onChange={(e) => {
-                const c = customers.find(x => x.id === e.target.value);
-                setCustomerId(e.target.value);
-                if (c) { setCustomerName(c.name || ""); setPhone(c.phone || ""); setAddress(c.address || ""); }
+                const selectedValue = e.target.value;
+                const c = customers.find(x => x.id === selectedValue);
+                setCustomerId(selectedValue);
+                if (c) {
+                  setCustomerName(c.name || "");
+                  setPhone(c.phone || "");
+                  setAddress(c.address || "");
+                } else if (!selectedValue) {
+                  setCustomerName("");
+                  setPhone("");
+                  setAddress("");
+                }
               }} className={inputCls}>
                 <option value="">— Yeni Müşteri Ekle —</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name} {c.phone ? `(${c.phone})` : ""}</option>)}
