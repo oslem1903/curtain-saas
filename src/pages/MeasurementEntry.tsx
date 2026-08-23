@@ -7,10 +7,12 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import Quotes from "./Quotes";
+import FieldInfoSection from "../components/FieldInfoSection";
 
 // ---- TYPES & CONSTANTS ----
 export type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "diger";
 
+export type Photo = { id: string; url: string; note?: string };
 export type ProductRow = { id: string; name: string | null; category: string | null; unit_price: number | null; cost_price?: number | null; is_active: boolean | null; };
 export type SupplierRow = { id: string; name: string | null; };
 export type SupplierProductPriceRow = { supplier_id: string; product_id: string | null; product_name: string | null; product_category?: string | null; product_type?: string | null; unit_cost: number | null; unit_price?: number | null; };
@@ -31,7 +33,8 @@ export type MeasurementItem = {
   unitPrice: number;
   pile: "2" | "3";
   note: string;
-  photos: string[];
+  photos: Photo[];
+  fieldNotes?: string;
   kumasGrubu?: string;
   mekanizma?: string;
   zincirYonu?: string;
@@ -232,10 +235,16 @@ export default function MeasurementEntry() {
           const kasaRMatch = noteStr.match(/Kasa Rengi: (.+)/);
           const kornisMatch = noteStr.match(/Korniş Tipi: (.+)/);
 
-          let photos: string[] = [];
+          let photos: Photo[] = [];
           const photoMatch = noteStr.match(/\[Photos:\s*(\[.*\])\]/);
           if (photoMatch) {
-            try { photos = JSON.parse(photoMatch[1]); } catch { }
+            try {
+              const parsed = JSON.parse(photoMatch[1]);
+              // Handle both old string[] format and new Photo[] format
+              photos = Array.isArray(parsed) ? parsed.map((p: any) =>
+                typeof p === 'string' ? { id: p, url: p } : p
+              ) : [];
+            } catch { }
           }
 
           let cleanNote = noteStr
@@ -779,6 +788,22 @@ export default function MeasurementEntry() {
                         <label className="sm:col-span-2 lg:col-span-3"><span className={labelCls}>Not</span>
                           <textarea value={item.note} onChange={e => updateItem(item.id, { note: e.target.value })} rows={2} className={inputCls} placeholder="Ek notlar..." />
                         </label>
+                      </div>
+
+                      {/* Saha Bilgileri - Field Info Section */}
+                      <div className="mt-4">
+                        <FieldInfoSection
+                          itemId={item.id}
+                          companyId={company?.id || ""}
+                          photos={item.photos}
+                          colorName={item.colorName}
+                          modelName={item.modelName}
+                          fieldNotes={item.fieldNotes || ""}
+                          onPhotosChange={(photos) => updateItem(item.id, { photos })}
+                          onColorChange={(colorName) => updateItem(item.id, { colorName })}
+                          onModelChange={(modelName) => updateItem(item.id, { modelName })}
+                          onFieldNotesChange={(fieldNotes) => updateItem(item.id, { fieldNotes })}
+                        />
                       </div>
 
                       {/* Item line total */}
