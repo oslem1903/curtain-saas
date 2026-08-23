@@ -796,7 +796,15 @@ export default function NewOrder() {
             const cid = await ensureCustomerId(companyId);
             const customerName = selectedCustomer?.name?.trim() || customerInput.trim() || "Müşteri";
             const selectedStaff = staffList.find((s) => s.id === assignedTo) ?? null;
-            const assignedUserId = selectedStaff?.userId || (assignedTo && !assignedTo.startsWith("employee:") ? assignedTo : "");
+            // Calculate assignedUserId: use user_id if available; else strip 'employee:' prefix if present
+            let assignedUserId = "";
+            if (selectedStaff?.userId) {
+              assignedUserId = selectedStaff.userId;
+            } else if (selectedStaff && assignedTo?.startsWith("employee:")) {
+              assignedUserId = assignedTo.replace(/^employee:/, "");
+            } else if (assignedTo && !assignedTo.startsWith("employee:")) {
+              assignedUserId = assignedTo;
+            }
             const deposit = 0;
 
             // Validate: "Ödendi" durumunda deposit veya tam ödeme gerekli
