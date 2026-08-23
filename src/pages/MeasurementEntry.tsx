@@ -437,7 +437,15 @@ export default function MeasurementEntry() {
         if (it.kasaTipi) dynamicProps += `\nKasa Tipi: ${it.kasaTipi}`;
         if (it.kasaRengi) dynamicProps += `\nKasa Rengi: ${it.kasaRengi}`;
         if (it.kornisTipi) dynamicProps += `\nKorniş Tipi: ${it.kornisTipi}`;
-        if (it.photos.length) dynamicProps += `\n[Photos: ${JSON.stringify(it.photos)}]`;
+        // Saha Bilgileri (FieldInfoSection): photos, color, model, fieldNotes — JSON with backward-compat [Photos:...] marker
+        if (it.photos.length || it.colorName || it.modelName || it.fieldNotes) {
+          dynamicProps += `\n[Photos: ${JSON.stringify({
+            photos: it.photos,
+            color: it.colorName || undefined,
+            model: it.modelName || undefined,
+            fieldNotes: it.fieldNotes || undefined,
+          })}]`;
+        }
 
         return {
           company_id: ctx.company_id,

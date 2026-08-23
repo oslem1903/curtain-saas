@@ -16,6 +16,7 @@ export interface SahaBilgileri {
 /**
  * Extract Saha Bilgileri JSON from note field using bracket counting
  * Handles nested structures (arrays, objects within objects)
+ * Supports both [Saha Bilgileri: {...}] and [Photos: [...]] formats
  *
  * @param note - The appointments note field string
  * @returns Parsed SahaBilgileri object or null if not found/invalid
@@ -23,14 +24,28 @@ export interface SahaBilgileri {
 export function extractSahaBilgileriFromNote(note: string | null): SahaBilgileri | null {
   if (!note) return null;
 
-  // Find the marker start
-  const markerStart = note.indexOf('[Saha Bilgileri:');
+  // Try [Saha Bilgileri: {...}] format first (new format)
+  let result = extractFromBracketMarker(note, '[Saha Bilgileri:', '{');
+  if (result) return result;
+
+  // Try [Photos: [...]] format (measurement format from MeasurementEntry)
+  result = extractPhotosFromNote(note);
+  if (result) return result;
+
+  return null;
+}
+
+/**
+ * Extract JSON object/array from note using bracket marker and counter
+ */
+function extractFromBracketMarker(note: string, marker: string, openChar: string): SahaBilgileri | null {
+  const markerStart = note.indexOf(marker);
   if (markerStart === -1) return null;
 
-  // Find the JSON opening brace after marker
+  // Find the opening bracket after marker
   let jsonStart = -1;
-  for (let i = markerStart + 16; i < note.length; i++) {
-    if (note[i] === '{') {
+  for (let i = markerStart + marker.length; i < note.length; i++) {
+    if (note[i] === openChar) {
       jsonStart = i;
       break;
     }
@@ -38,23 +53,27 @@ export function extractSahaBilgileriFromNote(note: string | null): SahaBilgileri
 
   if (jsonStart === -1) return null;
 
-  // Find matching closing brace using bracket counter
-  let openBraces = 1;
+  // Find matching closing bracket using counter
+  const closeChar = openChar === '{' ? '}' : ']';
+  let openCount = 1;
   for (let i = jsonStart + 1; i < note.length; i++) {
     const char = note[i];
 
-    if (char === '{') {
-      openBraces++;
-    } else if (char === '}') {
-      openBraces--;
+    if (char === openChar) {
+      openCount++;
+    } else if (char === closeChar) {
+      openCount--;
 
-      // Found matching closing brace
-      if (openBraces === 0) {
+      if (openCount === 0) {
         const jsonStr = note.substring(jsonStart, i + 1);
         try {
-          return JSON.parse(jsonStr) as SahaBilgileri;
+          const parsed = JSON.parse(jsonStr);
+          // Convert array format to object if needed
+          if (Array.isArray(parsed)) {
+            return { photos: parsed };
+          }
+          return parsed as SahaBilgileri;
         } catch (err) {
-          // JSON parse failed - log but don't crash
           console.warn('Failed to parse Saha Bilgileri JSON:', {
             jsonStr,
             error: err instanceof Error ? err.message : String(err),
@@ -65,6 +84,19 @@ export function extractSahaBilgileriFromNote(note: string | null): SahaBilgileri
     }
   }
 
-  // No matching closing brace found
   return null;
+}
+
+/**
+ * Extract [Photos: ...] format (MeasurementEntry format)
+ * Supports both [Photos: [...]] (array) and [Photos: {...}] (object with metadata)
+ */
+function extractPhotosFromNote(note: string): SahaBilgileri | null {
+  // Try array format first [Photos: [...]]
+  let result = extractFromBracketMarker(note, '[Photos:', '[');
+  if (result) return result;
+
+  // Try object format [Photos: {...}]
+  result = extractFromBracketMarker(note, '[Photos:', '{');
+  return result;
 }

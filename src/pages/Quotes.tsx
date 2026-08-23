@@ -288,7 +288,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         insertedItems = fullItemsData || [];
       }
 
-      // 3.5) Saha Bilgileri Fotoğrafları Transfer Et (Appointment → OrderItem)
+      // 3.5) Saha Bilgileri Fotoğrafları ve Metadata Transfer Et (Appointment → OrderItem)
       const photoTransferWarnings: string[] = [];
       try {
         for (let i = 0; i < group.rows.length; i++) {
@@ -297,25 +297,30 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           if (!orderItem) continue;
 
           const photoData = extractSahaBilgileriFromNote(apptRow.note);
-          if (photoData && photoData.photos && photoData.photos.length > 0) {
-            const photoRecords = photoData.photos.map((photo: any) => ({
+          const photos = photoData?.photos || [];
+          const color = photoData?.color || apptRow.color_name || "";
+          const model = photoData?.model || apptRow.model_name || "";
+          const fieldNotes = photoData?.fieldNotes || "";
+
+          // Create photo records with metadata (only if photos exist)
+          // Note: catalog_code_photos.image_url is NOT NULL, so we only create records for actual photos
+          if (photos.length > 0) {
+            const photoRecords = photos.map((photo: any) => ({
               order_item_id: orderItem.id,
               appointment_id: apptRow.id,
               image_url: photo.url || photo,
-              catalog_code: `${photoData.color || apptRow.color_name || ""} / ${photoData.model || apptRow.model_name || ""}`.trim() || null,
+              catalog_code: `${color} / ${model}`.trim() || null,
               note: JSON.stringify({
-                color: photoData.color || apptRow.color_name,
-                model: photoData.model || apptRow.model_name,
+                color,
+                model,
                 room: apptRow.room_name,
-                fieldNotes: photoData.fieldNotes,
+                fieldNotes,
               }),
               company_id: ctx.company_id,
             }));
 
-            if (photoRecords.length > 0) {
-              const { error: photoErr } = await supabase.from("catalog_code_photos").insert(photoRecords);
-              if (photoErr) photoTransferWarnings.push(`Ürün ${i + 1} fotoğrafları transfer edilemedi: ${photoErr.message}`);
-            }
+            const { error: photoErr } = await supabase.from("catalog_code_photos").insert(photoRecords);
+            if (photoErr) photoTransferWarnings.push(`Ürün ${i + 1} fotoğrafları transfer edilemedi: ${photoErr.message}`);
           }
         }
       } catch (photoTransferErr: any) {
@@ -323,7 +328,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       }
 
       if (photoTransferWarnings.length > 0) {
-        alert(`Sipariş oluşturuldu, ancak aşağıdaki fotoğraflar aktarılamadı:\n\n${photoTransferWarnings.join("\n")}`);
+        alert(`Sipariş oluşturuldu, ancak aşağıdaki saha bilgileri aktarılamadı:\n\n${photoTransferWarnings.join("\n")}`);
       }
 
       // 4) Tedarikçi borçları (Her kalem için ayrı ayrı işleyip order_item'a bağlayalım)
