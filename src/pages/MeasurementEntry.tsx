@@ -153,7 +153,9 @@ export default function MeasurementEntry() {
   const state = (location.state ?? {}) as any;
 
   // Persist form state to localStorage for refresh resilience
-  const savedState = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('measurement_draft') || '{}') : {};
+  // But skip localStorage if fresh=true (starting a new measurement)
+  const isFresh = state?.fresh === true;
+  const savedState = !isFresh && typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('measurement_draft') || '{}') : {};
   const initialState = state && Object.keys(state).length > 0 ? state : savedState;
 
   const [step, setStep] = useState(1);
@@ -182,6 +184,24 @@ export default function MeasurementEntry() {
   const [success, setSuccess] = useState("");
 
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+
+  // Clear localStorage draft and reset form when fresh=true (new measurement)
+  useEffect(() => {
+    if (isFresh) {
+      localStorage.removeItem('measurement_draft');
+      // Reset all form fields for fresh start
+      setStep(1);
+      setGroupId(crypto.randomUUID());
+      setCustomerId("");
+      setCustomerName("");
+      setPhone("");
+      setAddress("");
+      setDeliveryDate("");
+      setItems([]);
+      setError("");
+      setSuccess("");
+    }
+  }, [isFresh]);
 
   // Load existing group if in edit mode
   useEffect(() => {
