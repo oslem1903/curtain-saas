@@ -97,9 +97,10 @@ function RoleGate({
 }
 
 function HomeRedirect() {
-  const { status, role } = useAuth();
+  const { status, role, isPasswordRecovery } = useAuth();
 
   if (status === "loading") return <div style={{ padding: 16 }}>YÃ¶nlendirme hazÄ±rlanÄ±yor...</div>;
+  if (isPasswordRecovery) return <Navigate to="/reset-password" replace />;
   if (status === "unauthenticated") return <Navigate to="/login" replace />;
   if (status === "unauthorized") return <Navigate to="/unauthorized" replace />;
   if (status === "locked") return <Navigate to="/locked" replace />;
@@ -139,6 +140,20 @@ function LocalNotificationNavigationHandler() {
   return null;
 }
 
+function PasswordRecoveryRedirect() {
+  const { isPasswordRecovery } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (isPasswordRecovery && location.pathname !== "/reset-password") {
+      navigate("/reset-password", { replace: true });
+    }
+  }, [isPasswordRecovery, location.pathname, navigate]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -148,6 +163,7 @@ export default function App() {
             <SupportModalProvider>
               <AndroidBackButtonHandler />
               <LocalNotificationNavigationHandler />
+              <PasswordRecoveryRedirect />
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />

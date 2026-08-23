@@ -97,6 +97,7 @@ type AuthContextValue = {
     hasModule: (module: string) => boolean;
     lockReason: LockReason | null;
     refreshAuth: () => Promise<void>;
+    isPasswordRecovery: boolean;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -135,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [memberRole, setMemberRole] = useState<RoleState>("unknown");
     const [company, setCompany] = useState<CompanyState | null>(null);
     const [lockReason, setLockReason] = useState<LockReason | null>(null);
+    const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
     // İlk yükleme tamamlandı mı? Arka plan refresh'lerinde loading ekranı gösterme.
     const hasLoadedOnce = useRef(false);
 
@@ -377,11 +379,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         run();
         const { data } = supabase.auth.onAuthStateChange((event) => {
             if (!alive) return;
+            // PASSWORD_RECOVERY event: user authenticated for recovery, redirect to reset password
+            if (event === "PASSWORD_RECOVERY") {
+                setIsPasswordRecovery(true);
+                setStatus("ready");
+                return;
+            }
             // TOKEN_REFRESHED ve INITIAL_SESSION sekme değişiminde gereksiz
             // loadAuth() kaskadını tetikler — sadece gerçek kullanıcı değişikliklerinde çalış.
             if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") return;
             // Yalnızca SIGNED_IN, SIGNED_OUT, USER_UPDATED eventlerinde yenile.
             if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+            setIsPasswordRecovery(false);
             window.setTimeout(() => {
                 if (alive) void loadAuth();
             }, 0);
@@ -444,7 +453,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
         lockReason,
         refreshAuth: loadAuth,
-    }), [company, enabledModules, lockReason, memberRole, role, status, user]);
+        isPasswordRecovery,
+    }), [company, enabledModules, lockReason, memberRole, role, status, user, isPasswordRecovery]);
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
