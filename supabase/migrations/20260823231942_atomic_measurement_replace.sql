@@ -133,7 +133,7 @@ BEGIN
                 v_payload->>'status',
                 (v_payload->>'done')::boolean,
                 (v_payload->>'done_at')::timestamptz,
-                v_payload->>'assigned_to',
+                NULLIF(v_payload->>'assigned_to', '')::uuid,
                 v_payload->>'room_name',
                 (v_payload->>'width_cm')::numeric,
                 (v_payload->>'height_cm')::numeric,
