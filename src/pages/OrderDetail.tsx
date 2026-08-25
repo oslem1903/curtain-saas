@@ -39,6 +39,7 @@ type OrderRow = {
     customer_id?: string | null;
     company_id?: string | null;
     assigned_to?: string | null;
+    assigned_staff_id?: string | null;
     customers?: { id?: string; name: string; phone: string; address?: string | null; email?: string | null } | null;
 };
 
@@ -284,7 +285,7 @@ export default function OrderDetail() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const idempotencyKeyRef = useRef<string | null>(null);
-    const [staffList, setStaffList] = useState<Array<{ id: string; full_name: string; role: string; hasAccount: boolean }>>([]);
+    const [staffList, setStaffList] = useState<Array<{ id: string; employeeId: string | null; userId: string | null; full_name: string; role: string; hasAccount: boolean }>>([]);
     const [assignedTo, setAssignedTo] = useState("");
     const [showNewInstaller, setShowNewInstaller] = useState(false);
     const [newInstallerName, setNewInstallerName] = useState("");
@@ -454,7 +455,7 @@ export default function OrderDetail() {
             setLaborCostInput(String(o?.labor_cost ?? 0));
             setTransportCostInput(String(o?.transport_cost ?? 0));
             setInstallationJob((jobRow ?? null) as InstallationJobRow | null);
-            setAssignedTo(jobRow?.assigned_staff_id || o?.assigned_to || "");
+            setAssignedTo(jobRow?.assigned_staff_id || o?.assigned_staff_id || o?.assigned_to || "");
 
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
@@ -497,11 +498,13 @@ export default function OrderDetail() {
                         }
 
                         const profileById = new Map((profiles ?? []).map((profile) => [profile.user_id, profile]));
-                        const mergedStaff = new Map<string, { id: string; full_name: string; role: string; hasAccount: boolean }>();
+                        const mergedStaff = new Map<string, { id: string; employeeId: string | null; userId: string | null; full_name: string; role: string; hasAccount: boolean }>();
 
                         (profiles ?? []).forEach((item) => {
                             mergedStaff.set(item.user_id, {
                                 id: item.user_id,
+                                employeeId: null,
+                                userId: item.user_id,
                                 full_name: item.full_name || "İsimsiz",
                                 role: item.role || "installer",
                                 hasAccount: true,
@@ -510,12 +513,14 @@ export default function OrderDetail() {
 
                         (employees ?? []).forEach((employee: any) => {
                             // Hesabı olan montajcı user_id ile, olmayan employee.id ile listelenir.
-                            // (orders.assigned_to FK'sı yalnızca user_id kabul eder; hesabı olmayanlar
-                            //  montaj takibi/cari tarafına employee.id ile bağlanır)
+                            // Kalıcı kimlik kuralı: orders.assigned_to = daima user_id (FK), orders.assigned_staff_id
+                            // ve installation_jobs.assigned_staff_id = daima employees.id.
                             const staffId = employee.user_id || employee.id;
                             const profile = employee.user_id ? profileById.get(employee.user_id) : null;
                             mergedStaff.set(staffId, {
                                 id: staffId,
+                                employeeId: employee.id,
+                                userId: employee.user_id || null,
                                 full_name: employee.full_name || profile?.full_name || "İsimsiz",
                                 role: profile?.role || employee.target_role || "installer",
                                 hasAccount: Boolean(employee.user_id),
@@ -523,6 +528,17 @@ export default function OrderDetail() {
                         });
 
                         setStaffList(Array.from(mergedStaff.values()).sort((a, b) => a.full_name.localeCompare(b.full_name, "tr")));
+
+                        // Backward compat: assignedTo state'i UI'ın kullandığı composite id şemasıyla
+                        // eşleştir (eski kayıtlarda assigned_to/assigned_staff_id ham employeeId ya da
+                        // userId taşıyabilir — staffList.id bunların birleşik hâli).
+                        const rawAssignedId = jobRow?.assigned_staff_id || o?.assigned_staff_id || o?.assigned_to || "";
+                        if (rawAssignedId) {
+                            const resolvedStaff = Array.from(mergedStaff.values()).find(
+                                (s) => s.employeeId === rawAssignedId || s.userId === rawAssignedId || s.id === rawAssignedId
+                            );
+                            if (resolvedStaff) setAssignedTo(resolvedStaff.id);
+                        }
                     }
                 }
             }
@@ -1060,11 +1076,13 @@ export default function OrderDetail() {
         try {
             const selected = staffList.find((s) => s.id === assignedTo);
 
-            // orders.assigned_to FK'sı auth.users'a bağlı — yalnızca hesabı olan
-            // montajcılar yazılabilir; hesabı olmayanlarda alan boş bırakılır,
-            // bağlantı montaj takibi üzerinden kurulur.
-            const orderAssignee = selected?.hasAccount ? assignedTo : null;
-            const { error } = await supabase.from("orders").update({ assigned_to: orderAssignee }).eq("id", id);
+            // Kalıcı kimlik kuralı: orders.assigned_to = daima user_id (auth.users FK'sı,
+            // hesabı olmayanlarda null), orders.assigned_staff_id = daima employees.id.
+            const orderAssignedTo = selected?.userId || null;
+            const orderAssignedStaffId = selected?.employeeId || null;
+            const { error } = await supabase.from("orders")
+                .update({ assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId })
+                .eq("id", id);
             if (error) {
                 const isFK = /foreign key|fkey|assigned_to/i.test(error.message);
                 alert(isFK ? "Montajcı atanamadı: Seçilen kişi sistemde kayıtlı kullanıcı değil." : error.message);
@@ -1074,7 +1092,7 @@ export default function OrderDetail() {
             // Montaj Takibi + Montajcı Cari bağlantısı: bu siparişin montaj işine montajcıyı işle
             // (montaj işi henüz yoksa sorun değil — "Montaja Hazır" yapılırken montajcı taşınır)
             await supabase.from("installation_jobs")
-                .update({ assigned_staff_id: assignedTo || null })
+                .update({ assigned_staff_id: orderAssignedStaffId })
                 .eq("order_id", id)
                 .then(() => {}, () => {});
 
@@ -1113,7 +1131,7 @@ export default function OrderDetail() {
                 throw error;
             }
             setStaffList((prev) =>
-                [...prev, { id: data.id, full_name: data.full_name || name, role: "installer", hasAccount: false }]
+                [...prev, { id: data.id, employeeId: data.id, userId: null, full_name: data.full_name || name, role: "installer", hasAccount: false }]
                     .sort((a, b) => a.full_name.localeCompare(b.full_name, "tr")));
             setAssignedTo(data.id);
             setNewInstallerName("");
@@ -1268,6 +1286,14 @@ export default function OrderDetail() {
                 .map((item) => `${item.room || "Alan"}: ${item.width_cm || "-"}x${item.height_cm || "-"} cm x${item.qty || 1}`)
                 .join("\n");
 
+            // Kalıcı kimlik kuralı: installation_jobs.assigned_staff_id daima employees.id olmalı.
+            // order.assigned_to bir user_id'dir — doğrudan fallback olarak kullanılmaz; yalnızca
+            // staffList üzerinden o user_id'ye karşılık gelen employees kaydı bulunursa resolve edilir.
+            const installationEmployeeId =
+                order.assigned_staff_id ||
+                staffList.find((s) => s.userId === order.assigned_to)?.employeeId ||
+                null;
+
             const { data, error } = await supabase
                 .from("installation_jobs")
                 .insert([{
@@ -1285,8 +1311,8 @@ export default function OrderDetail() {
                     notes: [order.note, measurementNotes].filter(Boolean).join("\n") || null,
                     status: "waiting",
                     // Siparişte montajcı seçildiyse montaj işine taşı
-                    // (Montaj Takibi + Montajcı Cari bu alandan okur)
-                    assigned_staff_id: assignedTo || order.assigned_to || null,
+                    // (Montaj Takibi + Montajcı Cari bu alandan okur; kalıcı kimlik kuralı: her zaman employees.id)
+                    assigned_staff_id: installationEmployeeId,
                 }])
                 .select("id,status")
                 .single();
@@ -1386,7 +1412,12 @@ export default function OrderDetail() {
         }
     }
 
-    const currentInstallerId = installationJob?.assigned_staff_id || order?.assigned_to || "";
+    const currentInstallerId = installationJob?.assigned_staff_id || order?.assigned_staff_id || order?.assigned_to || "";
+    // Backward compat: currentInstallerId eski kayıtlarda ham employeeId ya da userId olabilir;
+    // staffList.id composite şema kullandığı için eşleştirmeyi alt kimliklerle de dener.
+    const currentInstaller = staffList.find(
+        (staff) => staff.employeeId === currentInstallerId || staff.userId === currentInstallerId || staff.id === currentInstallerId
+    );
 
     return (
         <div className="max-w-6xl mx-auto space-y-6 pb-24 px-4">
@@ -1425,8 +1456,8 @@ export default function OrderDetail() {
                             <div>
                                 <div className="text-xs text-slate-400 font-black uppercase tracking-widest">Atanan Montajcı</div>
                                 <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
-                                    {staffList.find((staff) => staff.id === currentInstallerId)
-                                        ? `${staffList.find((staff) => staff.id === currentInstallerId)?.full_name} (${staffRoleLabel(staffList.find((staff) => staff.id === currentInstallerId)?.role || "installer")})`
+                                    {currentInstaller
+                                        ? `${currentInstaller.full_name} (${staffRoleLabel(currentInstaller.role || "installer")})`
                                         : "Henüz montajcı atanmadı"}
                                 </div>
                             </div>
@@ -1471,7 +1502,7 @@ export default function OrderDetail() {
                             </select>
                             <button
                                 onClick={handleUpdateAssignedTo}
-                                disabled={saving || assignedTo === currentInstallerId}
+                                disabled={saving || assignedTo === (currentInstaller?.id ?? currentInstallerId)}
                                 className="w-full px-5 py-3 rounded-xl bg-primary-600 text-white font-bold disabled:opacity-60 sm:w-auto"
                             >
                                 {saving ? "Kaydediliyor..." : currentInstallerId ? "Montajcıyı Değiştir" : "Montajcıyı Ata"}

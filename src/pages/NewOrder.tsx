@@ -805,6 +805,12 @@ export default function NewOrder() {
             } else if (assignedTo && !assignedTo.startsWith("employee:")) {
               assignedUserId = assignedTo;
             }
+            // Kalıcı kimlik kuralı: orders.assigned_to = daima user_id (auth.users FK'sı,
+            // hesabı olmayanlarda null), orders.assigned_staff_id = daima employees.id.
+            // (assignedUserId yukarıda employee.id'yi de taşıyabiliyordu — orders.assigned_to
+            // için o karışık değeri DEĞİL, doğrudan selectedStaff.userId/.employeeId kullanılır.)
+            const orderAssignedTo = selectedStaff?.userId || null;
+            const orderAssignedStaffId = selectedStaff?.employeeId || null;
             const deposit = 0;
 
             // Validate: "Ödendi" durumunda deposit veya tam ödeme gerekli
@@ -822,7 +828,7 @@ export default function NewOrder() {
               if (!it.qty || it.qty <= 0) throw new Error(`${it.product_name || it.product_type}: Miktar 0'dan büyük olmalı`);
             }
 
-            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: [note.trim(), paymentNote].filter(Boolean).join("\n") || null, status, total_amount: grandTotal, deposit_amount: deposit, paid_amount: Math.max(deposit, status === "paid" ? grandTotal : 0), remaining_amount: status === "paid" ? 0 : remaining, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: assignedUserId || null }]).select("id").single();
+            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: [note.trim(), paymentNote].filter(Boolean).join("\n") || null, status, total_amount: grandTotal, deposit_amount: deposit, paid_amount: Math.max(deposit, status === "paid" ? grandTotal : 0), remaining_amount: status === "paid" ? 0 : remaining, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId }]).select("id").single();
             if (orderErr) throw orderErr;
             const orderId = orderRow.id;
 
