@@ -1314,7 +1314,7 @@ export default function OrderDetail() {
                     // (Montaj Takibi + Montajcı Cari bu alandan okur; kalıcı kimlik kuralı: her zaman employees.id)
                     assigned_staff_id: installationEmployeeId,
                 }])
-                .select("id,status")
+                .select("id,status,assigned_staff_id")
                 .single();
 
             if (error) {
