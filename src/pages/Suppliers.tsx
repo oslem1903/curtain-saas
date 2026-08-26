@@ -441,6 +441,7 @@ export const Suppliers = () => {
 
     async function handleDeleteTransaction(txId: string) {
         if (!selectedSupplier) return;
+        if (!window.confirm("Bu cari işlemi kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.")) return;
         try {
             const { error } = await supabase
                 .from("supplier_transactions")
@@ -463,10 +464,22 @@ export const Suppliers = () => {
             return;
         }
 
+        const amount = Number(paymentAmount);
+        const remaining = selectedBalance?.balance ?? 0;
+
+        if (amount > remaining + 0.01) {
+            const advance = Math.round((amount - remaining) * 100) / 100;
+            const ok = window.confirm(
+                remaining > 0
+                    ? `Kalan borç ${formatTL(remaining)}. Fazla ödenen ${formatTL(advance)} avans olarak kaydedilecek. Devam edilsin mi?`
+                    : `Bu tedarikçinin kalan borcu yok. ${formatTL(amount)} avans olarak kaydedilecek. Devam edilsin mi?`
+            );
+            if (!ok) return;
+        }
+
         try {
             setPaymentSaving(true);
             const ctx = await getContext();
-            const amount = Number(paymentAmount);
 
             const { error } = await supabase
                 .from("supplier_transactions")
