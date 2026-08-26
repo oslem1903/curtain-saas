@@ -210,13 +210,11 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 setTxs((txRes.data ?? []) as InstallerTx[]);
             }
 
-            // Load manual earnings (earning_type='manual' AND installation_job_id IS NULL)
+            // Load all earnings: manual (job'suz) + job-linked (update_installation_completion'dan otomatik)
             const earningsRes = await supabase
                 .from("installer_earnings")
                 .select("id, installer_id, installation_job_id, order_id, earning_type, total_earning, job_completed_date, created_at, metadata")
                 .eq("company_id", ctx.company_id)
-                .eq("earning_type", "manual")
-                .is("installation_job_id", null)
                 .order("created_at", { ascending: false });
             if (earningsRes.error) {
                 setEarnings([]);
@@ -238,6 +236,16 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         jobs.filter((j) => j.assigned_staff_id && emp.allIds.includes(j.assigned_staff_id)),
     [jobs]);
 
+    // Tamamlanan bir iş için hakediş tutarı: installer_earnings (otomatik/kanonik kaynak,
+    // update_installation_completion RPC tarafından oluşturulur) varsa onu kullan; yoksa
+    // eski installation_jobs.installer_fee'ye düş (geriye dönük uyumluluk).
+    const getJobEarningAmount = useCallback((job: Job, installerIds: string[]) => {
+        const earning = earnings.find(
+            (e) => e.installation_job_id === job.id && installerIds.includes(e.installer_id)
+        );
+        return earning ? Number(earning.total_earning ?? 0) : Number(job.installer_fee ?? 0);
+    }, [earnings]);
+
     // Muhasebe kuralları:
     //   Hakediş  = yalnızca TAMAMLANAN işlerin montaj bedelleri toplamı
     //   Ödenen   = ödemeler − iptaller
@@ -249,10 +257,10 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             const empJobs = jobsForInstaller(emp);
             const completedJobs = empJobs.filter((j) => j.status === "completed");
 
-            // Automatic earned (from completed jobs)
-            const automaticEarned = completedJobs.reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+            // Automatic earned (from completed jobs) — installer_earnings kanonik, installer_fee fallback
+            const automaticEarned = completedJobs.reduce((a, j) => a + getJobEarningAmount(j, emp.allIds), 0);
 
-            // Manual earned (from manual earnings entries)
+            // Manual earned (from manual, job'suz earnings entries — job-linked'ler automaticEarned'de sayıldı)
             const manualEarned = earnings
                 .filter(e => e.installer_id === emp.id && e.earning_type === 'manual' && e.installation_job_id === null)
                 .reduce((a, e) => a + Number(e.total_earning ?? 0), 0);
@@ -277,7 +285,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             };
         });
         return map;
-    }, [employees, jobsForInstaller, txs, earnings]);
+    }, [employees, jobsForInstaller, txs, earnings, getJobEarningAmount]);
 
     function handleExportExcel(emp: Employee, lines: any[]) {
         if (lines.length === 0) return;
@@ -558,7 +566,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 return dateKey >= startOfMonth;
             });
             completedJobsThisMonth += completedThisMonth.length;
-            earnedThisMonth += completedThisMonth.reduce((acc, j) => acc + Number(j.installer_fee ?? 0), 0);
+            earnedThisMonth += completedThisMonth.reduce((acc, j) => acc + getJobEarningAmount(j, emp.allIds), 0);
         });
 
         txs.forEach(t => {
@@ -577,7 +585,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             completedJobsThisMonth,
             earnedThisMonth
         };
-    }, [sortedInstallers, ledger, jobsForInstaller, txs]);
+    }, [sortedInstallers, ledger, jobsForInstaller, txs, getJobEarningAmount]);
 
     if (loading) return <div className="p-10 text-center text-sm text-slate-500">Montajcı cari yükleniyor...</div>;
 
@@ -822,7 +830,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                 id: j.id,
                                                 date: j.scheduled_date || "",
                                                 desc: `Hakediş: ${j.customer_name || "Müşteri"} — ${productLabel(j.product_type)}`,
-                                                debit: Number(j.installer_fee ?? 0),
+                                                debit: getJobEarningAmount(j, emp.allIds),
                                                 credit: 0,
                                                 type: "job",
                                                 raw: j
