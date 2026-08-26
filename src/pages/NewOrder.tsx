@@ -8,6 +8,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getNotificationSettings, scheduleReminderNotification } from "../utils/localNotifications";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
+import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 async function getContext() { return getEffectiveTenantContext(); }
@@ -278,6 +279,11 @@ export default function NewOrder() {
     const [sourceAppointmentId, setSourceAppointmentId] = useState<string>(
         isQuoteConversion ? (_qs.measurementId || _qs.appointmentId || "") : ""
     );
+    // Ölçü Al → Sipariş direkt dönüşümünde saha bilgisi (foto/renk/model/not) aktarımı için:
+    // dönüştürülen randevunun ham note'u ve karşılık gelen order item'ın key'i (mevcut
+    // deterministic ilişki — convertAppointmentToOrder ölçü satırını her zaman tek kaynaktan üretir).
+    const [sourceAppointmentNote, setSourceAppointmentNote] = useState<string>("");
+    const [sourceItemKey, setSourceItemKey] = useState<string>("");
     const [pendingConvertAppointmentId, setPendingConvertAppointmentId] = useState<string>("");
     const [note, setNote] = useState("");
     const [status, setStatus] = useState<Status>("new_order");
@@ -467,6 +473,8 @@ export default function NewOrder() {
         const measurementLine = buildOrderItemFromAppointment(appt, products, suppliers, supplierPrices);
 
         setSourceAppointmentId(appt.id);
+        setSourceAppointmentNote(appt.note || appt.measurement_notes || "");
+        setSourceItemKey(measurementLine.key);
         if (appt.customer_id) setCustomerId(appt.customer_id);
         if (apptCustomer?.name) setCustomerInput(apptCustomer.name);
         if (apptCustomer?.phone) setNewPhone(apptCustomer.phone);
@@ -842,15 +850,33 @@ export default function NewOrder() {
             }
 
             const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
-            const { error: itemsErr } = await supabase.from("order_items").insert(itemsPayload);
-            if (itemsErr) {
-              // Items error - delete order + payment to prevent orphans
-              await supabase.from("orders").delete().eq("id", orderId);
-              throw new Error(`Sipariş kalemleri eklenemedi: ${itemsErr.message}`);
+            // Tek tek insert edilir: order_items.select() batch-insert'te DB'nin dönüş sırasını
+            // input sırasıyla aynı garanti etmiyor — saha bilgisi fotoğrafını doğru order_item'a
+            // bağlamak için insertedItems'ın itemsPayload ile aynı, uygulama tarafından garanti
+            // edilen sırada olması gerekiyor.
+            const insertedItems: Array<{ id: string }> = [];
+            for (const payload of itemsPayload) {
+              const { data: insertedItem, error: itemErr } = await supabase
+                .from("order_items")
+                .insert([payload])
+                .select("id")
+                .single();
+              if (itemErr) {
+                // Items error - şimdiye kadar eklenen kalemleri + order + payment'ı temizle (orphan bırakma)
+                if (insertedItems.length > 0) {
+                  await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
+                }
+                await supabase.from("orders").delete().eq("id", orderId);
+                throw new Error(`Sipariş kalemleri eklenemedi: ${itemErr.message}`);
+              }
+              insertedItems.push(insertedItem);
             }
             if (wantAppointment && apptDate && apptTime) {
                 const startAt = new Date(`${apptDate}T${apptTime}:00`).toISOString();
-                const { data: appointmentRow, error: apptErr } = await supabase.from("appointments").insert([{ type: "measurement", status: "planned", customer_id: cid, order_id: orderId, title: apptTitle || "Ölçü", address: apptAddress || null, start_at: startAt, company_id: companyId, assigned_to: assignedUserId || null, assigned_user_id: assignedUserId || null, assigned_role: assignedUserId ? "installer" : null }]).select("id").single();
+                // Kalıcı kimlik kuralı: appointments.assigned_to/assigned_user_id daima user_id
+                // (auth.users) olmalı — assignedUserId employee.id fallback taşıyabiliyordu,
+                // burada kullanılmaz; hesabı olmayan montajcıda null bırakılır.
+                const { data: appointmentRow, error: apptErr } = await supabase.from("appointments").insert([{ type: "measurement", status: "planned", customer_id: cid, order_id: orderId, title: apptTitle || "Ölçü", address: apptAddress || null, start_at: startAt, company_id: companyId, assigned_to: orderAssignedTo, assigned_user_id: orderAssignedTo, assigned_role: orderAssignedTo ? "installer" : null }]).select("id").single();
                 if (apptErr) {
                   console.error("Appointment creation error:", apptErr);
                   alert("Sipariş oluşturuldu ama randevu kaydı yapılamadı. Lütfen randevuyu manuel olarak oluşturun.");
@@ -899,6 +925,30 @@ export default function NewOrder() {
                     .eq("id", sourceAppointmentId)
                     .eq("company_id", companyId);
                 if (updErr) cariWarnings.push(`Ölçü kaydı güncellenemedi: ${updErr.message}`);
+
+                // Saha Bilgileri (foto/renk/model/not) aktarımı — Quotes.tsx'teki ile aynı mantık:
+                // catalog_code_photos.image_url NOT NULL olduğu için yalnızca gerçek foto varsa insert edilir.
+                const sourceIdx = itemsComputed.findIndex((it) => it.key === sourceItemKey);
+                const sourceItem = sourceIdx >= 0 ? insertedItems[sourceIdx] : null;
+                if (sourceItem && sourceAppointmentNote) {
+                    const photoData = extractSahaBilgileriFromNote(sourceAppointmentNote);
+                    const photos = photoData?.photos || [];
+                    if (photos.length > 0) {
+                        const color = photoData?.color || "";
+                        const model = photoData?.model || "";
+                        const fieldNotes = photoData?.fieldNotes || "";
+                        const photoRecords = photos.map((photo: any) => ({
+                            order_item_id: sourceItem.id,
+                            appointment_id: sourceAppointmentId,
+                            image_url: photo.url || photo,
+                            catalog_code: `${color} / ${model}`.trim() || null,
+                            note: JSON.stringify({ color, model, fieldNotes }),
+                            company_id: companyId,
+                        }));
+                        const { error: photoErr } = await supabase.from("catalog_code_photos").insert(photoRecords);
+                        if (photoErr) cariWarnings.push(`Saha bilgileri fotoğrafları aktarılamadı: ${photoErr.message}`);
+                    }
+                }
             }
 
             const allWarnings = [...supplierPriceWarnings, ...cariWarnings];
