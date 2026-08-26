@@ -459,7 +459,8 @@ export const Accounting = () => {
                 const monthExpenseSum = rows
                     .filter((r: any) => {
                         const d = r.expense_date ? new Date(r.expense_date).toISOString() : null;
-                        return d && d >= fromRange && d <= toRange;
+                        const isPaid = String(r.status ?? "paid").toLowerCase() === "paid";
+                        return d && d >= fromRange && d <= toRange && isPaid;
                     })
                     .reduce((a: number, r: any) => a + Number(r.amount ?? 0), 0);
 

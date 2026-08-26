@@ -18,6 +18,7 @@ import {
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
 import { cn } from "../utils/cn";
+import { DemoDataGenerator } from "../components/DemoDataGenerator";
 
 type AppointmentRow = {
   id: string;
@@ -530,6 +531,10 @@ export const Dashboard = () => {
       </div>
 
       {error ? <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{error}</div> : null}
+
+      {import.meta.env.DEV && !loading && data.totalCustomers === 0 && data.activeOrders === 0 && data.completedInstallations === 0 && (role === "admin" || realRole === "admin" || realRole === "super_admin") && (
+        <DemoDataGenerator />
+      )}
 
       <SummaryCard loading={loading} data={data} />
 

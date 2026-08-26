@@ -126,8 +126,25 @@ export default function InstallerEarningsDetail() {
                 .eq("company_id", companyId);
             if (txError) throw txError;
 
+            // installer_earnings (otomatik/kanonik kaynak, update_installation_completion
+            // RPC'si tarafından oluşturulur) job-linked kayıt varsa onu kullan; yoksa eski
+            // installation_jobs.installer_fee'ye düş — InstallerLedger.tsx'teki
+            // getJobEarningAmount ile aynı kural.
+            const { data: earningsData, error: earningsError } = await supabase
+                .from("installer_earnings")
+                .select("installation_job_id, total_earning")
+                .eq("installer_id", installerId)
+                .eq("company_id", companyId)
+                .not("installation_job_id", "is", null);
+            if (earningsError) throw earningsError;
+
+            function jobEarningAmount(job: { id: string; installer_fee: number | null }) {
+                const canonical = (earningsData ?? []).find((e) => e.installation_job_id === job.id);
+                return canonical ? Number(canonical.total_earning ?? 0) : Number(job.installer_fee ?? 0);
+            }
+
             const completedJobs = (jobsData ?? []).filter((j) => j.status === "completed");
-            const earned = completedJobs.reduce((a, j) => a + Number(j.installer_fee ?? 0), 0);
+            const earned = completedJobs.reduce((a, j) => a + jobEarningAmount(j), 0);
             const paid = (txData ?? []).reduce(
                 (a, t) => a + (t.transaction_type === "payment" ? Number(t.amount) : -Number(t.amount)),
                 0,
@@ -176,7 +193,7 @@ export default function InstallerEarningsDetail() {
                     id: j.id,
                     date: j.scheduled_date || "",
                     desc: `Hakediş: ${j.customer_name || "Müşteri"}${j.product_type ? ` — ${j.product_type}` : ""}`,
-                    debit: Number(j.installer_fee ?? 0),
+                    debit: jobEarningAmount(j),
                     credit: 0,
                     type: "earning",
                     orderId: j.order_id ?? null,

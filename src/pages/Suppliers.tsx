@@ -214,7 +214,9 @@ export const Suppliers = () => {
             for (const tx of (txData ?? [])) {
                 const entry = txMap.get(tx.supplier_id);
                 if (!entry) continue;
-                if (tx.transaction_type === "debt") entry.debt += Number(tx.amount || 0);
+                // 'payment_reversal' bir ödeme iptalidir; borcu 'debt' gibi geri açar
+                // (bkz. SupplierDetail.tsx / Accounting.tsx aynı kural: balance = debt - paid - cancel + payment_reversal).
+                if (tx.transaction_type === "debt" || tx.transaction_type === "payment_reversal") entry.debt += Number(tx.amount || 0);
                 else if (tx.transaction_type === "payment" || tx.transaction_type === "cancel") entry.paid += Number(tx.amount || 0);
                 if (!entry.lastTx || new Date(tx.transaction_date) > new Date(entry.lastTx)) {
                     entry.lastTx = tx.transaction_date;
