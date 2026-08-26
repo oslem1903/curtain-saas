@@ -407,13 +407,13 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         }, 500);
     }
 
-    function draftFor(job: Job) {
+    function draftFor(job: Job, installerIds: string[] = []) {
         // Eski "sabit" kayıtlar manuel olarak gösterilir (geriye dönük uyum)
         const rawType = job.price_type || "manuel";
         return drafts[job.id] ?? {
             price_type: rawType === "sabit" ? "manuel" : rawType,
             unit_rate: String(job.unit_rate ?? 0),
-            installer_fee: String(job.installer_fee ?? 0),
+            installer_fee: String(getJobEarningAmount(job, installerIds)),
         };
     }
 
@@ -955,7 +955,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                     const isPayment = l.type === "payment";
                                                                     const isCancel = l.type === "cancel";
                                                                     const isEarning = l.type === "earning";
-                                                                    const d = isJob ? draftFor(l.raw) : null;
+                                                                    const d = isJob ? draftFor(l.raw, emp.allIds) : null;
                                                                     const isAuto = isJob && d && (d.price_type === "m2" || d.price_type === "adet");
                                                                     const dirty = isJob && d && Boolean(drafts[l.raw.id]);
                                                                     
