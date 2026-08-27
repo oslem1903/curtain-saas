@@ -7,6 +7,7 @@ import { tr } from "date-fns/locale";
 import { setDemoTenantContext, supabase } from "../supabaseClient";
 import { cn } from "../utils/cn";
 import { CORE_MODULES, ENTERPRISE_MODULES, PRO_MODULES, SOLO_MODULES } from "../context/AuthContext";
+import { useRole } from "../context/RoleContext";
 import ImpersonationModal from "../components/ImpersonationModal";
 
 type CompanyStats = {
@@ -101,6 +102,7 @@ function defaultDeviceLimit(plan: string) {
 
 export default function SuperAdminCompanies() {
     const nav = useNavigate();
+    const { setViewingRoleAndUser } = useRole();
     const [companies, setCompanies] = useState<CompanyStats[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -638,11 +640,15 @@ export default function SuperAdminCompanies() {
                 companyName={impersonationModal.companyName}
                 onSuccess={() => {
                     // impersonation_* state (banner, "Süper Admin'e Dön") ImpersonationModal
-                    // tarafından zaten yazıldı — dokunulmuyor. Eksik olan, getEffectiveTenantContext()'in
-                    // fiilen okuduğu demo_company_id'yi de aynı firma için set etmek (openDemo() ile
-                    // birebir aynı, kanıtlı çalışan mekanizma) ve dashboard'a yönlendirmek.
+                    // tarafından zaten yazıldı — dokunulmuyor. getEffectiveTenantContext()'in
+                    // fiilen okuduğu demo_company_id'yi aynı firma için set ediyoruz. Ayrıca
+                    // RoleGate'in effectiveRole'ü (RoleContext'in React state'i) super_admin'de
+                    // kalmaya devam ettiği için /dashboard'a girişi reddedip geri yönlendiriyordu —
+                    // setViewingRoleAndUser SuperAdminTrials.tsx::switchDemoRole ile aynı, kanıtlı
+                    // çalışan mekanizma; effectiveRole'ü senkron "admin"e çevirir.
                     const readOnly = localStorage.getItem("impersonation_read_only") !== "false";
                     setDemoTenantContext(impersonationModal.companyId, readOnly);
+                    setViewingRoleAndUser("admin", null);
                     nav("/dashboard");
                 }}
             />
