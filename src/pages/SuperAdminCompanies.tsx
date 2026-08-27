@@ -636,6 +636,15 @@ export default function SuperAdminCompanies() {
                 onClose={() => setImpersonationModal({ ...impersonationModal, isOpen: false })}
                 companyId={impersonationModal.companyId}
                 companyName={impersonationModal.companyName}
+                onSuccess={() => {
+                    // impersonation_* state (banner, "Süper Admin'e Dön") ImpersonationModal
+                    // tarafından zaten yazıldı — dokunulmuyor. Eksik olan, getEffectiveTenantContext()'in
+                    // fiilen okuduğu demo_company_id'yi de aynı firma için set etmek (openDemo() ile
+                    // birebir aynı, kanıtlı çalışan mekanizma) ve dashboard'a yönlendirmek.
+                    const readOnly = localStorage.getItem("impersonation_read_only") !== "false";
+                    setDemoTenantContext(impersonationModal.companyId, readOnly);
+                    nav("/dashboard");
+                }}
             />
         </div>
     );

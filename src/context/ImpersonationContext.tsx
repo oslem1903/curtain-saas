@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { clearDemoTenantContext } from "../supabaseClient";
 
 interface ImpersonationContextType {
   isImpersonating: boolean;
@@ -60,6 +61,7 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem("impersonation_company_id");
       localStorage.removeItem("impersonation_company_name");
       localStorage.removeItem("impersonation_read_only");
+      clearDemoTenantContext(); // start_impersonation başarısında set edilen demo_company_id/demo_read_only'yi de temizle
 
       // Reset state
       setIsImpersonating(false);
