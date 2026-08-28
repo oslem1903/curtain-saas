@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { useAuth } from "./AuthContext";
@@ -52,10 +52,16 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [staffList, setStaffList] = useState<StaffMember[]>([]);
     const [loading, setLoading] = useState(true);
+    // AuthContext.tsx::hasLoadedOnce ile aynı desen — yalnızca İLK yüklemede loading
+    // ekranı göster; sonraki effect tetiklenmelerinde (impersonation sonrası şirket
+    // değişimi, arka plan refresh) children/route/scroll state korunsun, tüm ağaç
+    // remount olmasın. Sign-out'ta TenantGuard zaten RoleProvider'ı unmount ediyor
+    // (bkz. TenantGuard.tsx:28-29), bu yüzden ayrı bir reset mantığına gerek yok.
+    const hasLoadedOnce = useRef(false);
 
     useEffect(() => {
         let alive = true;
-        setLoading(true);
+        if (!hasLoadedOnce.current) setLoading(true);
 
         const fallbackTimer = window.setTimeout(() => {
             if (!alive) return;
@@ -66,6 +72,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
             setCurrentUserId(userId);
             setStaffList([]);
             setLoading(false);
+            hasLoadedOnce.current = true;
         }, 6500);
 
         const fetchRole = async () => {
@@ -120,6 +127,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
                 if (alive) {
                     window.clearTimeout(fallbackTimer);
                     setLoading(false);
+                    hasLoadedOnce.current = true;
                 }
             }
         };
