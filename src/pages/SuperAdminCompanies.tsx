@@ -102,7 +102,8 @@ function defaultDeviceLimit(plan: string) {
 
 export default function SuperAdminCompanies() {
     const nav = useNavigate();
-    const { setViewingRoleAndUser } = useRole();
+    const { effectiveRole, setViewingRoleAndUser } = useRole();
+    const [pendingImpersonationRedirect, setPendingImpersonationRedirect] = useState(false);
     const [companies, setCompanies] = useState<CompanyStats[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -116,6 +117,17 @@ export default function SuperAdminCompanies() {
     useEffect(() => {
         loadCompanies();
     }, []);
+
+    // Impersonation sonrası dashboard'a yönlendirme, effectiveRole'ün "admin" olarak
+    // gerçekten commit edildiği render'dan SONRA (React'in effect sırası garantisiyle)
+    // tetiklenir — setViewingRoleAndUser + nav'ın aynı senkron turda "muhtemelen" aynı
+    // batch'e girmesine güvenmek yerine, deterministik bir sıra sağlar.
+    useEffect(() => {
+        if (pendingImpersonationRedirect && effectiveRole === "admin") {
+            setPendingImpersonationRedirect(false);
+            nav("/dashboard");
+        }
+    }, [pendingImpersonationRedirect, effectiveRole, nav]);
 
     async function loadCompanies() {
         setLoading(true);
@@ -643,13 +655,13 @@ export default function SuperAdminCompanies() {
                     // tarafından zaten yazıldı — dokunulmuyor. getEffectiveTenantContext()'in
                     // fiilen okuduğu demo_company_id'yi aynı firma için set ediyoruz. Ayrıca
                     // RoleGate'in effectiveRole'ü (RoleContext'in React state'i) super_admin'de
-                    // kalmaya devam ettiği için /dashboard'a girişi reddedip geri yönlendiriyordu —
-                    // setViewingRoleAndUser SuperAdminTrials.tsx::switchDemoRole ile aynı, kanıtlı
-                    // çalışan mekanizma; effectiveRole'ü senkron "admin"e çevirir.
+                    // kalmaya devam ettiği için /dashboard'a girişi reddedip geri yönlendirebiliyordu —
+                    // nav() burada DOĞRUDAN çağrılmıyor; effectiveRole gerçekten "admin" olarak
+                    // commit edildiğinde aşağıdaki effect deterministik şekilde yönlendirir.
                     const readOnly = localStorage.getItem("impersonation_read_only") !== "false";
                     setDemoTenantContext(impersonationModal.companyId, readOnly);
                     setViewingRoleAndUser("admin", null);
-                    nav("/dashboard");
+                    setPendingImpersonationRedirect(true);
                 }}
             />
         </div>
