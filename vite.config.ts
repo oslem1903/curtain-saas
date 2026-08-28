@@ -9,6 +9,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      filename: 'pwa-sw.js',
       selfDestroying: true,
       injectRegister: false,
       registerType: 'prompt',
