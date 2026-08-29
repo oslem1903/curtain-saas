@@ -360,7 +360,17 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
 
       // 5) Appointment'ları siparişe bağla
       const apptIds = group.rows.map(r => r.id);
-      await supabase.from("appointments").update({ order_id: orderId }).in("id", apptIds).eq("company_id", ctx.company_id);
+      const { data: updatedAppts, error: apptUpdateErr } = await supabase
+        .from("appointments")
+        .update({ order_id: orderId })
+        .in("id", apptIds)
+        .eq("company_id", ctx.company_id)
+        .select("id");
+      if (apptUpdateErr) {
+        alert(`Sipariş oluşturuldu, ancak randevu(lar) siparişe bağlanamadı:\n\n${apptUpdateErr.message}`);
+      } else if ((updatedAppts?.length ?? 0) < apptIds.length) {
+        alert(`Sipariş oluşturuldu, ancak ${apptIds.length - (updatedAppts?.length ?? 0)} randevu siparişe bağlanamadı (yetki/erişim sorunu olabilir).`);
+      }
 
       setRows(prev => prev.map(r => apptIds.includes(r.id) ? { ...r, order_id: orderId } : r));
       nav("/orders", { state: { newOrderId: orderId } });
