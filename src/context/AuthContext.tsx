@@ -448,7 +448,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             : Boolean(company?.read_only) || lockReason === "read_only" || (role === "super_admin" && localStorage.getItem("demo_read_only") !== "false" && Boolean(localStorage.getItem("demo_company_id"))),
         enabledModules,
         hasModule: (module: string) => {
-            if (role === "super_admin") return true;
+            if (role === "super_admin" && !localStorage.getItem("demo_company_id")) return true;
             const aliases = MODULE_ALIASES[module] ?? [module];
             return aliases.some((item) => enabledModules.includes(item));
         },

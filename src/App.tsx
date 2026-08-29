@@ -416,7 +416,9 @@ export default function App() {
                 path="accounting"
                 element={
                   <RoleGate allow={["admin", "accountant"]}>
-                    <Accounting />
+                    <ModuleGate module="accounting">
+                      <Accounting />
+                    </ModuleGate>
                   </RoleGate>
                 }
               />

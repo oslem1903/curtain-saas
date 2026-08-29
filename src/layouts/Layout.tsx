@@ -1154,7 +1154,10 @@ export const Layout = () => {
             </div>
           )}
           {showPurchaseScreen &&
-          !(realRole === "super_admin" && location.pathname.startsWith("/super-admin"))
+          !(
+            realRole === "super_admin" &&
+            (location.pathname.startsWith("/super-admin") || Boolean(localStorage.getItem("demo_company_id")))
+          )
             ? <PurchaseRequiredScreen trialInfo={trialInfo} />
             : <Outlet />}
         </div>
