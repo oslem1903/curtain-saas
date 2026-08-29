@@ -1152,7 +1152,9 @@ export const Layout = () => {
               {trialInfo.trialEndsAt ? ` (${formatTR(trialInfo.trialEndsAt)})` : ""}. Kesintisiz devam etmek için lisans satın alın.
             </div>
           )}
-          {showPurchaseScreen ? <PurchaseRequiredScreen trialInfo={trialInfo} /> : <Outlet />}
+          {showPurchaseScreen && !(realRole === "super_admin" && role === "super_admin")
+            ? <PurchaseRequiredScreen trialInfo={trialInfo} />
+            : <Outlet />}
         </div>
       </main>
 
