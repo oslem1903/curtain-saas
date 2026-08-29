@@ -248,6 +248,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             } else {
                 setAppReadOnlyMode(false);
             }
+            hasLoadedOnce.current = true;
             setStatus("ready");
             return;
         }
