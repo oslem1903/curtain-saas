@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useActivityTracking } from "../hooks/useActivityTracking";
 import {
   LayoutDashboard,
@@ -329,6 +329,7 @@ async function getContext() {
 export const Layout = () => {
   const { effectiveRole: role, realRole, viewingRole, viewingUserId, viewingLabel, isSimulating, setViewingRoleAndUser } = useRole();
   const { hasModule, company, readOnly } = useAuth();
+  const location = useLocation();
   const { openModal: openSupportModal } = useSupportModal();
   const { isImpersonating, companyName: impersonatingCompanyName, readOnly: impersonationReadOnly, endSession } = useImpersonation();
   const isDemoWriteMode = realRole === "super_admin" && isSimulating && localStorage.getItem("demo_read_only") === "false";
@@ -1152,7 +1153,8 @@ export const Layout = () => {
               {trialInfo.trialEndsAt ? ` (${formatTR(trialInfo.trialEndsAt)})` : ""}. Kesintisiz devam etmek için lisans satın alın.
             </div>
           )}
-          {showPurchaseScreen && !(realRole === "super_admin" && role === "super_admin")
+          {showPurchaseScreen &&
+          !(realRole === "super_admin" && location.pathname.startsWith("/super-admin"))
             ? <PurchaseRequiredScreen trialInfo={trialInfo} />
             : <Outlet />}
         </div>
