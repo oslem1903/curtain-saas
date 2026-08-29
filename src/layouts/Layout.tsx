@@ -349,6 +349,26 @@ export const Layout = () => {
   const [isExpiredTrial, setIsExpiredTrial] = useState(false);
   const [trialInfo, setTrialInfo] = useState<TrialInfo | null>(null);
   const [showPurchaseScreen, setShowPurchaseScreen] = useState(false);
+  // Firmaya lisanslanmis tenant rolleri (companies.enabled_roles). Bos/yok ise
+  // Solo Perdeci varsayilir -- role dropdown'u gormez.
+  const [companyEnabledRoles, setCompanyEnabledRoles] = useState<string[]>([]);
+  // Role dropdown: Super Admin kendi panelindeyken (firma baglami yok) mevcut
+  // 4 seçenekli davranis aynen korunur. Bir firma baglaminda (Demo Izle/Islem
+  // Modu/Firma Olarak Giris) ise dropdown YALNIZCA o firmaya companies.enabled_roles
+  // ile lisanslanmis tenant rollerinden, super_admin ASLA dahil edilmeden, ve
+  // yalnizca 2+ rol aktifse gosterilir -- Solo Perdeci'de (0/1 rol) hic gorunmez.
+  // demo_company_id: Demo Izle/Islem Modu (SuperAdminCompanies.openDemo) ve
+  // Firma Olarak Giris (impersonation) ucunun UCUNUN de guvenilir sekilde set
+  // ettigi TEK ortak sinyal (isSimulating yalnizca switchDemoRole ile degisir,
+  // openDemo() bunu cagirmaz) -- purchase-gate bypass'inda da ayni sinyal kullaniliyor.
+  const isActingAsTenant = isSimulating || isImpersonating || Boolean(localStorage.getItem("demo_company_id"));
+  const tenantAvailableRoles = useMemo(() => {
+    const sanitized = (companyEnabledRoles || []).filter((r) => r === "admin" || r === "accountant" || r === "installer");
+    return sanitized.length > 0 ? sanitized : ["admin"];
+  }, [companyEnabledRoles]);
+  const roleDropdownOptions = isActingAsTenant ? tenantAvailableRoles : ["super_admin", "admin", "accountant", "installer"];
+  const showRoleDropdown = realRole === "super_admin" && (isActingAsTenant ? roleDropdownOptions.length >= 2 : true);
+  const roleDropdownLabels: Record<string, string> = { super_admin: "Süper Admin", admin: "Yönetici", accountant: "Muhasebe", installer: "Saha Personeli" };
 
   useEffect(() => {
     let alive = true;
@@ -365,11 +385,12 @@ export const Layout = () => {
          try {
              const { data: comp } = await supabase
                    .from("companies")
-                   .select("subscription_plan, trial_ends_at")
+                   .select("subscription_plan, trial_ends_at, enabled_roles")
                    .eq("id", ctx.company_id)
                    .maybeSingle();
 
              if (comp) {
+                 setCompanyEnabledRoles(Array.isArray((comp as any).enabled_roles) ? (comp as any).enabled_roles : []);
                  const plan = comp.subscription_plan || 'trial';
                  if (plan === 'trial') {
                      const endsAt = comp.trial_ends_at ? new Date(comp.trial_ends_at).getTime() : 0;
@@ -910,8 +931,8 @@ export const Layout = () => {
 	          </div>
 
 	          <div className="flex shrink-0 items-center justify-end gap-1 sm:gap-3">
-            {/* Role Switcher for Super Admin */}
-            {realRole === "super_admin" && (
+            {/* Role Switcher for Super Admin (yalnizca firmaya lisanslanmis rol sayisi 2+ ise, firma baglaminda) */}
+            {showRoleDropdown && (
               <select
                 value={viewingUserId || viewingRole}
                 onChange={(e) => {
@@ -922,10 +943,9 @@ export const Layout = () => {
                 }}
 	                className="max-w-[110px] sm:max-w-[140px] text-xs border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-md py-1 pl-2 pr-7 text-slate-700 dark:text-slate-300"
               >
-                <option value="super_admin">Süper Admin</option>
-                <option value="admin">Yönetici</option>
-                <option value="accountant">Muhasebe</option>
-                <option value="installer">Saha Personeli</option>
+                {roleDropdownOptions.map((r) => (
+                  <option key={r} value={r}>{roleDropdownLabels[r] || r}</option>
+                ))}
               </select>
             )}
             {/* Notification Bell (Global) */}

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, Calculator, Check, ChevronLeft, ChevronRight,
+  ArrowLeft, Calculator, ChevronRight,
   Clock, Copy, AlertCircle, MapPin, MessageCircle, Phone, Plus, Save, Trash2
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import Quotes from "./Quotes";
 import FieldInfoSection from "../components/FieldInfoSection";
+import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
 
 // ---- TYPES & CONSTANTS ----
 export type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "diger";
@@ -83,8 +84,6 @@ export function normalizeProductType(value: string | null | undefined): ProductT
   return "diger";
 }
 
-const STEPS = ["Müşteri", "Adres", "Termin", "Ürünler"] as const;
-
 function normalizeText(v: string | null | undefined) { return (v ?? "").trim().toLocaleLowerCase("tr-TR"); }
 
 /** Find best supplier cost from supplier_product_prices catalog.
@@ -158,7 +157,6 @@ export default function MeasurementEntry() {
   const savedState = !isFresh && typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('measurement_draft') || '{}') : {};
   const initialState = state && Object.keys(state).length > 0 ? state : savedState;
 
-  const [step, setStep] = useState(1);
   const [groupId, setGroupId] = useState(initialState.groupId ?? crypto.randomUUID());
   const [customerId, setCustomerId] = useState(initialState.customerId ?? "");
   const [customerName, setCustomerName] = useState(initialState.customerName ?? "");
@@ -190,7 +188,6 @@ export default function MeasurementEntry() {
     if (isFresh) {
       localStorage.removeItem('measurement_draft');
       // Reset all form fields for fresh start
-      setStep(1);
       setGroupId(crypto.randomUUID());
       setCustomerId("");
       setCustomerName("");
@@ -202,6 +199,18 @@ export default function MeasurementEntry() {
       setSuccess("");
     }
   }, [isFresh]);
+
+  // Tek sayfa akışında artık "4. adıma girince" tetiklenen bir olay yok;
+  // düzenleme modunda değilsek (appointment'lardan groupId ile yüklemiyorsak)
+  // kullanıcı boş bir ürün listesiyle karşılaşmasın diye ilk kartı otomatik ekleriz.
+  useEffect(() => {
+    if (!state.groupId && items.length === 0) {
+      const first = makeNewItem();
+      setItems([first]);
+      setExpandedItems(new Set([first.id]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load existing group if in edit mode
   useEffect(() => {
@@ -255,17 +264,13 @@ export default function MeasurementEntry() {
           const kasaRMatch = noteStr.match(/Kasa Rengi: (.+)/);
           const kornisMatch = noteStr.match(/Korniş Tipi: (.+)/);
 
-          let photos: Photo[] = [];
-          const photoMatch = noteStr.match(/\[Photos:\s*(\[.*\])\]/);
-          if (photoMatch) {
-            try {
-              const parsed = JSON.parse(photoMatch[1]);
-              // Handle both old string[] format and new Photo[] format
-              photos = Array.isArray(parsed) ? parsed.map((p: any) =>
-                typeof p === 'string' ? { id: p, url: p } : p
-              ) : [];
-            } catch { }
-          }
+          // extractSahaBilgileriFromNote: Quotes.tsx'in siparişe çevirirken kullandığı
+          // AYNI, bracket-counting'e dayanan sağlam parser — hem [Photos: [...]] (dizi)
+          // hem [Photos: {...}] (obje, mevcut kayıt formatı) biçimini doğru okur.
+          const sahaBilgileri = extractSahaBilgileriFromNote(noteStr);
+          const photos: Photo[] = (sahaBilgileri?.photos ?? []).map((p: any) =>
+            typeof p === 'string' ? { id: p, url: p } : p
+          );
 
           let cleanNote = noteStr
             .replace(/\[Grup: .*\]/g, "")
@@ -300,6 +305,7 @@ export default function MeasurementEntry() {
             kornisTipi: kornisMatch ? kornisMatch[1].trim() : undefined,
             note: cleanNote,
             photos,
+            fieldNotes: sahaBilgileri?.fieldNotes || "",
           };
         });
         setItems(loadedItems);
@@ -360,25 +366,6 @@ export default function MeasurementEntry() {
     return Math.ceil(diff / (1000 * 3600 * 24));
   }, [deliveryDate]);
 
-  // Step completion check
-  const stepComplete = useMemo(() => ({
-    1: !!customerName.trim(),
-    2: !!address.trim(),
-    3: !!deliveryDate,
-    4: items.length > 0,
-  }), [customerName, address, deliveryDate, items]);
-
-  function goStep(n: number) {
-    if (n < 1 || n > 4) return;
-    // Auto-add first item when entering Step 4
-    if (n === 4 && items.length === 0) {
-      const first = makeNewItem();
-      setItems([first]);
-      setExpandedItems(new Set([first.id]));
-    }
-    setStep(n);
-  }
-
   function addNewItem() {
     const newItem = makeNewItem();
     setItems([...items, newItem]);
@@ -412,7 +399,7 @@ export default function MeasurementEntry() {
 
   async function saveMeasurementGroup() {
     if (items.length === 0) { setError("En az 1 ürün eklemelisiniz."); return; }
-    if (!customerName.trim()) { setError("Müşteri adı girilmelidir."); setStep(1); return; }
+    if (!customerName.trim()) { setError("Müşteri adı girilmelidir."); return; }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -524,35 +511,10 @@ export default function MeasurementEntry() {
       {error && <div className="animate-in fade-in rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700 dark:border-red-800 dark:bg-red-950/30">{error}</div>}
       {success && <div className="animate-in fade-in rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30">{success}</div>}
 
-      {/* STEPPER */}
-      <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:gap-2">
-        {STEPS.map((s, i) => {
-          const stepNum = i + 1;
-          const isActive = step === stepNum;
-          const isDone = stepComplete[stepNum as keyof typeof stepComplete];
-          return (
-            <button
-              key={s}
-              onClick={() => goStep(stepNum)}
-              className={`relative flex shrink-0 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-black transition-all ${isActive
-                ? "bg-primary-600 text-white shadow-lg shadow-primary-600/30"
-                : isDone
-                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                  : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
-                }`}
-            >
-              {isDone && !isActive ? <Check className="h-3.5 w-3.5" /> : <span className="text-xs">{stepNum}</span>}
-              <span className="hidden sm:inline">{s}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* STEP CONTENT */}
-      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
-
-        {/* STEP 1: MÜŞTERI */}
-        {step === 1 && (
+      {/* MÜŞTERİ / ADRES / TERMİN — tek sayfada, açık bölümler halinde */}
+      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6 space-y-6">
+        <section>
+          <h2 className="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">Müşteri</h2>
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="sm:col-span-2">
               <span className={labelCls}>Müşteri Seçin veya Yazın</span>
@@ -583,14 +545,14 @@ export default function MeasurementEntry() {
               <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XX XXX XXXX" className={inputCls} />
             </label>
           </div>
-        )}
+        </section>
 
-        {/* STEP 2: ADRES */}
-        {step === 2 && (
+        <section>
+          <h2 className="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">Adres / Konum</h2>
           <div className="grid gap-5">
             <label>
               <span className={labelCls}>Adres / Konum Detayı</span>
-              <textarea value={address} onChange={e => setAddress(e.target.value)} rows={4} className={inputCls} placeholder="Açık adres yazın..." />
+              <textarea value={address} onChange={e => setAddress(e.target.value)} rows={3} className={inputCls} placeholder="Açık adres yazın..." />
             </label>
             <div className="flex flex-wrap gap-3">
               {phone && (
@@ -604,10 +566,10 @@ export default function MeasurementEntry() {
               )}
             </div>
           </div>
-        )}
+        </section>
 
-        {/* STEP 3: TERMİN */}
-        {step === 3 && (
+        <section>
+          <h2 className="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">Termin</h2>
           <div className="grid gap-5">
             <label>
               <span className={labelCls}>Termin / Teslim Tarihi</span>
@@ -620,11 +582,13 @@ export default function MeasurementEntry() {
               </div>
             )}
           </div>
-        )}
+        </section>
+      </div>
 
-        {/* STEP 4: ÜRÜNLER */}
-        {step === 4 && (
-          <div className="grid gap-4">
+      {/* ÜRÜNLER — ana çalışma alanı */}
+      <div>
+        <h2 className="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">Ürünler</h2>
+        <div className="grid gap-4">
             {items.map((item, idx) => {
               const isExpanded = expandedItems.has(item.id);
               const calc = calculate(item.productType, item.widthCm, item.heightCm, item.qty, item.unitPrice, item.pile);
@@ -876,30 +840,7 @@ export default function MeasurementEntry() {
             <button onClick={addNewItem} className="flex min-h-14 items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary-300 bg-primary-50 font-black text-primary-600 transition-colors hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-950/20 dark:hover:bg-primary-900/40">
               <Plus className="h-5 w-5" /> Satır Ekle
             </button>
-          </div>
-        )}
-      </div>
-
-      {/* STEP NAVIGATION */}
-      <div className="flex items-center justify-between gap-3">
-        <button
-          disabled={step <= 1}
-          onClick={() => goStep(step - 1)}
-          className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30 dark:border-slate-700 dark:hover:bg-slate-800"
-        >
-          <ChevronLeft className="h-4 w-4" /> Geri
-        </button>
-        <div className="text-xs font-bold text-slate-400">Adım {step} / {STEPS.length}</div>
-        {step < 4 ? (
-          <button
-            onClick={() => goStep(step + 1)}
-            className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-primary-600 px-5 py-2 text-sm font-black text-white shadow-lg shadow-primary-600/20 transition-colors hover:bg-primary-700"
-          >
-            İleri <ChevronRight className="h-4 w-4" />
-          </button>
-        ) : (
-          <div /> /* placeholder to maintain spacing */
-        )}
+        </div>
       </div>
 
       {/* FINANCIAL SUMMARY */}

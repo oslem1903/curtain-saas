@@ -1,0 +1,26 @@
+-- =============================================================
+-- companies.enabled_roles: gelecege donuk coklu-rol capability'si
+--
+-- Amac: "Solo Perdeci" varsayilan modelinde firma icinde
+-- Super Admin / Yonetici / Muhasebe / Saha Personeli gibi rol
+-- degistirme UI'i HICBIR ZAMAN gorunmemeli. Ileride buyuk
+-- firmalara Super Admin panelinden coklu-rol acilabilmesi icin,
+-- enabled_modules ile AYNI, kanitlanmis desende additive bir
+-- capability kolonu ekleniyor.
+--
+-- NULL/bos = Solo Perdeci (varsayilan, mevcut TUM firmalar icin
+-- gecerli, hicbir veri migration'i gerekmez).
+-- Dolu ise (orn. ARRAY['admin','accountant']) o roller firma icin
+-- aktif kabul edilir.
+--
+-- super_admin bu listede ASLA yer almaz -- bu bir tenant/firma
+-- rolu degil, gercek kimlik (auth.uid()) eksenidir.
+--
+-- company_members.role / profiles.role mantigina DOKUNULMAZ --
+-- bu kolon yalnizca "firmaya hangi roller lisanslanmis" bilgisini
+-- tutar, kullanicinin GERCEK rolunu degistirmez.
+--
+-- Idempotent, additive, veri migration'i yok, RLS degisikligi yok.
+-- =============================================================
+
+alter table public.companies add column if not exists enabled_roles text[];

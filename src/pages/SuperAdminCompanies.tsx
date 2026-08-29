@@ -23,6 +23,7 @@ type CompanyStats = {
     last_error_at: string | null;
     app_version: string;
     enabled_modules: string[];
+    enabled_roles: string[];
     package_code: string;
     max_devices: number;
     active_device_count: number;
@@ -85,6 +86,15 @@ const moduleLabels: Record<string, string> = {
 };
 
 const editableModules = ["admin", "measurements", "orders", "suppliers", "installation", "accounting", "staff", "vehicles", "commissions", "warehouse", "catalogs", "reports", "expenses", "profit", "customers", "appointments", "branches"];
+
+// Firma bazli coklu-rol capability'si. super_admin BURADA ASLA yer almaz --
+// bu, o firmaya lisanslanan tenant rollerinin listesidir, gercek kimlik degil.
+const roleLabels: Record<string, string> = {
+    admin: "Yönetici",
+    accountant: "Muhasebe",
+    installer: "Saha Personeli",
+};
+const editableRoles = ["admin", "accountant", "installer"];
 
 function modulesForPlan(plan: string) {
     if (plan === "solo") return SOLO_MODULES;
@@ -173,6 +183,7 @@ export default function SuperAdminCompanies() {
                     last_error_at: lastError?.[0]?.created_at || null,
                     app_version: "1.0.0",
                     enabled_modules: Array.isArray(company.enabled_modules) ? company.enabled_modules : modulesForPlan(company.package_code || company.subscription_plan || "starter"),
+                    enabled_roles: Array.isArray(company.enabled_roles) ? company.enabled_roles.filter((r: string) => editableRoles.includes(r)) : [],
                     package_code: company.package_code || (company.subscription_plan === "starter" ? "solo" : company.subscription_plan || "starter"),
                     max_devices: company.max_devices || defaultDeviceLimit(company.package_code || company.subscription_plan || "starter"),
                     active_device_count: activeDevices || 0,
@@ -214,6 +225,13 @@ export default function SuperAdminCompanies() {
         if (current.has(module)) current.delete(module);
         else current.add(module);
         await updateCompany(company.id, { enabled_modules: Array.from(current) });
+    }
+
+    async function toggleRole(company: CompanyStats, role: string) {
+        const current = new Set(company.enabled_roles || []);
+        if (current.has(role)) current.delete(role);
+        else current.add(role);
+        await updateCompany(company.id, { enabled_roles: Array.from(current) });
     }
 
     async function loadDeviceManagement(companyId: string) {
@@ -494,6 +512,31 @@ export default function SuperAdminCompanies() {
                                             )}
                                         >
                                             {moduleLabels[module] || module}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+                            <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Firma Rolleri (Çoklu Kullanıcı)</div>
+                            <p className="mb-2 text-[11px] text-slate-400">0 veya 1 rol açıksa firma Solo Perdeci (tek kullanıcı) deneyimini görür. 2+ rol açılırsa firma içinde rol değiştirme aktif olur.</p>
+                            <div className="flex flex-wrap gap-2">
+                                {editableRoles.map((role) => {
+                                    const active = company.enabled_roles.includes(role);
+                                    return (
+                                        <button
+                                            key={role}
+                                            type="button"
+                                            disabled={savingId === company.id}
+                                            onClick={() => toggleRole(company, role)}
+                                            className={cn(
+                                                "rounded-xl border px-3 py-2 text-xs font-black transition",
+                                                active
+                                                    ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200"
+                                                    : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400",
+                                            )}
+                                        >
+                                            {roleLabels[role] || role}
                                         </button>
                                     );
                                 })}

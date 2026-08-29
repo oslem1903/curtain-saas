@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { getEffectiveTenantContext } from "../supabaseClient";
+import { useRole } from "../context/RoleContext";
+import { useImpersonation } from "../context/ImpersonationContext";
 import { 
     Bell, 
     X, 
@@ -43,6 +45,17 @@ function todayRange() {
 }
 
 export default function NotificationBell({ userId }: { userId: string }) {
+    // Firma Olarak Giris / Demo Izle / Islem Modu sirasinda gercek kimlik hala
+    // super_admin -- bu yuzden kisisel (user_id bazli) bildirimler ve sistem
+    // genelindeki destek talebi ozetini tenant ekranina sizdirmiyoruz. Tenant'a
+    // ozel operasyonel bildirimler (randevu/tahsilat/montaj) zaten company_id
+    // ile scoped, bunlar etkilenmiyor.
+    // demo_company_id: Demo Izle/Islem Modu (openDemo) isSimulating'i set etmez,
+    // bu yuzden Layout.tsx'teki purchase-gate bypass'iyla ayni, guvenilir ortak
+    // sinyali kullaniyoruz.
+    const { isSimulating } = useRole();
+    const { isImpersonating } = useImpersonation();
+    const isActingAsTenant = isSimulating || isImpersonating || Boolean(localStorage.getItem("demo_company_id"));
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [operational, setOperational] = useState<OperationalNotification[]>([]);
     const [readOperational, setReadOperational] = useState<Set<string>>(() => {
@@ -57,15 +70,16 @@ export default function NotificationBell({ userId }: { userId: string }) {
     const unreadCount = notifications.filter(n => !n.is_read).length + visibleOperational.length;
 
     const loadNotifications = useCallback(async () => {
+        if (isActingAsTenant) { setNotifications([]); return; }
         const { data } = await supabase
             .from('notifications')
             .select('*')
             .eq('user_id', userId)
             .order('created_at', { ascending: false })
             .limit(20);
-        
+
         if (data) setNotifications(data as Notification[]);
-    }, [userId]);
+    }, [userId, isActingAsTenant]);
 
     const loadOperationalNotifications = useCallback(async () => {
         try {
@@ -172,31 +186,33 @@ export default function NotificationBell({ userId }: { userId: string }) {
                 });
             }
 
-            const supportRes = await supabase
-                .from("support_tickets")
-                .select("id,title,created_at,status")
-                .neq("status", "closed")
-                .order("created_at", { ascending: false })
-                .limit(5);
+            if (!isActingAsTenant) {
+                const supportRes = await supabase
+                    .from("support_tickets")
+                    .select("id,title,created_at,status")
+                    .neq("status", "closed")
+                    .order("created_at", { ascending: false })
+                    .limit(5);
 
-            if (!supportRes.error) {
-                (supportRes.data ?? []).forEach((row: any) => {
-                    items.push({
-                        id: `support-${row.id}`,
-                        title: "Yeni destek talebi",
-                        message: row.title || "Destek talebi",
-                        type: "info",
-                        created_at: row.created_at || new Date().toISOString(),
-                        target: "#/super-admin/support",
+                if (!supportRes.error) {
+                    (supportRes.data ?? []).forEach((row: any) => {
+                        items.push({
+                            id: `support-${row.id}`,
+                            title: "Yeni destek talebi",
+                            message: row.title || "Destek talebi",
+                            type: "info",
+                            created_at: row.created_at || new Date().toISOString(),
+                            target: "#/super-admin/support",
+                        });
                     });
-                });
+                }
             }
 
             setOperational(items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 30));
         } catch {
             setOperational([]);
         }
-    }, []);
+    }, [isActingAsTenant]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
