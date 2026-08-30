@@ -1166,8 +1166,13 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 })
             )}
 
-            {/* Son Ödemeler Tablosu */}
-            {txs.length > 0 && (
+            {/* Son Ödemeler Tablosu — yalnızca gerçek ödeme/iptal işlemleri gösterilir.
+                Hakediş (earning) hem otomatik hem manuel kayıtlar installer_transactions'ta
+                tutuluyor ama bu tablo bir ÖDEME özeti; borç artışı olan earning satırları
+                burada asla görünmemeli (aksi halde "-₺..." gibi yanlış işaretle ödeme
+                sanılabilirler). Ana "Hareket Geçmişi & Ekstre" bölümü zaten earning'i
+                ayrı, doğru işaretle (Borç +) gösteriyor — burada yalnızca dışlanıyor. */}
+            {txs.filter((t) => t.transaction_type !== "earning").length > 0 && (
                 <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <h2 className="text-lg font-black text-slate-900 dark:text-white mb-4">Sistemdeki Son Ödemeler</h2>
                     <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
@@ -1182,7 +1187,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                 </tr>
                             </thead>
                             <tbody>
-                                {txs.slice(0, 10).map((tx, idx) => {
+                                {txs.filter((t) => t.transaction_type !== "earning").slice(0, 10).map((tx, idx) => {
                                     const emp = employees.find(e => e.allIds.includes(tx.installer_id));
                                     return (
                                         <tr key={tx.id} className={`border-b border-slate-50 dark:border-slate-800 ${idx % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"} hover:bg-slate-50 dark:hover:bg-slate-800 transition`}>

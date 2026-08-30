@@ -25,33 +25,47 @@ export function extractSahaBilgileriFromNote(note: string | null): SahaBilgileri
   if (!note) return null;
 
   // Try [Saha Bilgileri: {...}] format first (new format)
-  let result = extractFromBracketMarker(note, '[Saha Bilgileri:', '{');
+  let result = extractFromBracketMarker(note, '[Saha Bilgileri:');
   if (result) return result;
 
-  // Try [Photos: [...]] format (measurement format from MeasurementEntry)
-  result = extractPhotosFromNote(note);
+  // Try [Photos: ...] format (measurement format from MeasurementEntry) —
+  // supports both [Photos: [...]] (legacy array) and [Photos: {...}] (current
+  // object with photos/color/model/fieldNotes) via the SAME call below.
+  result = extractFromBracketMarker(note, '[Photos:');
   if (result) return result;
 
   return null;
 }
 
 /**
- * Extract JSON object/array from note using bracket marker and counter
+ * Extract JSON object/array from note using bracket marker and counter.
+ *
+ * The open bracket is the first non-whitespace character immediately after
+ * the marker — NOT the first occurrence of a hardcoded bracket type scanned
+ * forward. Scanning forward for a fixed bracket (e.g. always "[") could
+ * previously lock onto a NESTED array inside an outer object (e.g. the
+ * "photos" array inside `[Photos: {"photos":[...], "fieldNotes":...}]`,
+ * since "photos" is always serialized first), silently truncating the match
+ * to that inner array and dropping every sibling key (color/model/fieldNotes).
  */
-function extractFromBracketMarker(note: string, marker: string, openChar: string): SahaBilgileri | null {
+function extractFromBracketMarker(note: string, marker: string): SahaBilgileri | null {
   const markerStart = note.indexOf(marker);
   if (markerStart === -1) return null;
 
-  // Find the opening bracket after marker
+  // Find the first non-whitespace character after the marker; it must be the
+  // actual JSON's own opening bracket, whichever type it genuinely is.
   let jsonStart = -1;
   for (let i = markerStart + marker.length; i < note.length; i++) {
-    if (note[i] === openChar) {
+    if (!/\s/.test(note[i])) {
       jsonStart = i;
       break;
     }
   }
 
   if (jsonStart === -1) return null;
+
+  const openChar = note[jsonStart];
+  if (openChar !== '{' && openChar !== '[') return null;
 
   // Find matching closing bracket using counter
   const closeChar = openChar === '{' ? '}' : ']';
@@ -85,18 +99,4 @@ function extractFromBracketMarker(note: string, marker: string, openChar: string
   }
 
   return null;
-}
-
-/**
- * Extract [Photos: ...] format (MeasurementEntry format)
- * Supports both [Photos: [...]] (array) and [Photos: {...}] (object with metadata)
- */
-function extractPhotosFromNote(note: string): SahaBilgileri | null {
-  // Try array format first [Photos: [...]]
-  let result = extractFromBracketMarker(note, '[Photos:', '[');
-  if (result) return result;
-
-  // Try object format [Photos: {...}]
-  result = extractFromBracketMarker(note, '[Photos:', '{');
-  return result;
 }
