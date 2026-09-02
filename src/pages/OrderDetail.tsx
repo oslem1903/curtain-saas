@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Capacitor } from "@capacitor/core";
@@ -7,6 +7,7 @@ import { normalizeRole, type RoleState } from "../auth/roles";
 import { logAction } from "../utils/audit";
 import { notifyPaymentReceived } from "../services/notificationManager";
 import { createFinanceService } from "../services/finance";
+import { computePlanForOrder } from "../utils/installments";
 import {
     Plus,
     Trash2,
@@ -17,6 +18,7 @@ import {
     X,
     Camera as CameraIcon,
     CheckCircle2,
+    ChevronDown,
 } from "lucide-react";
 
 
@@ -44,6 +46,13 @@ type OrderRow = {
 };
 
 type SupplierRow = { id: string; name: string | null };
+
+type CatalogCodePhoto = {
+    id: string;
+    image_url: string;
+    note?: string | null;
+    catalog_code?: string | null;
+};
 
 type ProductCatalogRow = {
     id: string;
@@ -121,12 +130,32 @@ type PaymentRow = {
     amount: number | null;
     method: string | null;
     note: string | null;
+    reverses_payment_id?: string | null;
+};
+
+type PaymentPlanRow = {
+    id: string;
+    order_id: string;
+    opening_total_amount: number;
+    opening_paid_amount: number;
+    opening_remaining_amount: number;
+    status: "active" | "cancelled";
+};
+
+type PaymentPlanInstallmentRow = {
+    id: string;
+    plan_id: string;
+    order_id: string;
+    installment_no: number;
+    amount: number;
+    due_date: string;
 };
 
 type InstallationJobRow = {
     id: string;
     status: string | null;
     assigned_staff_id?: string | null;
+    is_internal_installation?: boolean;
 };
 
 function fmtTL(n?: number | null) {
@@ -281,6 +310,8 @@ export default function OrderDetail() {
     const nav = useNavigate();
     const [order, setOrder] = useState<OrderRow | null>(null);
     const [items, setItems] = useState<OrderItemRow[]>([]);
+    const [itemPhotos, setItemPhotos] = useState<Record<string, CatalogCodePhoto[]>>({});
+    const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
     const [role, setRole] = useState<RoleState>("unknown");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -302,6 +333,14 @@ export default function OrderDetail() {
     }, [paymentAmount, paymentMethod, paymentNote]);
     const [paymentError, setPaymentError] = useState("");
     const [paymentSuccess, setPaymentSuccess] = useState("");
+    const [paymentPlan, setPaymentPlan] = useState<PaymentPlanRow | null>(null);
+    const [planInstallmentRows, setPlanInstallmentRows] = useState<PaymentPlanInstallmentRow[]>([]);
+    const [showPlanForm, setShowPlanForm] = useState(false);
+    const [planMode, setPlanMode] = useState<"single" | "multi">("single");
+    const [planSingleDueDate, setPlanSingleDueDate] = useState("");
+    const [planRows, setPlanRows] = useState<Array<{ amount: string; dueDate: string }>>([{ amount: "", dueDate: "" }]);
+    const [planSaving, setPlanSaving] = useState(false);
+    const [planError, setPlanError] = useState("");
     const [installationJob, setInstallationJob] = useState<InstallationJobRow | null>(null);
     const [workflowMessage, setWorkflowMessage] = useState("");
     const [workflowError, setWorkflowError] = useState("");
@@ -436,19 +475,53 @@ export default function OrderDetail() {
                 .order("created_at", { ascending: false });
             const { data: paymentRows } = await supabase
                 .from("payments")
-                .select("id,payment_date,amount,method,note")
+                .select("id,payment_date,amount,method,note,reverses_payment_id")
                 .eq("order_id", id)
                 .order("payment_date", { ascending: false });
+            const { data: planRow } = await supabase
+                .from("order_payment_plans")
+                .select("id,order_id,opening_total_amount,opening_paid_amount,opening_remaining_amount,status")
+                .eq("order_id", id)
+                .eq("status", "active")
+                .maybeSingle();
+            let installmentRows: PaymentPlanInstallmentRow[] = [];
+            if (planRow?.id) {
+                const { data: instData } = await supabase
+                    .from("order_installments")
+                    .select("id,plan_id,order_id,installment_no,amount,due_date")
+                    .eq("plan_id", planRow.id)
+                    .order("due_date", { ascending: true });
+                installmentRows = (instData ?? []) as PaymentPlanInstallmentRow[];
+            }
             const { data: jobRow } = await supabase
                 .from("installation_jobs")
-                .select("id,status,assigned_staff_id")
+                .select("id,status,assigned_staff_id,is_internal_installation")
                 .eq("order_id", id)
                 .maybeSingle();
             
             setOrder(o);
             setItems(i ?? []);
+
+            // Fetch catalog_code_photos for each order item
+            if (i && i.length > 0) {
+                const photosMap: Record<string, CatalogCodePhoto[]> = {};
+                for (const item of i) {
+                    const { data: photos } = await supabase
+                        .from("catalog_code_photos")
+                        .select("id, image_url, note, catalog_code")
+                        .eq("order_item_id", item.id)
+                        .order("created_at", { ascending: true });
+                    if (photos && photos.length > 0) {
+                        photosMap[item.id] = photos as CatalogCodePhoto[];
+                    }
+                }
+                setItemPhotos(photosMap);
+            }
+
             setVisualPreviews((previews ?? []) as VisualPreviewRow[]);
             setPayments((paymentRows ?? []) as PaymentRow[]);
+            setPaymentPlan((planRow ?? null) as PaymentPlanRow | null);
+            setPlanInstallmentRows(installmentRows);
             // Maliyet giriş alanlarını mevcut değerlerle doldur (null → "0")
             setMechanismCostInput(String(o?.mechanism_cost ?? 0));
             setInstallationCostInput(String(o?.installation_cost ?? 0));
@@ -1091,11 +1164,37 @@ export default function OrderDetail() {
 
             // Montaj Takibi + Montajcı Cari bağlantısı: bu siparişin montaj işine montajcıyı işle
             // (montaj işi henüz yoksa sorun değil — "Montaja Hazır" yapılırken montajcı taşınır)
+            // is_internal_installation:false — daha önce "Firma Kendisi" seçilmişse, gerçek bir
+            // montajcıya atama yapıldığında bu işareti temizler (bkz. handleAssignInternal).
             await supabase.from("installation_jobs")
-                .update({ assigned_staff_id: orderAssignedStaffId })
+                .update({ assigned_staff_id: orderAssignedStaffId, is_internal_installation: false })
                 .eq("order_id", id)
                 .then(() => {}, () => {});
 
+            await loadData();
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    // Firma kendi montajını yapacaksa: dış montajcı ataması YOK, installer_earnings/
+    // installer_transactions hiç oluşmasın (bkz. migration 007). orders tablosuna
+    // dokunulmuyor — kaynak yalnızca installation_jobs.is_internal_installation.
+    // Bu yüzden yalnızca montaj işi (installationJob) zaten oluşmuşsa etkinleştirilir;
+    // sipariş henüz "Montaja Hazır" aşamasına gelmediyse (installation_jobs satırı
+    // yoksa) bu buton kullanılamaz — tamamlama zaten aynı satırı gerektirdiği için
+    // bu gerçek bir kısıtlama yaratmıyor.
+    async function handleAssignInternal() {
+        if (!installationJob?.id) return;
+        setSaving(true);
+        try {
+            const { error } = await supabase.from("installation_jobs")
+                .update({ assigned_staff_id: null, is_internal_installation: true })
+                .eq("id", installationJob.id);
+            if (error) {
+                alert(error.message);
+                return;
+            }
             await loadData();
         } finally {
             setSaving(false);
@@ -1256,6 +1355,101 @@ export default function OrderDetail() {
         }
     }
 
+    function resetPlanForm() {
+        setPlanMode("single");
+        setPlanSingleDueDate("");
+        setPlanRows([{ amount: "", dueDate: "" }]);
+        setPlanError("");
+    }
+
+    function openPlanForm() {
+        resetPlanForm();
+        setShowPlanForm(true);
+    }
+
+    async function submitPlan(isRebuild: boolean) {
+        if (planSaving) return;
+        if (!id || !order) return;
+        setPlanError("");
+
+        let installments: Array<{ installmentNo: number; amount: number; dueDate: string }>;
+        if (planMode === "single") {
+            const amount = Math.max(remaining, 0);
+            if (!planSingleDueDate) {
+                setPlanError("Vade tarihi seçin.");
+                return;
+            }
+            if (amount <= 0) {
+                setPlanError("Kalan borç 0 olduğu için plan oluşturulamaz.");
+                return;
+            }
+            installments = [{ installmentNo: 1, amount, dueDate: planSingleDueDate }];
+        } else {
+            const parsed = planRows.map((r, idx) => ({
+                installmentNo: idx + 1,
+                amount: Number(r.amount),
+                dueDate: r.dueDate,
+            }));
+            if (parsed.some((r) => !Number.isFinite(r.amount) || r.amount <= 0)) {
+                setPlanError("Her taksidin tutarı 0'dan büyük olmalı.");
+                return;
+            }
+            if (parsed.some((r) => !r.dueDate)) {
+                setPlanError("Her taksidin vade tarihi girilmeli.");
+                return;
+            }
+            const sum = parsed.reduce((s, r) => s + r.amount, 0);
+            if (Math.abs(sum - remaining) > 0.01) {
+                setPlanError(`Taksit toplamı (${fmtTL(sum)}) kalan borca (${fmtTL(remaining)}) eşit olmalı.`);
+                return;
+            }
+            installments = parsed;
+        }
+
+        setPlanSaving(true);
+        try {
+            const finance = createFinanceService();
+            const params = { companyId: order.company_id!, orderId: id!, installments };
+            const result = isRebuild
+                ? await finance.customerInstallments.rebuildPlan(params)
+                : await finance.customerInstallments.createPlan(params);
+
+            if (result.status !== "success") {
+                setPlanError(result.status === "error" ? result.error.message : "Plan kaydedilemedi.");
+                return;
+            }
+
+            setShowPlanForm(false);
+            resetPlanForm();
+            await loadData();
+        } catch (e: any) {
+            setPlanError(e?.message ?? "Plan kaydedilemedi.");
+        } finally {
+            setPlanSaving(false);
+        }
+    }
+
+    async function handleCancelPlan() {
+        if (planSaving) return;
+        if (!id || !order) return;
+        if (!window.confirm("Bu ödeme planını iptal etmek istediğinize emin misiniz? Geçmiş taksit kayıtları saklanır, ancak plan artık aktif olmayacak.")) return;
+        setPlanSaving(true);
+        setPlanError("");
+        try {
+            const finance = createFinanceService();
+            const result = await finance.customerInstallments.cancelPlan({ companyId: order.company_id!, orderId: id! });
+            if (result.status !== "success") {
+                setPlanError(result.status === "error" ? result.error.message : "Plan iptal edilemedi.");
+                return;
+            }
+            await loadData();
+        } catch (e: any) {
+            setPlanError(e?.message ?? "Plan iptal edilemedi.");
+        } finally {
+            setPlanSaving(false);
+        }
+    }
+
     if (loading) return <div className="p-10 text-center font-bold">Yükleniyor...</div>;
     if (!order) return <div className="p-10 ">Sipariş bulunamadı.</div>;
 
@@ -1266,6 +1460,15 @@ export default function OrderDetail() {
     const overpayment = Math.max(paid - salesTotal, 0);
     const linesEditable = canEditOrderLines(role);
     const showCostColumns = role === "admin" || role === "accountant";
+    const canManagePlan = role === "admin" || role === "accountant";
+    const planComputation = paymentPlan
+        ? computePlanForOrder(
+              paymentPlan,
+              planInstallmentRows,
+              payments.map((p) => ({ amount: p.amount, reverses_payment_id: p.reverses_payment_id })),
+              salesTotal,
+          )
+        : null;
     const itemTableColSpan = 5 + (showCostColumns ? 2 : 0) + (linesEditable ? 1 : 0);
 
     async function handleMarkInstallationReady() {
@@ -1347,8 +1550,8 @@ export default function OrderDetail() {
 
     async function handleCompleteInstallation() {
         if (!order?.company_id || !installationJob?.id || !id) return;
-        if (!installationJob.assigned_staff_id) {
-            setWorkflowError("Montajı tamamlamak için montajcı atayın.");
+        if (!installationJob.assigned_staff_id && !installationJob.is_internal_installation) {
+            setWorkflowError("Montajı tamamlamak için montajcı atayın ya da \"Firma Kendisi Montaj Yapacak\" seçin.");
             return;
         }
         if (installationJob.status === "completed") {
@@ -1456,7 +1659,9 @@ export default function OrderDetail() {
                             <div>
                                 <div className="text-xs text-slate-400 font-black uppercase tracking-widest">Atanan Montajcı</div>
                                 <div className="mt-1 text-sm font-bold text-slate-700 dark:text-slate-200">
-                                    {currentInstaller
+                                    {installationJob?.is_internal_installation
+                                        ? "🏠 Firma Kendisi Montaj Yapıyor"
+                                        : currentInstaller
                                         ? `${currentInstaller.full_name} (${staffRoleLabel(currentInstaller.role || "installer")})`
                                         : "Henüz montajcı atanmadı"}
                                 </div>
@@ -1508,6 +1713,16 @@ export default function OrderDetail() {
                                 {saving ? "Kaydediliyor..." : currentInstallerId ? "Montajcıyı Değiştir" : "Montajcıyı Ata"}
                             </button>
                         </div>
+                        {installationJob?.id && installationJob.status !== "completed" && (
+                            <button
+                                type="button"
+                                onClick={handleAssignInternal}
+                                disabled={saving || Boolean(installationJob?.is_internal_installation)}
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 sm:w-auto"
+                            >
+                                {installationJob?.is_internal_installation ? "🏠 Firma Kendisi Montaj Yapacak (seçili)" : "🏠 Firma Kendisi Montaj Yapacak"}
+                            </button>
+                        )}
                         {staffList.length === 0 ? (
                             <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">
                                 Henüz montajcı kartı yok. "Yeni Montajcı Ekle" ile hemen oluşturabilirsiniz.
@@ -1569,15 +1784,15 @@ export default function OrderDetail() {
 
                         {installationJob && installationJob.status !== "completed" && (
                             <div className="flex flex-col sm:flex-row gap-3">
-                                {!installationJob.assigned_staff_id ? (
+                                {!installationJob.assigned_staff_id && !installationJob.is_internal_installation ? (
                                     <div className="w-full sm:w-auto text-sm font-bold text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-200 rounded-xl px-4 py-2">
-                                        ⚠️ Montajı tamamlamak için önce montajcı atayın.
+                                        ⚠️ Montajı tamamlamak için önce montajcı atayın ya da "Firma Kendisi Montaj Yapacak" seçin.
                                     </div>
                                 ) : (
                                     <button
                                         type="button"
                                         onClick={() => setShowCompletionConfirm(true)}
-                                        disabled={completionLoading || saving || !installationJob.assigned_staff_id}
+                                        disabled={completionLoading || saving || (!installationJob.assigned_staff_id && !installationJob.is_internal_installation)}
                                         className="flex-1 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
                                     >
                                         {completionLoading ? "⏳ Tamamlanıyor..." : "✅ Montaj Tamamlandı"}
@@ -1598,7 +1813,10 @@ export default function OrderDetail() {
                             </div>
                             <h2 className="text-center text-lg font-black text-slate-900 dark:text-white mb-2">Montaj Tamamlansın mı?</h2>
                             <p className="text-center text-sm text-slate-600 dark:text-slate-400 mb-4">
-                                <strong>{order.customers?.name || "Bu sipariş"}</strong> için montajı tamamlamak ve montajcı hakedişini otomatik oluşturmak istiyor musunuz?
+                                <strong>{order.customers?.name || "Bu sipariş"}</strong> için montajı tamamlamak istiyor musunuz?
+                                {installationJob.is_internal_installation
+                                    ? " Bu montaj firma tarafından yapıldığı için hakediş/cari kaydı oluşturulmayacak."
+                                    : " Montajcı hakedişi otomatik oluşturulacak."}
                             </p>
                             <div className="flex gap-3">
                                 <button
@@ -1656,6 +1874,144 @@ export default function OrderDetail() {
                         </div>
                     </div>
                 ) : null}
+
+                <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 dark:border-indigo-900/40 dark:bg-indigo-900/10">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-black uppercase tracking-widest text-indigo-500">Ödeme Planı</div>
+                        {canManagePlan && !paymentPlan && remaining > 0.01 && !showPlanForm ? (
+                            <button type="button" onClick={openPlanForm} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white hover:bg-indigo-700">
+                                Tek Vade Belirle / Taksitlendir
+                            </button>
+                        ) : null}
+                    </div>
+
+                    {planComputation ? (
+                        <div className="mt-3 space-y-3">
+                            {planComputation.isStale ? (
+                                <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                                    ⚠ Sipariş tutarı plan oluşturulduğundan beri değişmiş. Planı güncel duruma göre yeniden oluşturun.
+                                </div>
+                            ) : null}
+                            {planComputation.isInconsistent ? (
+                                <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-xs font-bold text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                                    ⚠ Plan tutarsız: plan oluşturulmadan önceki bir tahsilat sonradan iptal edilmiş görünüyor. Gerçek kalan bakiye planın kapsadığı tutarı aşıyor. Planı yeniden oluşturun.
+                                </div>
+                            ) : null}
+
+                            <div className="overflow-x-auto rounded-xl border border-indigo-100 dark:border-indigo-900/40">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="bg-indigo-100/50 dark:bg-indigo-900/20">
+                                            <th className="px-3 py-2 text-left text-[10px] font-black uppercase text-indigo-600">Taksit</th>
+                                            <th className="px-3 py-2 text-right text-[10px] font-black uppercase text-indigo-600">Tutar</th>
+                                            <th className="px-3 py-2 text-right text-[10px] font-black uppercase text-indigo-600">Kalan</th>
+                                            <th className="px-3 py-2 text-left text-[10px] font-black uppercase text-indigo-600">Vade</th>
+                                            <th className="px-3 py-2 text-left text-[10px] font-black uppercase text-indigo-600">Durum</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {planComputation.installments.map((inst) => (
+                                            <tr key={inst.id} className="border-t border-indigo-50 dark:border-indigo-900/20">
+                                                <td className="px-3 py-2 font-bold">{inst.installment_no}/{planComputation.installments.length}</td>
+                                                <td className="px-3 py-2 text-right">{fmtTL(inst.amount)}</td>
+                                                <td className="px-3 py-2 text-right font-bold">{fmtTL(inst.remainingAmount)}</td>
+                                                <td className="px-3 py-2">{new Date(`${inst.due_date}T12:00:00`).toLocaleDateString("tr-TR")}</td>
+                                                <td className="px-3 py-2">
+                                                    <span className={
+                                                        inst.status === "paid" ? "rounded-lg bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" :
+                                                        inst.status === "partial" ? "rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" :
+                                                        inst.status === "overdue" ? "rounded-lg bg-red-100 px-2 py-1 text-[10px] font-black text-red-700 dark:bg-red-900/30 dark:text-red-300" :
+                                                        "rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                                                    }>
+                                                        {inst.status === "paid" ? "Ödendi" : inst.status === "partial" ? "Kısmi" : inst.status === "overdue" ? `Gecikti (${inst.daysUntilDue * -1} gün)` : `${inst.daysUntilDue} gün kaldı`}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {canManagePlan ? (
+                                <div className="flex flex-wrap gap-2">
+                                    <button type="button" onClick={openPlanForm} className="rounded-xl border border-indigo-300 px-4 py-2 text-xs font-black text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:text-indigo-300">
+                                        Planı Yeniden Oluştur
+                                    </button>
+                                    <button type="button" onClick={handleCancelPlan} disabled={planSaving} className="rounded-xl border border-red-300 px-4 py-2 text-xs font-black text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-900/50 dark:text-red-300">
+                                        Planı İptal Et
+                                    </button>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : !showPlanForm ? (
+                        <div className="mt-2 text-xs font-bold text-slate-500">
+                            {remaining > 0.01 ? "Bu sipariş için henüz bir ödeme planı yok." : "Kalan borç yok."}
+                        </div>
+                    ) : null}
+
+                    {showPlanForm ? (
+                        <div className="mt-3 space-y-3 rounded-xl border border-indigo-200 bg-white p-4 dark:border-indigo-900/50 dark:bg-slate-900">
+                            <div className="flex items-center justify-between">
+                                <div className="text-xs font-black text-slate-500">Kalan borç: {fmtTL(remaining)}</div>
+                                <button type="button" onClick={() => setShowPlanForm(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+                            </div>
+                            <div className="flex gap-2">
+                                <button type="button" onClick={() => setPlanMode("single")} className={`rounded-xl px-4 py-2 text-xs font-black ${planMode === "single" ? "bg-indigo-600 text-white" : "border border-slate-300 text-slate-600 dark:border-slate-700"}`}>
+                                    Tek Vade
+                                </button>
+                                <button type="button" onClick={() => setPlanMode("multi")} className={`rounded-xl px-4 py-2 text-xs font-black ${planMode === "multi" ? "bg-indigo-600 text-white" : "border border-slate-300 text-slate-600 dark:border-slate-700"}`}>
+                                    Taksitlendir
+                                </button>
+                            </div>
+
+                            {planMode === "single" ? (
+                                <div>
+                                    <label className="mb-1 block text-xs font-bold text-slate-500">Vade Tarihi</label>
+                                    <input type="date" value={planSingleDueDate} onChange={(e) => setPlanSingleDueDate(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {planRows.map((row, idx) => (
+                                        <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                                            <input
+                                                type="number" min={0} placeholder={`${idx + 1}. taksit tutarı`}
+                                                value={row.amount}
+                                                onChange={(e) => setPlanRows((prev) => prev.map((r, i) => (i === idx ? { ...r, amount: e.target.value } : r)))}
+                                                className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                                            />
+                                            <input
+                                                type="date"
+                                                value={row.dueDate}
+                                                onChange={(e) => setPlanRows((prev) => prev.map((r, i) => (i === idx ? { ...r, dueDate: e.target.value } : r)))}
+                                                className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                                            />
+                                            <button type="button" onClick={() => setPlanRows((prev) => prev.filter((_, i) => i !== idx))} disabled={planRows.length <= 1} className="rounded-xl border border-slate-300 px-3 text-slate-500 disabled:opacity-40 dark:border-slate-700">
+                                                <Trash2 className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    <button type="button" onClick={() => setPlanRows((prev) => [...prev, { amount: "", dueDate: "" }])} className="text-xs font-black text-indigo-600 hover:underline">
+                                        + Taksit Ekle
+                                    </button>
+                                    <div className="text-xs font-bold text-slate-500">
+                                        Toplam: {fmtTL(planRows.reduce((s, r) => s + (Number(r.amount) || 0), 0))} / {fmtTL(remaining)}
+                                    </div>
+                                </div>
+                            )}
+
+                            {planError ? <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700 dark:bg-red-950/30 dark:text-red-300">{planError}</div> : null}
+
+                            <button
+                                type="button"
+                                onClick={() => submitPlan(!!paymentPlan)}
+                                disabled={planSaving}
+                                className="w-full rounded-xl bg-indigo-600 py-2.5 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60"
+                            >
+                                {planSaving ? "Kaydediliyor..." : paymentPlan ? "Planı Yeniden Oluştur" : "Planı Kaydet"}
+                            </button>
+                        </div>
+                    ) : null}
+                </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1809,16 +2165,51 @@ export default function OrderDetail() {
                                                 Henüz ürün satırı eklenmedi.
                                             </td>
                                         </tr>
-                                    ) : items.map(it => (
-                                        <tr key={it.id} className="group hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-all">
+                                    ) : items.map(it => {
+                                        const isRowExpanded = expandedItemIds.has(it.id);
+                                        const toggleRowExpand = () => {
+                                            setExpandedItemIds(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(it.id)) next.delete(it.id);
+                                                else next.add(it.id);
+                                                return next;
+                                            });
+                                        };
+                                        // Eski siparişlerde product_options/field_info hiç yazılmamış olabilir —
+                                        // güvenli fallback ile boş obje kabul edilir, hata vermez.
+                                        const fieldInfo = ((it.product_options as any)?.field_info ?? {}) as Record<string, string>;
+                                        const roundedWidth = (it.product_options as any)?.rounded_width_cm as number | undefined;
+                                        const roundedHeight = (it.product_options as any)?.rounded_height_cm as number | undefined;
+                                        const rowPhotos = itemPhotos[it.id] || [];
+                                        const detailRows: Array<[string, string]> = [
+                                            ["Gerçek Ölçü", `${it.width_cm ?? "—"}×${it.height_cm ?? "—"} cm`],
+                                            ...(roundedWidth != null && roundedHeight != null ? [["Yuvarlanmış Üretim Ölçüsü", `${roundedWidth}×${roundedHeight} cm`] as [string, string]] : []),
+                                            ["Adet", String(it.qty ?? 1)],
+                                            ...(fieldInfo.color_name ? [["Renk / Kartela Kodu", fieldInfo.color_name] as [string, string]] : []),
+                                            ...(fieldInfo.model_name ? [["Model", fieldInfo.model_name] as [string, string]] : []),
+                                            ...(fieldInfo.kumas_grubu ? [["Kumaş Grubu", fieldInfo.kumas_grubu] as [string, string]] : []),
+                                            ...(fieldInfo.mekanizma ? [["Mekanizma", fieldInfo.mekanizma] as [string, string]] : []),
+                                            ...(fieldInfo.zincir_yonu ? [["Zincir Yönü", fieldInfo.zincir_yonu] as [string, string]] : []),
+                                            ...(fieldInfo.kasa_tipi ? [["Kasa Tipi", fieldInfo.kasa_tipi] as [string, string]] : []),
+                                            ...(fieldInfo.kasa_rengi ? [["Kasa Rengi", fieldInfo.kasa_rengi] as [string, string]] : []),
+                                            ...(fieldInfo.kornis_tipi ? [["Korniş Tipi", fieldInfo.kornis_tipi] as [string, string]] : []),
+                                            ["Tedarikçi", supplierNameFromItem(it, suppliers)],
+                                        ];
+                                        return (
+                                        <Fragment key={it.id}>
+                                        <tr
+                                            className="group hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-all cursor-pointer"
+                                            onClick={toggleRowExpand}
+                                            title={isRowExpanded ? "Detayı kapat" : "Detayı göster"}
+                                        >
                                             <td className="px-4 py-5">
-                                                <div className="font-black text-slate-900 dark:text-white uppercase text-sm">{productLabel(it.product_type)}</div>
-                                                {(it.product_options?.model_name || it.product_options?.color_name) && (
-                                                    <div className="mt-0.5 text-[11px] text-slate-500">
-                                                        {[it.product_options.model_name, it.product_options.color_name].filter(Boolean).join(" / ")}
+                                                <div className="flex items-center gap-2">
+                                                    <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${isRowExpanded ? "rotate-180" : ""}`} />
+                                                    <div>
+                                                        <div className="font-black text-slate-900 dark:text-white uppercase text-sm">{productLabel(it.product_type)}</div>
+                                                        {it.note ? <div className="mt-1 text-[11px] text-slate-400">{it.note}</div> : null}
                                                     </div>
-                                                )}
-                                                {it.note ? <div className="mt-1 text-[11px] text-slate-400">{it.note}</div> : null}
+                                                </div>
                                             </td>
                                             <td className="px-4 py-5 text-sm font-bold text-slate-600">{it.room || "—"}</td>
                                             <td className="px-4 py-5 text-center font-mono text-xs">{it.width_cm}×{it.height_cm} <span className="text-slate-400">x{it.qty ?? 1}</span></td>
@@ -1826,7 +2217,7 @@ export default function OrderDetail() {
                                                 {it.supplier_id ? (
                                                     <button
                                                         type="button"
-                                                        onClick={() => nav(`/suppliers/${it.supplier_id}`)}
+                                                        onClick={(e) => { e.stopPropagation(); nav(`/suppliers/${it.supplier_id}`); }}
                                                         className="inline-flex items-center gap-1 text-primary-600 hover:underline"
                                                         title="Tedarikçiye git"
                                                     >
@@ -1847,17 +2238,57 @@ export default function OrderDetail() {
                                             {linesEditable && (
                                                 <td className="px-4 py-5 text-right">
                                                     <div className="inline-flex gap-1">
-                                                        <button type="button" onClick={() => startEditItem(it)} className="p-2 text-primary-600 hover:bg-primary-50 rounded-xl" title="Düzenle">
+                                                        <button type="button" onClick={(e) => { e.stopPropagation(); startEditItem(it); }} className="p-2 text-primary-600 hover:bg-primary-50 rounded-xl" title="Düzenle">
                                                             <Pencil className="w-4 h-4" />
                                                         </button>
-                                                        <button type="button" onClick={() => handleDeleteItem(it.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
+                                                        <button type="button" onClick={(e) => { e.stopPropagation(); handleDeleteItem(it.id); }} className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl" title="Sil">
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
                                                     </div>
                                                 </td>
                                             )}
                                         </tr>
-                                    ))}
+                                        {isRowExpanded && (
+                                            <tr className="bg-slate-50/60 dark:bg-slate-800/30">
+                                                <td colSpan={itemTableColSpan} className="px-6 py-5">
+                                                    <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+                                                        {detailRows.map(([label, value]) => (
+                                                            <div key={label} className="text-sm">
+                                                                <span className="font-bold text-slate-500 dark:text-slate-400">{label}:</span>{" "}
+                                                                <span className="text-slate-800 dark:text-slate-200">{value}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    {fieldInfo.field_notes ? (
+                                                        <div className="mt-3 text-sm">
+                                                            <span className="font-bold text-slate-500 dark:text-slate-400">Saha / Montaj Notu:</span>{" "}
+                                                            <span className="text-slate-800 dark:text-slate-200">{fieldInfo.field_notes}</span>
+                                                        </div>
+                                                    ) : null}
+                                                    {rowPhotos.length > 0 && (
+                                                        <div className="mt-4">
+                                                            <p className="mb-2 text-xs font-bold text-slate-600 dark:text-slate-400">Fotoğraflar</p>
+                                                            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8">
+                                                                {rowPhotos.map(photo => (
+                                                                    <a
+                                                                        key={photo.id}
+                                                                        href={photo.image_url}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="aspect-square rounded-lg border border-slate-300 overflow-hidden hover:border-primary-500 dark:border-slate-600"
+                                                                    >
+                                                                        <img src={photo.image_url} alt="Saha fotoğrafı" className="h-full w-full object-cover" />
+                                                                    </a>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </Fragment>
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>

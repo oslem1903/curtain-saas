@@ -25,6 +25,8 @@ type QuoteRow = {
   color_name: string | null;
   width_cm: number | null;
   height_cm: number | null;
+  rounded_width_cm: number | null;
+  rounded_height_cm: number | null;
   quantity: number | null;
   unit_price: number | null;
   supplier_id: string | null;
@@ -113,7 +115,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
 
       let { data, error } = await supabase
         .from("appointments")
-        .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,quantity,unit_price,supplier_id,supplier_unit_cost,note,customer:customers(name,phone)")
+        .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,quantity,unit_price,supplier_id,supplier_unit_cost,note,customer:customers(name,phone)")
         .eq("company_id", ctx.company_id)
         .eq("type", "measurement")
         .in("status", ["done", "cancelled"])
@@ -123,7 +125,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       if (error) {
         const fb = await supabase
           .from("appointments")
-          .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,quantity,unit_price,note,customer:customers(name,phone)")
+          .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,quantity,unit_price,note,customer:customers(name,phone)")
           .eq("company_id", ctx.company_id)
           .eq("type", "measurement")
           .in("status", ["done", "cancelled"])
@@ -201,6 +203,38 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         const isTulFon = row.product_type === "tul" || row.product_type === "fon";
         const productNote = [row.model_name, row.color_name, row.room_name].filter(Boolean).join(" / ") || null;
 
+        // MeasurementEntry.tsx'in appointments.note içine yazdığı AYNI etiketlerden
+        // ("Kumaş Grubu: X" vb.) ve [Photos:{...,fieldNotes}] bloğundan (aynı, zaten
+        // kanıtlanmış extractSahaBilgileriFromNote parser'ı ile) zengin saha bilgisini
+        // çıkarıp order_items.product_options.field_info altına taşıyoruz. Mevcut
+        // product_options.mechanism/model_name/color_name (OrderDetail'in kendi
+        // ekle/düzenle formunun kullandığı ayrı sözlük) ile ÇAKIŞMAMASI için ayrı,
+        // kendi alt-anahtarında tutuluyor. Fotoğraf olup olmamasından bağımsız.
+        const noteStr = row.note || "";
+        const kumasMatch = noteStr.match(/Kumaş Grubu: (.+)/);
+        const mekMatch = noteStr.match(/Mekanizma: (.+)/);
+        const zincirMatch = noteStr.match(/Zincir Yönü: (.+)/);
+        const kasaTMatch = noteStr.match(/Kasa Tipi: (.+)/);
+        const kasaRMatch = noteStr.match(/Kasa Rengi: (.+)/);
+        const kornisMatch = noteStr.match(/Korniş Tipi: (.+)/);
+        const sahaBilgileri = extractSahaBilgileriFromNote(noteStr);
+
+        const fieldInfo: Record<string, string> = {};
+        if (row.model_name) fieldInfo.model_name = row.model_name;
+        if (row.color_name) fieldInfo.color_name = row.color_name;
+        if (kumasMatch) fieldInfo.kumas_grubu = kumasMatch[1].trim();
+        if (mekMatch) fieldInfo.mekanizma = mekMatch[1].trim();
+        if (zincirMatch) fieldInfo.zincir_yonu = zincirMatch[1].trim();
+        if (kasaTMatch) fieldInfo.kasa_tipi = kasaTMatch[1].trim();
+        if (kasaRMatch) fieldInfo.kasa_rengi = kasaRMatch[1].trim();
+        if (kornisMatch) fieldInfo.kornis_tipi = kornisMatch[1].trim();
+        if (sahaBilgileri?.fieldNotes) fieldInfo.field_notes = sahaBilgileri.fieldNotes;
+
+        const productOptions: Record<string, any> = {};
+        if (row.rounded_width_cm != null) productOptions.rounded_width_cm = row.rounded_width_cm;
+        if (row.rounded_height_cm != null) productOptions.rounded_height_cm = row.rounded_height_cm;
+        if (Object.keys(fieldInfo).length > 0) productOptions.field_info = fieldInfo;
+
         return {
           company_id: ctx.company_id,
           product_type: row.product_type || "stor",
@@ -216,6 +250,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           supplier_unit_cost: supplierUnitCost,
           supplier_total_cost: supplierLineTotal,
           profit: lineTotal - supplierLineTotal,
+          product_options: productOptions,
         };
       });
 

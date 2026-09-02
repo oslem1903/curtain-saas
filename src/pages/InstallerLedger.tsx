@@ -15,6 +15,22 @@ type Employee = {
     allIds: string[];
 };
 
+type OrderItem = {
+    id: string;
+    product_type: string | null;
+    room: string | null;
+    width: number | null;
+    height: number | null;
+    qty: number | null;
+    photos: Array<{ url: string; code: string; note: string }>;
+    metadata?: {
+        color?: string;
+        model?: string;
+        fieldNotes?: string;
+        room?: string;
+    };
+};
+
 type Job = {
     id: string;
     assigned_staff_id: string | null;
@@ -34,6 +50,13 @@ type Job = {
     installer_fee: number | null;
     total_amount: number | null;
     notes: string | null;
+    order_id?: string;
+    items?: OrderItem[];
+    // Adet bazlı hakediş için GERÇEK ürün adedi — installation_jobs.qty DEĞİL,
+    // bu job'ın order_id'sine bağlı order_items.qty toplamı. null = hesaplanamadı
+    // (order_id yok ya da order_items boş) — bu durumda adet bazlı preview/kayıt
+    // ÜRETİLMEZ, açık hata verilir (bkz. updateDraft/update_installer_job_fee RPC).
+    realQty: number | null;
 };
 
 type InstallerTx = {
@@ -152,7 +175,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
 
             const jobsRes = await supabase
                 .from("installation_jobs")
-                .select("id, assigned_staff_id, status, scheduled_date, updated_at, customer_name, address, product_type, room, width, height, area_m2, qty, price_type, unit_rate, installer_fee, total_amount, notes")
+                .select("id, order_id, assigned_staff_id, status, scheduled_date, updated_at, customer_name, address, product_type, room, width, height, area_m2, qty, price_type, unit_rate, installer_fee, total_amount, notes")
                 .eq("company_id", ctx.company_id)
                 .order("updated_at", { ascending: false });
             let jobRows = jobsRes.data;
@@ -161,13 +184,139 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 // Hakediş kolonları henüz yok — çekirdek kolonlarla dene
                 const fb = await supabase
                     .from("installation_jobs")
-                    .select("id, assigned_staff_id, status, scheduled_date, customer_name, address, product_type, room, width, height, total_amount, notes")
+                    .select("id, order_id, assigned_staff_id, status, scheduled_date, customer_name, address, product_type, room, width, height, total_amount, notes")
                     .eq("company_id", ctx.company_id)
                     .order("scheduled_date", { ascending: false });
                 if (fb.error) throw fb.error;
                 jobRows = (fb.data ?? []).map((r: any) => ({ ...r, area_m2: null, qty: 1, price_type: "manuel", unit_rate: 0, installer_fee: 0 }));
                 setNeedsMigration(true);
             }
+
+            // Load per-item Saha Bilgileri (order_items + catalog_code_photos)
+            if (jobRows && jobRows.length > 0) {
+                const orderIds = Array.from(new Set((jobRows as any[]).map((j: any) => j.order_id).filter(Boolean)));
+                if (orderIds.length > 0) {
+                    const { data: itemRows, error: itemError } = await supabase
+                        .from("order_items")
+                        .select("id, order_id, product_type, room, width_cm, height_cm, qty")
+                        .in("order_id", orderIds);
+
+                    if (itemError) {
+                        console.warn("ORDER_ITEMS_LOAD_ERROR", itemError);
+                    } else if (itemRows && itemRows.length > 0) {
+                        // Build photosByItemId map
+                        const photosByItemId = new Map<string, Array<{ url: string; code: string; note: string }>>();
+                        const itemIds = (itemRows as any[]).map((r: any) => r.id).filter(Boolean);
+
+                        if (itemIds.length > 0) {
+                            const { data: photoRows, error: photoError } = await supabase
+                                .from("catalog_code_photos")
+                                .select("order_item_id, image_url, note, catalog_code")
+                                .in("order_item_id", itemIds);
+
+                            if (photoError) {
+                                console.warn("CATALOG_PHOTOS_LOAD_ERROR", photoError);
+                            } else if (photoRows && photoRows.length > 0) {
+                                for (const photoRow of photoRows) {
+                                    if (!photosByItemId.has(photoRow.order_item_id)) {
+                                        photosByItemId.set(photoRow.order_item_id, []);
+                                    }
+                                    photosByItemId.get(photoRow.order_item_id)!.push({
+                                        url: photoRow.image_url,
+                                        code: photoRow.catalog_code || "",
+                                        note: photoRow.note || "",
+                                    });
+                                }
+                            }
+                        }
+
+                        // Build itemsByOrderId map
+                        const itemsByOrderId = new Map<string, OrderItem[]>();
+                        (itemRows as any[]).forEach((itemRow: any) => {
+                            if (!itemRow.order_id) return;
+
+                            const photos = photosByItemId.get(itemRow.id) || [];
+                            const metadata: OrderItem["metadata"] = {};
+
+                            // Extract metadata from first photo's note JSON
+                            if (photos.length > 0 && photos[0].note) {
+                                try {
+                                    const parsed = typeof photos[0].note === "string"
+                                        ? JSON.parse(photos[0].note)
+                                        : photos[0].note;
+                                    if (parsed && typeof parsed === "object") {
+                                        metadata.color = parsed.color || "";
+                                        metadata.model = parsed.model || "";
+                                        metadata.fieldNotes = parsed.fieldNotes || "";
+                                        metadata.room = parsed.room || "";
+                                    }
+                                } catch {
+                                    // Ignore JSON parse errors
+                                }
+                            }
+
+                            const item: OrderItem = {
+                                id: itemRow.id,
+                                product_type: itemRow.product_type || null,
+                                room: itemRow.room || null,
+                                width: itemRow.width_cm || null,
+                                height: itemRow.height_cm || null,
+                                qty: itemRow.qty || null,
+                                photos,
+                                metadata,
+                            };
+
+                            if (!itemsByOrderId.has(itemRow.order_id)) {
+                                itemsByOrderId.set(itemRow.order_id, []);
+                            }
+                            itemsByOrderId.get(itemRow.order_id)!.push(item);
+                        });
+
+                        // Attach items to jobs
+                        (jobRows as any[]).forEach((r: any) => {
+                            if (r.order_id && itemsByOrderId.has(r.order_id)) {
+                                r.items = itemsByOrderId.get(r.order_id);
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Adet bazlı hakediş için GERÇEK ürün adedi: installation_jobs.qty güvenilir
+            // değil (canlı doğrulandı — bu kolon senkron değil, örn. 3 ve 2 adetlik gerçek
+            // işlerde sabit ≤1 kalıyor). Gerçek kaynak: job'ın order_id'sine bağlı TÜM
+            // order_items.qty toplamı — on_installation_job_completed trigger'ındaki
+            // SUM(qty) deseniyle aynı (bkz. supabase_installer_commission_triggers.sql).
+            // Sessiz fallback YOK: order_id yok ya da toplam <= 0 ise realQty null kalır;
+            // updateDraft() bu durumda adet bazlı preview üretmez, açık hata verir.
+            if (jobRows && jobRows.length > 0) {
+                // Her job için realQty daima number|null olsun (undefined asla) —
+                // aksi halde `realQty <= 0` guard'ı undefined için yanlışlıkla false
+                // dönüp adet bazlı hesaplamayı sessizce geçirebilir.
+                (jobRows as any[]).forEach((r: any) => { r.realQty = null; });
+                const orderIdsForQty = Array.from(new Set((jobRows as any[]).map((j: any) => j.order_id).filter(Boolean)));
+                if (orderIdsForQty.length > 0) {
+                    const { data: qtyRows, error: qtyError } = await supabase
+                        .from("order_items")
+                        .select("order_id, qty")
+                        .in("order_id", orderIdsForQty);
+                    if (qtyError) {
+                        console.warn("ORDER_ITEMS_QTY_LOAD_ERROR", qtyError);
+                    } else {
+                        const qtySumByOrderId = new Map<string, number>();
+                        (qtyRows ?? []).forEach((r: any) => {
+                            const cur = qtySumByOrderId.get(r.order_id) ?? 0;
+                            qtySumByOrderId.set(r.order_id, cur + Number(r.qty ?? 0));
+                        });
+                        (jobRows as any[]).forEach((r: any) => {
+                            r.realQty = r.order_id && qtySumByOrderId.has(r.order_id)
+                                ? qtySumByOrderId.get(r.order_id)!
+                                : null;
+                        });
+                    }
+                }
+            }
+
             setJobs((jobRows ?? []) as Job[]);
 
             // Hesap-sahibi montajcıları da dahil et: employees tablosunda OLMAYAN ama bir işe
@@ -246,6 +395,16 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         return earning ? Number(earning.total_earning ?? 0) : Number(job.installer_fee ?? 0);
     }, [earnings]);
 
+    // Satır düzenleniyorsa (drafts[job.id] var), Borç(+)/Bakiye/Genel Toplamlar
+    // için ANLIK ÖNİZLEME olarak taslak installer_fee kullanılır; aksi halde
+    // kanonik getJobEarningAmount()'a düşülür. Taslak yalnızca bu ekranın
+    // görünümünü besler, "Kaydet"e basılana kadar DB'ye yazılmaz.
+    const previewEarningAmount = useCallback((job: Job, installerIds: string[]) => {
+        const draft = drafts[job.id];
+        if (draft) return Number(draft.installer_fee || 0);
+        return getJobEarningAmount(job, installerIds);
+    }, [drafts, getJobEarningAmount]);
+
     // Muhasebe kuralları:
     //   Hakediş  = yalnızca TAMAMLANAN işlerin montaj bedelleri toplamı
     //   Ödenen   = ödemeler − iptaller
@@ -258,7 +417,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             const completedJobs = empJobs.filter((j) => j.status === "completed");
 
             // Automatic earned (from completed jobs) — installer_earnings kanonik, installer_fee fallback
-            const automaticEarned = completedJobs.reduce((a, j) => a + getJobEarningAmount(j, emp.allIds), 0);
+            const automaticEarned = completedJobs.reduce((a, j) => a + previewEarningAmount(j, emp.allIds), 0);
 
             // Manual earned (from manual, job'suz earnings entries — job-linked'ler automaticEarned'de sayıldı)
             const manualEarned = earnings
@@ -285,7 +444,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             };
         });
         return map;
-    }, [employees, jobsForInstaller, txs, earnings, getJobEarningAmount]);
+    }, [employees, jobsForInstaller, txs, earnings, previewEarningAmount]);
 
     function handleExportExcel(emp: Employee, lines: any[]) {
         if (lines.length === 0) return;
@@ -420,12 +579,25 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
     function updateDraft(job: Job, patch: Partial<{ price_type: string; unit_rate: string; installer_fee: string }>) {
         const current = draftFor(job);
         const next = { ...current, ...patch };
-        // m2 / adet tipinde tutar otomatik hesaplanır; sabit/manuel'de elle girilir
-        const rate = Number(next.unit_rate || 0);
-        if (patch.price_type === "m2" || (next.price_type === "m2" && patch.unit_rate !== undefined)) {
-            next.installer_fee = String(Math.round(jobArea(job) * rate * 100) / 100);
-        } else if (patch.price_type === "adet" || (next.price_type === "adet" && patch.unit_rate !== undefined)) {
-            next.installer_fee = String(Math.round(Math.max(1, Number(job.qty ?? 1)) * rate * 100) / 100);
+        // İŞ KURALI: montajcı hakedişi hiçbir modda otomatik/zorunlu bir formülle
+        // KİLİTLENMEZ. m2/adet + birim fiyat yalnızca kullanıcıya bir ÖNERİ
+        // hesaplar (mod veya birim fiyat değiştiğinde); ama Hakediş alanı HER
+        // ZAMAN doğrudan elle düzenlenebilir ve kullanıcının en son elle girdiği
+        // değer nihaidir — öneri onu asla geri yazmaz/ezmez. Doğrudan Hakediş
+        // düzenlemesinde (patch.installer_fee) bu blok hiç çalışmaz, next.installer_fee
+        // yukarıdaki spread'den (patch'in kendisinden) gelir.
+        if (patch.unit_rate !== undefined || patch.price_type !== undefined) {
+            const rate = Number(next.unit_rate || 0);
+            if (next.price_type === "m2") {
+                next.installer_fee = String(Math.round(jobArea(job) * rate * 100) / 100);
+            } else if (next.price_type === "adet" && job.realQty != null && job.realQty > 0) {
+                // GERÇEK ürün adedi = order_items.qty toplamı (bkz. Job.realQty
+                // yorumu). installation_jobs.qty KULLANILMAZ (senkron değil).
+                next.installer_fee = String(Math.round(job.realQty * rate * 100) / 100);
+            }
+            // adet modunda realQty geçersizse (null/<=0): öneri hesaplanmaz,
+            // installer_fee olduğu gibi kalır — kullanıcı Hakediş alanına
+            // istediği tutarı elle girebilir, bu asla engellenmez.
         }
         setDrafts((prev) => ({ ...prev, [job.id]: next }));
     }
@@ -434,18 +606,26 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         const d = draftFor(job);
         setRowSavingId(job.id);
         try {
-            const { error } = await supabase.from("installation_jobs").update({
-                price_type: d.price_type,
-                unit_rate: Number(d.unit_rate || 0),
-                installer_fee: Number(d.installer_fee || 0),
-            }).eq("id", job.id).eq("company_id", companyId);
+            const { data, error } = await supabase.rpc("update_installer_job_fee", {
+                p_company_id: companyId,
+                p_job_id: job.id,
+                p_price_type: d.price_type,
+                p_unit_rate: Number(d.unit_rate || 0),
+                p_installer_fee: Number(d.installer_fee || 0),
+            });
             if (error) throw error;
+            const result = data as { earning_id: string | null; job_id: string; total_earning: number; price_type: string; unit_rate: number };
             setJobs((prev) => prev.map((j) => j.id === job.id
-                ? { ...j, price_type: d.price_type, unit_rate: Number(d.unit_rate || 0), installer_fee: Number(d.installer_fee || 0) }
+                ? { ...j, price_type: result.price_type, unit_rate: Number(result.unit_rate), installer_fee: Number(result.total_earning) }
                 : j));
+            if (result.earning_id) {
+                setEarnings((prev) => prev.map((e) => e.id === result.earning_id
+                    ? { ...e, total_earning: Number(result.total_earning) }
+                    : e));
+            }
             setDrafts((prev) => { const n = { ...prev }; delete n[job.id]; return n; });
-        } catch {
-            setErr("Hakediş tutarı kaydedilemedi. Migration dosyasını çalıştırdığınızdan emin olun.");
+        } catch (e: any) {
+            setErr(e?.message || "Hakediş tutarı kaydedilemedi.");
         } finally {
             setRowSavingId(null);
         }
@@ -799,14 +979,50 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                         <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
                                                             {pendingJobs.map(job => {
                                                                 const st = STATUS_LABELS[String(job.status || "waiting")] ?? STATUS_LABELS.waiting;
+                                                                const hasItems = job.items && job.items.length > 0;
                                                                 return (
-                                                                    <tr key={job.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                                                    <tr key={job.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
                                                                         <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{formatDate(job.scheduled_date)}</td>
                                                                         <td className="px-3 py-2">
                                                                             <div className="font-bold text-slate-800 dark:text-slate-200">{job.customer_name || "—"}</div>
                                                                             <div className="text-xs text-slate-400 max-w-[200px] truncate">{job.address || ""}</div>
                                                                         </td>
-                                                                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{productLabel(job.product_type)}{job.room ? ` (${job.room})` : ""}</td>
+                                                                        <td className="px-3 py-2">
+                                                                            {hasItems ? (
+                                                                                <div className="space-y-2">
+                                                                                    {job.items!.map((item, idx) => (
+                                                                                        <div key={item.id} className="pb-2 border-b border-slate-100 dark:border-slate-700 last:pb-0 last:border-0">
+                                                                                            <div className="font-bold text-slate-800 dark:text-slate-200">
+                                                                                                {idx + 1}. {item.product_type ? productLabel(item.product_type) : "Ürün"}{item.room ? ` — ${item.room}` : ""}
+                                                                                            </div>
+                                                                                            <div className="text-xs text-slate-500 dark:text-slate-400">
+                                                                                                {item.width && item.height ? `${item.width}×${item.height} cm` : "—"}
+                                                                                            </div>
+                                                                                            {item.photos.length > 0 && (
+                                                                                                <div className="mt-1 flex gap-1">
+                                                                                                    {item.photos.slice(0, 2).map((photo, pidx) => (
+                                                                                                        <a key={pidx} href={photo.url} target="_blank" rel="noreferrer" className="h-6 w-6 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                                                                                            <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                                                                                        </a>
+                                                                                                    ))}
+                                                                                                    {item.photos.length > 2 && (
+                                                                                                        <div className="h-6 w-6 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-[8px] font-bold text-slate-500">+{item.photos.length - 2}</div>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            )}
+                                                                                            {item.metadata && (item.metadata.color || item.metadata.model) && (
+                                                                                                <div className="mt-1 space-y-0.5 text-xs">
+                                                                                                    {item.metadata.color && <div><span className="font-bold text-slate-600 dark:text-slate-400">Renk:</span> {item.metadata.color}</div>}
+                                                                                                    {item.metadata.model && <div><span className="font-bold text-slate-600 dark:text-slate-400">Model:</span> {item.metadata.model}</div>}
+                                                                                                </div>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    ))}
+                                                                                </div>
+                                                                            ) : (
+                                                                                <div className="text-slate-600 dark:text-slate-300">{productLabel(job.product_type)}{job.room ? ` (${job.room})` : ""}</div>
+                                                                            )}
+                                                                        </td>
                                                                         <td className="px-3 py-2 text-right">
                                                                             <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${st.cls}`}>{st.label}</span>
                                                                         </td>
@@ -830,7 +1046,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                 id: j.id,
                                                 date: j.scheduled_date || "",
                                                 desc: `Hakediş: ${j.customer_name || "Müşteri"} — ${productLabel(j.product_type)}`,
-                                                debit: getJobEarningAmount(j, emp.allIds),
+                                                debit: previewEarningAmount(j, emp.allIds),
                                                 credit: 0,
                                                 type: "job",
                                                 raw: j
@@ -1004,9 +1220,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                                         <input
                                                                                             type="number"
                                                                                             value={d!.installer_fee}
-                                                                                            disabled={isAuto ?? false}
                                                                                             onChange={(e) => updateDraft(l.raw, { installer_fee: e.target.value })}
-                                                                                            className="w-24 rounded border border-slate-200 bg-white px-2 py-1 text-right text-sm font-black text-red-600 focus:border-red-400 focus:ring-1 focus:ring-red-400 disabled:opacity-80 dark:border-slate-700 dark:bg-slate-900"
+                                                                                            className="w-24 rounded border border-slate-200 bg-white px-2 py-1 text-right text-sm font-black text-red-600 focus:border-red-400 focus:ring-1 focus:ring-red-400 dark:border-slate-700 dark:bg-slate-900"
                                                                                         />
                                                                                         {dirty && (
                                                                                             <button

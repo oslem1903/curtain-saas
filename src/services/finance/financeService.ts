@@ -17,6 +17,8 @@ import { createDefaultFinanceServiceDeps } from "./deps";
 import type { FinanceServiceDeps } from "./deps";
 import { createCustomerCollectionService } from "./customerCollectionService";
 import type { CustomerCollectionService } from "./customerCollectionService";
+import { createCustomerInstallmentService } from "./customerInstallmentService";
+import type { CustomerInstallmentService } from "./customerInstallmentService";
 import { createSupplierPaymentService } from "./supplierPaymentService";
 import type { SupplierPaymentService } from "./supplierPaymentService";
 import { createInstallerPaymentService } from "./installerPaymentService";
@@ -24,6 +26,7 @@ import type { InstallerPaymentService } from "./installerPaymentService";
 
 export interface FinanceService {
   customerCollections: CustomerCollectionService;
+  customerInstallments: CustomerInstallmentService;
   supplierPayments: SupplierPaymentService;
   installerPayments: InstallerPaymentService;
 }
@@ -35,6 +38,7 @@ export interface FinanceService {
 export function createFinanceService(deps: FinanceServiceDeps = createDefaultFinanceServiceDeps()): FinanceService {
   return {
     customerCollections: createCustomerCollectionService(deps),
+    customerInstallments: createCustomerInstallmentService(deps),
     supplierPayments: createSupplierPaymentService(deps),
     installerPayments: createInstallerPaymentService(deps),
   };

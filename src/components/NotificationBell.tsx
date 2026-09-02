@@ -15,6 +15,7 @@ import {
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { cn } from "../utils/cn";
+import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
 
 type Notification = {
     id: string;
@@ -117,6 +118,17 @@ export default function NotificationBell({ userId }: { userId: string }) {
                 });
             }
 
+            // order_payment_plans (aktif) — plani olan siparisler icin legacy
+            // payment_due_date bildirimi ASAGIDA atlanir (cift bildirim olmasin
+            // diye); onun yerine taksit bazli gecikme bildirimi kullanilir.
+            const plansRes = await supabase
+                .from("order_payment_plans")
+                .select("id,order_id,opening_total_amount,opening_paid_amount,opening_remaining_amount,status,orders(total_amount,customer:customers(name))")
+                .eq("company_id", ctx.company_id)
+                .eq("status", "active");
+            const planRowsRaw = !plansRes.error ? ((plansRes.data ?? []) as any[]) : [];
+            const planOrderIdSet = new Set(planRowsRaw.map((p) => p.order_id));
+
             const dueRes = await supabase
                 .from("orders")
                 .select("id,remaining_amount,total_amount,paid_amount,payment_due_date,customer:customers(name)")
@@ -127,6 +139,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
 
             if (!dueRes.error) {
                 (dueRes.data ?? []).forEach((row: any) => {
+                    if (planOrderIdSet.has(row.id)) return;
                     const remaining = Number(row.remaining_amount ?? Math.max(Number(row.total_amount ?? 0) - Number(row.paid_amount ?? 0), 0));
                     if (remaining <= 0.01) return;
                     const cust = Array.isArray(row.customer) ? row.customer[0] : row.customer;
@@ -139,6 +152,58 @@ export default function NotificationBell({ userId }: { userId: string }) {
                         target: "#/accounting",
                     });
                 });
+            }
+
+            if (planRowsRaw.length > 0) {
+                try {
+                    const plans = planRowsRaw.map((p) => ({
+                        id: p.id,
+                        order_id: p.order_id,
+                        opening_total_amount: Number(p.opening_total_amount ?? 0),
+                        opening_paid_amount: Number(p.opening_paid_amount ?? 0),
+                        opening_remaining_amount: Number(p.opening_remaining_amount ?? 0),
+                        status: p.status,
+                    }));
+                    const planOrderIds = plans.map((p) => p.order_id);
+                    const customerByOrder: Record<string, string> = {};
+                    const liveTotals: Record<string, number> = {};
+                    planRowsRaw.forEach((p) => {
+                        const orderEmbed = Array.isArray(p.orders) ? p.orders[0] : p.orders;
+                        const cust = Array.isArray(orderEmbed?.customer) ? orderEmbed.customer[0] : orderEmbed?.customer;
+                        customerByOrder[p.order_id] = cust?.name || "Müşteri";
+                        liveTotals[p.order_id] = Number(orderEmbed?.total_amount ?? p.opening_total_amount ?? 0);
+                    });
+                    const planIds = plans.map((p) => p.id);
+                    const [instRes, planPaymentsRes] = await Promise.all([
+                        supabase.from("order_installments").select("id,plan_id,order_id,installment_no,amount,due_date").in("plan_id", planIds),
+                        supabase.from("payments").select("order_id,amount,reverses_payment_id").in("order_id", planOrderIds),
+                    ]);
+                    const installmentsByPlan: Record<string, any[]> = {};
+                    (instRes.data ?? []).forEach((row: any) => {
+                        if (!installmentsByPlan[row.plan_id]) installmentsByPlan[row.plan_id] = [];
+                        installmentsByPlan[row.plan_id].push(row);
+                    });
+                    const paymentsByOrder: Record<string, any[]> = {};
+                    (planPaymentsRes.data ?? []).forEach((row: any) => {
+                        if (!paymentsByOrder[row.order_id]) paymentsByOrder[row.order_id] = [];
+                        paymentsByOrder[row.order_id].push(row);
+                    });
+                    const { rows: planDueRows } = buildDashboardDueRows(plans, installmentsByPlan, paymentsByOrder, liveTotals, todayDateOnly());
+                    planDueRows
+                        .filter((row) => row.dueDate <= today)
+                        .forEach((row) => {
+                            items.push({
+                                id: `collection-${row.orderId}-inst-${row.installmentNo}`,
+                                title: "Geciken tahsilat",
+                                message: `${customerByOrder[row.orderId] || "Müşteri"} - Taksit ${row.installmentNo}/${row.totalInstallments} - ${new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(row.remainingAmount)}`,
+                                type: "error",
+                                created_at: new Date(`${row.dueDate}T12:00:00`).toISOString(),
+                                target: "#/accounting",
+                            });
+                        });
+                } catch {
+                    // installments util yuklenemedi — sessizce gec, sadece bu bildirim eksik kalir
+                }
             }
 
             const supplierRes = await supabase

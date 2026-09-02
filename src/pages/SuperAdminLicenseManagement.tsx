@@ -8,10 +8,14 @@ type Company = {
     id: string;
     name: string;
     subscription_plan: string;
-    plan_status: string;
+    subscription_status: string;
     trial_ends_at: string | null;
+    license_expires_at: string | null;
     max_users: number | null;
     max_devices: number | null;
+    payment_reference: string | null;
+    billing_note: string | null;
+    created_at?: string | null;
 };
 
 export default function SuperAdminLicenseManagement() {
@@ -19,7 +23,16 @@ export default function SuperAdminLicenseManagement() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [editing, setEditing] = useState<string | null>(null);
-    const [editValues, setEditValues] = useState({ max_users: 0, max_devices: 0, trial_days: 0 });
+    const [editValues, setEditValues] = useState({
+        max_users: 0,
+        max_devices: 0,
+        trial_days: 0,
+        subscription_status: "trial",
+        subscription_plan: "solo",
+        license_expires_at: "",
+        payment_reference: "",
+        billing_note: "",
+    });
 
     useEffect(() => {
         loadCompanies();
@@ -45,7 +58,20 @@ export default function SuperAdminLicenseManagement() {
 
     async function updateLicense(companyId: string) {
         try {
-            const { error } = await supabase
+            // Update subscription and license info via RPC
+            const { error: rpcError } = await supabase.rpc("super_admin_update_company_license", {
+                p_company_id: companyId,
+                p_subscription_status: editValues.subscription_status,
+                p_subscription_plan: editValues.subscription_plan || null,
+                p_license_expires_at: editValues.license_expires_at ? new Date(editValues.license_expires_at).toISOString() : null,
+                p_payment_reference: editValues.payment_reference || null,
+                p_billing_note: editValues.billing_note || null,
+            });
+
+            if (rpcError) throw rpcError;
+
+            // Update device/user limits directly
+            const { error: limitError } = await supabase
                 .from("companies")
                 .update({
                     max_users: editValues.max_users || null,
@@ -53,7 +79,7 @@ export default function SuperAdminLicenseManagement() {
                 })
                 .eq("id", companyId);
 
-            if (error) throw error;
+            if (limitError) throw limitError;
 
             // If trial days specified, extend trial
             if (editValues.trial_days > 0) {
@@ -122,7 +148,7 @@ export default function SuperAdminLicenseManagement() {
                                             {company.name}
                                         </h3>
                                         <p className="text-sm text-slate-600 dark:text-slate-400">
-                                            Paket: {company.subscription_plan} • Status: {company.plan_status}
+                                            Paket: {company.subscription_plan} • Status: {company.subscription_status}
                                         </p>
                                     </div>
                                     <button
@@ -132,6 +158,11 @@ export default function SuperAdminLicenseManagement() {
                                                 max_users: company.max_users || 0,
                                                 max_devices: company.max_devices || 0,
                                                 trial_days: 0,
+                                                subscription_status: company.subscription_status || "trial",
+                                                subscription_plan: company.subscription_plan || "solo",
+                                                license_expires_at: company.license_expires_at || "",
+                                                payment_reference: company.payment_reference || "",
+                                                billing_note: company.billing_note || "",
                                             });
                                         }}
                                         className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-700"
@@ -142,7 +173,76 @@ export default function SuperAdminLicenseManagement() {
 
                                 {editing === company.id ? (
                                     <div className="space-y-4">
-                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                            <div>
+                                                <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                    Subscription Status
+                                                </label>
+                                                <select
+                                                    value={editValues.subscription_status}
+                                                    onChange={(e) =>
+                                                        setEditValues({ ...editValues, subscription_status: e.target.value })
+                                                    }
+                                                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                                >
+                                                    <option value="trial">Trial</option>
+                                                    <option value="active">Active</option>
+                                                    <option value="suspended">Suspended</option>
+                                                    <option value="expired">Expired</option>
+                                                    <option value="cancelled">Cancelled</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                    <Calendar size={16} className="inline mr-1" />
+                                                    Paket
+                                                </label>
+                                                <select
+                                                    value={editValues.subscription_plan}
+                                                    onChange={(e) =>
+                                                        setEditValues({ ...editValues, subscription_plan: e.target.value })
+                                                    }
+                                                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                                >
+                                                    <option value="starter">Başlangıç</option>
+                                                    <option value="solo">Solo</option>
+                                                    <option value="pro">Pro</option>
+                                                    <option value="enterprise">Enterprise</option>
+                                                    <option value="lifetime">Lifetime</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                            <div>
+                                                <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                    <Calendar size={16} className="inline mr-1" />
+                                                    License Bitiş Tarihi
+                                                </label>
+                                                <input
+                                                    type="date"
+                                                    value={editValues.license_expires_at.split("T")[0] || ""}
+                                                    onChange={(e) =>
+                                                        setEditValues({ ...editValues, license_expires_at: e.target.value })
+                                                    }
+                                                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                    Ödeme Referansı
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={editValues.payment_reference}
+                                                    onChange={(e) =>
+                                                        setEditValues({ ...editValues, payment_reference: e.target.value })
+                                                    }
+                                                    placeholder="e.g., INV-2026-001"
+                                                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                             <div>
                                                 <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
                                                     <Users size={16} className="inline mr-1" />
@@ -173,21 +273,35 @@ export default function SuperAdminLicenseManagement() {
                                                     className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
                                                 />
                                             </div>
-                                            <div>
-                                                <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
-                                                    <Calendar size={16} className="inline mr-1" />
-                                                    Trial Gün Ekle
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    value={editValues.trial_days}
-                                                    onChange={(e) =>
-                                                        setEditValues({ ...editValues, trial_days: parseInt(e.target.value) || 0 })
-                                                    }
-                                                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
-                                                />
-                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                <Calendar size={16} className="inline mr-1" />
+                                                Trial Gün Ekle (Opsiyonel)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                value={editValues.trial_days}
+                                                onChange={(e) =>
+                                                    setEditValues({ ...editValues, trial_days: parseInt(e.target.value) || 0 })
+                                                }
+                                                className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
+                                                Muhasebe Notu
+                                            </label>
+                                            <textarea
+                                                value={editValues.billing_note}
+                                                onChange={(e) =>
+                                                    setEditValues({ ...editValues, billing_note: e.target.value })
+                                                }
+                                                placeholder="İç notlar ve referanslar..."
+                                                rows={2}
+                                                className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                                            />
                                         </div>
                                         <div className="flex gap-2">
                                             <button
@@ -205,13 +319,49 @@ export default function SuperAdminLicenseManagement() {
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                                            <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
+                                                Status
+                                            </p>
+                                            <p className="text-sm font-black text-slate-900 dark:text-white">
+                                                {company.subscription_status || "trial"}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                                            <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
+                                                Trial Bitiş
+                                            </p>
+                                            <p className="text-sm font-medium text-slate-900 dark:text-white">
+                                                {company.trial_ends_at
+                                                    ? format(new Date(company.trial_ends_at), "d MMM yyyy", { locale: tr })
+                                                    : "-"}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                                            <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
+                                                License Bitiş
+                                            </p>
+                                            <p className="text-sm font-medium text-slate-900 dark:text-white">
+                                                {company.license_expires_at
+                                                    ? format(new Date(company.license_expires_at), "d MMM yyyy", { locale: tr })
+                                                    : "-"}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                                            <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
+                                                Referans
+                                            </p>
+                                            <p className="text-sm font-medium text-slate-900 dark:text-white">
+                                                {company.payment_reference || "-"}
+                                            </p>
+                                        </div>
                                         <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
                                             <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
                                                 Max Kullanıcı
                                             </p>
                                             <p className="text-lg font-black text-slate-900 dark:text-white">
-                                                {company.max_users || "Sınırsız"}
+                                                {company.max_users || "∞"}
                                             </p>
                                         </div>
                                         <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
@@ -219,19 +369,19 @@ export default function SuperAdminLicenseManagement() {
                                                 Max Cihaz
                                             </p>
                                             <p className="text-lg font-black text-slate-900 dark:text-white">
-                                                {company.max_devices || "Sınırsız"}
+                                                {company.max_devices || "∞"}
                                             </p>
                                         </div>
-                                        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
-                                            <p className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase mb-1">
-                                                Deneme Bitiş
-                                            </p>
-                                            <p className="text-sm font-medium text-slate-900 dark:text-white">
-                                                {company.trial_ends_at
-                                                    ? format(new Date(company.trial_ends_at), "d MMM yyyy", { locale: tr })
-                                                    : "Aktif"}
-                                            </p>
-                                        </div>
+                                        {company.billing_note && (
+                                            <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-3 lg:col-span-2">
+                                                <p className="text-xs font-black text-blue-600 dark:text-blue-400 uppercase mb-1">
+                                                    Muhasebe Notu
+                                                </p>
+                                                <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                                                    {company.billing_note}
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

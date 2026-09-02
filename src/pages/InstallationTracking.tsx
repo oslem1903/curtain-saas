@@ -32,6 +32,7 @@ type JobRow = {
   order_id: string;
   customer_id: string | null;
   assigned_staff_id: string | null;
+  is_internal_installation?: boolean;
   status: InstallationStatus | string | null;
   scheduled_date: string | null;
   scheduled_time: string | null;
@@ -73,9 +74,9 @@ const STATUS_OPTIONS: Array<{ value: InstallationStatus; label: string; orderSta
 //   bekleyen   → tamamlanmamış + montajcı atanmamış
 type InstallationTab = "bekleyen" | "atanan" | "tamamlanan";
 
-function jobTab(row: { status?: string | null; assigned_staff_id?: string | null }): InstallationTab {
+function jobTab(row: { status?: string | null; assigned_staff_id?: string | null; is_internal_installation?: boolean }): InstallationTab {
   if (normalizeOrderStatus(row.status) === ORDER_STATUS.COMPLETED) return "tamamlanan";
-  return row.assigned_staff_id ? "atanan" : "bekleyen";
+  return (row.assigned_staff_id || row.is_internal_installation) ? "atanan" : "bekleyen";
 }
 
 function isMissingInstallationTable(error: unknown) {
@@ -186,7 +187,7 @@ export default function InstallationTracking() {
       const ctx = await getEffectiveTenantContext();
       const { data, error } = await supabase
         .from("installation_jobs")
-        .select("id,company_id,order_id,customer_id,assigned_staff_id,status,scheduled_date,scheduled_time,customer_name,phone,address,product_type,room,width,height,total_amount,notes,created_at,updated_at")
+        .select("id,company_id,order_id,customer_id,assigned_staff_id,is_internal_installation,status,scheduled_date,scheduled_time,customer_name,phone,address,product_type,room,width,height,total_amount,notes,created_at,updated_at")
         .eq("company_id", ctx.company_id)
         .order("created_at", { ascending: false });
 
@@ -498,7 +499,18 @@ export default function InstallationTracking() {
 
   async function submitInstallerModal() {
     if (!modalRow || !modalStaff) return;
-    await updateJob(modalRow, { assigned_staff_id: modalStaff, status: "assigned" }, "montaj_planlandi");
+    // is_internal_installation:false — daha önce "Firma Kendisi" seçilmişse,
+    // gerçek bir montajcıya atama yapıldığında bu işareti temizler.
+    await updateJob(modalRow, { assigned_staff_id: modalStaff, is_internal_installation: false, status: "assigned" }, "montaj_planlandi");
+    closeModal();
+  }
+
+  // Firma kendi montajını yapacaksa: dış montajcı ataması YOK, installer_earnings/
+  // installer_transactions hiç oluşmasın (bkz. migration 007). Yalnızca henüz
+  // tamamlanmamış işlerde kullanılabilir (bkz. modal JSX'teki koşul).
+  async function submitInternalModal() {
+    if (!modalRow) return;
+    await updateJob(modalRow, { assigned_staff_id: null, is_internal_installation: true, status: "assigned" }, "montaj_planlandi");
     closeModal();
   }
 
@@ -517,6 +529,7 @@ export default function InstallationTracking() {
 
 
   function assignedName(row: JobRow) {
+    if (row.is_internal_installation) return "🏠 Firma Kendisi";
     if (!row.assigned_staff_id) return "Atanmadı";
     const hit = staff.find((item) =>
       item.id === row.assigned_staff_id || (item.altIds ?? []).includes(row.assigned_staff_id as string));
@@ -590,6 +603,16 @@ export default function InstallationTracking() {
               <button onClick={closeModal} className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold hover:bg-slate-50">İptal</button>
               <button onClick={submitInstallerModal} disabled={!modalStaff || busyId === modalRow.id} className="flex-1 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-black text-white hover:bg-primary-700 disabled:opacity-60">Kaydet</button>
             </div>
+            {modalRow.status !== "completed" && (
+              <button
+                type="button"
+                onClick={submitInternalModal}
+                disabled={busyId === modalRow.id}
+                className="mt-3 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                🏠 Firma Kendisi Montaj Yapacak
+              </button>
+            )}
           </div>
         </div>
       )}

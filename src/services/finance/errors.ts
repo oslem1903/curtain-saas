@@ -13,7 +13,9 @@ export type FinanceErrorCode =
   | "overpayment_blocked"
   | "unauthorized"
   | "db_error"
-  | "not_implemented";
+  | "not_implemented"
+  | "invalid_installments"
+  | "plan_exists";
 
 export class FinanceError extends Error {
   readonly code: FinanceErrorCode;

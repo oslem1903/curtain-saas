@@ -18,6 +18,8 @@ import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { logAction } from "../utils/audit";
 import { createFinanceService } from "../services/finance/index";
+import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
+import type { OrderPaymentPlan, OrderInstallment, LedgerPayment } from "../utils/installments";
 
 
 function startOfDay(d: Date) {
@@ -280,6 +282,7 @@ export const Accounting = () => {
     const [monthPaymentRows, setMonthPaymentRows] = useState<IncomeRow[]>([]);
     const [supplierPaymentRows, setSupplierPaymentRows] = useState<any[]>([]);
     const [orderDueDates, setOrderDueDates] = useState<Record<string, string>>({});
+    const [orderInstallmentBadges, setOrderInstallmentBadges] = useState<Record<string, { no: number; total: number; inconsistent: boolean }>>({});
     const [installerDebtTotal, setInstallerDebtTotal] = useState(0);
     const [collectionDueDate, setCollectionDueDate] = useState("");
     const [supplierPaymentDueDate, setSupplierPaymentDueDate] = useState("");
@@ -671,6 +674,66 @@ export const Accounting = () => {
                 }
             } catch {
                 // payment_due_date kolonu yok — vade özelliği migration sonrası aktifleşir
+            }
+
+            // order_payment_plans (aktif) — payment_due_date'in taksitli/vadeli
+            // devami. Planli siparislerde ayni orderDueDates map'inin uzerine
+            // en yakin odenmemis taksidin vadesi yazilir (cift gosterim olmaz).
+            try {
+                const plansRes = await supabase
+                    .from("order_payment_plans")
+                    .select("id,order_id,opening_total_amount,opening_paid_amount,opening_remaining_amount,status,orders(total_amount)")
+                    .eq("company_id", cid)
+                    .eq("status", "active");
+                if (!plansRes.error) {
+                    const planRowsRaw = (plansRes.data ?? []) as any[];
+                    const plans: OrderPaymentPlan[] = planRowsRaw.map((p) => ({
+                        id: p.id,
+                        order_id: p.order_id,
+                        opening_total_amount: Number(p.opening_total_amount ?? 0),
+                        opening_paid_amount: Number(p.opening_paid_amount ?? 0),
+                        opening_remaining_amount: Number(p.opening_remaining_amount ?? 0),
+                        status: p.status,
+                    }));
+                    const planOrderIds = plans.map((p) => p.order_id);
+                    const liveTotals: Record<string, number> = {};
+                    planRowsRaw.forEach((p) => {
+                        const orderEmbed = Array.isArray(p.orders) ? p.orders[0] : p.orders;
+                        liveTotals[p.order_id] = Number(orderEmbed?.total_amount ?? p.opening_total_amount ?? 0);
+                    });
+
+                    if (planOrderIds.length > 0) {
+                        const planIds = plans.map((p) => p.id);
+                        const [instRes, planPaymentsRes] = await Promise.all([
+                            supabase.from("order_installments").select("id,plan_id,order_id,installment_no,amount,due_date").in("plan_id", planIds),
+                            supabase.from("payments").select("order_id,amount,reverses_payment_id").in("order_id", planOrderIds),
+                        ]);
+                        const installmentsByPlan: Record<string, OrderInstallment[]> = {};
+                        (instRes.data ?? []).forEach((row: any) => {
+                            if (!installmentsByPlan[row.plan_id]) installmentsByPlan[row.plan_id] = [];
+                            installmentsByPlan[row.plan_id].push(row as OrderInstallment);
+                        });
+                        const paymentsByOrder: Record<string, LedgerPayment[]> = {};
+                        (planPaymentsRes.data ?? []).forEach((row: any) => {
+                            if (!paymentsByOrder[row.order_id]) paymentsByOrder[row.order_id] = [];
+                            paymentsByOrder[row.order_id].push(row as LedgerPayment);
+                        });
+
+                        const { rows: planDueRows } = buildDashboardDueRows(plans, installmentsByPlan, paymentsByOrder, liveTotals, todayDateOnly());
+                        const nextDueByOrder: Record<string, string> = {};
+                        const badgeByOrder: Record<string, { no: number; total: number; inconsistent: boolean }> = {};
+                        planDueRows.forEach((row) => {
+                            if (!nextDueByOrder[row.orderId]) {
+                                nextDueByOrder[row.orderId] = row.dueDate;
+                                badgeByOrder[row.orderId] = { no: row.installmentNo, total: row.totalInstallments, inconsistent: row.isInconsistent };
+                            }
+                        });
+                        setOrderDueDates((prev) => ({ ...prev, ...nextDueByOrder }));
+                        setOrderInstallmentBadges(badgeByOrder);
+                    }
+                }
+            } catch {
+                // order_payment_plans/order_installments henuz yoksa sessizce gec
             }
 
             const employeeRes = await supabase
@@ -2717,6 +2780,7 @@ export const Accounting = () => {
                                                 const isSelected = collectionOrderId === o.id;
                                                 const due = orderDueDates[o.id];
                                                 const isOverdue = due ? due < todayStr : false;
+                                                const badge = orderInstallmentBadges[o.id];
                                                 return (
                                                     <tr key={o.id} className={`border-b border-slate-50 dark:border-slate-800 ${isSelected ? "bg-amber-50 dark:bg-amber-950/10" : i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"}`}>
                                                         <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{cust?.name || "—"}</td>
@@ -2732,6 +2796,11 @@ export const Accounting = () => {
                                                             ) : (
                                                                 <span className="text-slate-400 text-xs">—</span>
                                                             )}
+                                                            {badge ? (
+                                                                <div className="mt-1 text-[10px] font-bold text-indigo-500">
+                                                                    Taksit {badge.no}/{badge.total}{badge.inconsistent ? " ⚠" : ""}
+                                                                </div>
+                                                            ) : null}
                                                         </td>
                                                         <td className="px-4 py-3 text-right">
                                                             <button

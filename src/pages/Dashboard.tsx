@@ -14,11 +14,17 @@ import {
   ShoppingCart,
   Truck,
   Users,
+  Clock,
+  AlertCircle,
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
+import { useAuth } from "../context/AuthContext";
 import { cn } from "../utils/cn";
+import OnboardingWizard from "../components/OnboardingWizard";
 import { DemoDataGenerator } from "../components/DemoDataGenerator";
+import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
+import type { OrderPaymentPlan, OrderInstallment, LedgerPayment } from "../utils/installments";
 
 type AppointmentRow = {
   id: string;
@@ -48,6 +54,9 @@ type DueRow = {
   amount: number;
   due: string;
   target: string;
+  installmentNo?: number;
+  totalInstallments?: number;
+  isInconsistent?: boolean;
 };
 
 type SupplierDueRow = {
@@ -88,6 +97,12 @@ type DashboardData = {
   completedInstallations: number;
   monthSales: number;
   monthCost: number;
+};
+
+type TrialInfo = {
+  daysLeft: number | null;
+  trialEndsAt: string | null;
+  isExpired: boolean;
 };
 
 const emptyData: DashboardData = {
@@ -309,9 +324,12 @@ function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any
 export const Dashboard = () => {
   const navigate = useNavigate();
   const { effectiveRole: role, realRole, viewingUserId } = useRole();
+  const { company } = useAuth();
   const [data, setData] = useState<DashboardData>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [trialInfo, setTrialInfo] = useState<TrialInfo | null>(null);
 
   const go = useCallback((path: string, state?: object) => {
     navigate(path, state ? { state } : undefined);
@@ -351,6 +369,7 @@ export const Dashboard = () => {
         incomeRes,
         completedJobsRes,
         monthOrdersRes,
+        plansRes,
       ] = await Promise.allSettled([
         appointmentQuery.order("start_at", { ascending: true }),
         supabase.from("installation_jobs").select("id,order_id,customer_name,status,scheduled_date,scheduled_time,total_amount").eq("company_id", ctx.company_id).gte("scheduled_date", todayStr).lte("scheduled_date", weekEnd).order("scheduled_date", { ascending: true }),
@@ -361,6 +380,7 @@ export const Dashboard = () => {
         supabase.from("income").select("amount,income_date").eq("company_id", ctx.company_id).gte("income_date", todayStart.toISOString()).lte("income_date", todayEnd.toISOString()),
         supabase.from("installation_jobs").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id).eq("status", "completed"),
         supabase.from("orders").select("id,total_amount,created_at").eq("company_id", ctx.company_id).gte("created_at", monthStart.toISOString()).lte("created_at", monthEnd.toISOString()),
+        supabase.from("order_payment_plans").select("id,order_id,opening_total_amount,opening_paid_amount,opening_remaining_amount,status,orders(total_amount,customer:customers(name))").eq("company_id", ctx.company_id).eq("status", "active"),
       ]);
 
       const appointments = appointmentsRes.status === "fulfilled" && !appointmentsRes.value.error ? (appointmentsRes.value.data ?? []) as AppointmentRow[] : [];
@@ -383,6 +403,59 @@ export const Dashboard = () => {
         }
       }
 
+      // order_payment_plans (aktif) — payment_due_date'in taksitli/vadeli
+      // devami. Bir siparisin aktif plani varsa, asagida legacy
+      // payment_due_date okumasi o siparis icin BILINCLI olarak devre disi
+      // birakilir (cift gosterim olmasin diye).
+      const planRows = plansRes.status === "fulfilled" && !plansRes.value.error ? (plansRes.value.data ?? []) as any[] : [];
+      const plans: OrderPaymentPlan[] = planRows.map((p) => ({
+        id: p.id,
+        order_id: p.order_id,
+        opening_total_amount: Number(p.opening_total_amount ?? 0),
+        opening_paid_amount: Number(p.opening_paid_amount ?? 0),
+        opening_remaining_amount: Number(p.opening_remaining_amount ?? 0),
+        status: p.status,
+      }));
+      const planOrderIds = plans.map((p) => p.order_id);
+      const planOrderIdSet = new Set(planOrderIds);
+      const planOrderCustomerNames: Record<string, string> = {};
+      const planOrderLiveTotals: Record<string, number> = {};
+      planRows.forEach((p) => {
+        const orderEmbed = Array.isArray(p.orders) ? p.orders[0] : p.orders;
+        planOrderCustomerNames[p.order_id] = pickOne(orderEmbed?.customer)?.name || "Müşteri";
+        planOrderLiveTotals[p.order_id] = Number(orderEmbed?.total_amount ?? p.opening_total_amount ?? 0);
+      });
+
+      const installmentsByPlan: Record<string, OrderInstallment[]> = {};
+      const paymentsByOrder: Record<string, LedgerPayment[]> = {};
+      if (planOrderIds.length > 0) {
+        const planIds = plans.map((p) => p.id);
+        const [instRes, planPaymentsRes] = await Promise.all([
+          supabase.from("order_installments").select("id,plan_id,order_id,installment_no,amount,due_date").in("plan_id", planIds),
+          supabase.from("payments").select("order_id,amount,reverses_payment_id").in("order_id", planOrderIds),
+        ]);
+        (instRes.data ?? []).forEach((row: any) => {
+          if (!installmentsByPlan[row.plan_id]) installmentsByPlan[row.plan_id] = [];
+          installmentsByPlan[row.plan_id].push(row as OrderInstallment);
+        });
+        (planPaymentsRes.data ?? []).forEach((row: any) => {
+          if (!paymentsByOrder[row.order_id]) paymentsByOrder[row.order_id] = [];
+          paymentsByOrder[row.order_id].push(row as LedgerPayment);
+        });
+      }
+
+      const { rows: planDueRowsRaw } = buildDashboardDueRows(plans, installmentsByPlan, paymentsByOrder, planOrderLiveTotals, todayDateOnly());
+      const planDueRows: DueRow[] = planDueRowsRaw.map((r) => ({
+        id: `${r.orderId}-inst-${r.installmentNo}`,
+        name: planOrderCustomerNames[r.orderId] || "Müşteri",
+        amount: r.remainingAmount,
+        due: r.dueDate,
+        target: "/accounting",
+        installmentNo: r.installmentNo,
+        totalInstallments: r.totalInstallments,
+        isInconsistent: r.isInconsistent,
+      }));
+
       const todayMeasurements = appointments.filter((a) => {
         const iso = isoOf(a);
         if (!iso) return false;
@@ -398,21 +471,29 @@ export const Dashboard = () => {
       });
 
       const todayJobs = jobs.filter((job) => job.scheduled_date === todayStr && !isClosed(job.status));
-      const customerDue: DueRow[] = dueOrders
-        .map((order) => {
-          const paid = Number(order.paid_amount ?? 0);
-          const total = Number(order.total_amount ?? 0);
-          const remaining = Number(order.remaining_amount ?? Math.max(total - paid, 0));
-          const customer = pickOne(order.customer);
-          return {
-            id: order.id,
-            name: customer?.name || "Müşteri",
-            amount: remaining,
-            due: order.payment_due_date,
-            target: "/accounting",
-          };
-        })
-        .filter((row) => row.amount > 0.01 && row.due);
+      // Aktif plani OLAN siparisler icin legacy payment_due_date OKUNMAZ —
+      // asagidaki planDueRows zaten o siparisin taksitlerini iceriyor (cift
+      // gosterim engellenir). Plani OLMAYAN siparislerde davranis birebir
+      // eskisiyle aynidir.
+      const customerDue: DueRow[] = [
+        ...dueOrders
+          .filter((order) => !planOrderIdSet.has(order.id))
+          .map((order) => {
+            const paid = Number(order.paid_amount ?? 0);
+            const total = Number(order.total_amount ?? 0);
+            const remaining = Number(order.remaining_amount ?? Math.max(total - paid, 0));
+            const customer = pickOne(order.customer);
+            return {
+              id: order.id,
+              name: customer?.name || "Müşteri",
+              amount: remaining,
+              due: order.payment_due_date,
+              target: "/accounting",
+            };
+          })
+          .filter((row) => row.amount > 0.01 && row.due),
+        ...planDueRows,
+      ];
 
       const supplierDueRows: SupplierDueRow[] = supplierRows
         .map((row) => ({
@@ -447,7 +528,7 @@ export const Dashboard = () => {
           .filter((row) => row.due <= weekEnd)
           .map((row) => ({
             id: `collection-${row.id}`,
-            title: "Tahsilat",
+            title: row.installmentNo ? `Tahsilat (Taksit ${row.installmentNo}/${row.totalInstallments})` : "Tahsilat",
             subtitle: `${row.name} - ${money(row.amount)}`,
             when: new Date(`${row.due}T12:00:00`),
             target: "/accounting",
@@ -508,6 +589,44 @@ export const Dashboard = () => {
     void loadDashboard();
   }, [loadDashboard]);
 
+  // Check onboarding status and calculate trial info
+  useEffect(() => {
+    if (!company) return;
+
+    const isAdmin = role === "admin" || realRole === "admin" || realRole === "super_admin";
+    const needsOnboarding = isAdmin && !company.onboarding_completed;
+
+    if (needsOnboarding) {
+      setShowOnboarding(true);
+    }
+
+    // Calculate trial/license info
+    const now = new Date().getTime();
+    let info: TrialInfo | null = null;
+
+    if (company.subscription_status === "trial" && company.trial_ends_at) {
+      const trialEnd = new Date(company.trial_ends_at).getTime();
+      const daysLeftMs = trialEnd - now;
+      const daysLeft = Math.ceil(daysLeftMs / (24 * 60 * 60 * 1000));
+      info = {
+        daysLeft: Math.max(0, daysLeft),
+        trialEndsAt: company.trial_ends_at,
+        isExpired: daysLeft < 0,
+      };
+    } else if (company.subscription_status === "active" && company.license_expires_at) {
+      const licenseEnd = new Date(company.license_expires_at).getTime();
+      const daysLeftMs = licenseEnd - now;
+      const daysLeft = Math.ceil(daysLeftMs / (24 * 60 * 60 * 1000));
+      info = {
+        daysLeft: Math.max(0, daysLeft),
+        trialEndsAt: company.license_expires_at,
+        isExpired: daysLeft < 0,
+      };
+    }
+
+    setTrialInfo(info);
+  }, [company, role, realRole]);
+
   const monthProfit = data.monthSales - data.monthCost;
   const supplierDueTotal = useMemo(() => [...data.supplierDue, ...data.supplierOverdue].reduce((sum, row) => sum + row.amount, 0), [data.supplierDue, data.supplierOverdue]);
   const collectionTotal = useMemo(() => data.todayCollections.reduce((sum, row) => sum + row.amount, 0), [data.todayCollections]);
@@ -516,8 +635,112 @@ export const Dashboard = () => {
     return <div className="p-4 text-sm font-bold text-slate-500">Panel hazırlanıyor...</div>;
   }
 
+  function getTrialBannerStyle() {
+    if (!trialInfo || trialInfo.isExpired) return null;
+    if (trialInfo.daysLeft === null) return null;
+    if (trialInfo.daysLeft >= 7) return "info"; // blue
+    if (trialInfo.daysLeft >= 3) return "warning"; // yellow
+    return "critical"; // red
+  }
+
+  function formatTrialDate(iso: string | null) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString("tr-TR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 overflow-x-clip">
+      {showOnboarding && company && (
+        <OnboardingWizard
+          companyId={company.id}
+          companyName={company.name || ""}
+          packageCode={company.package_code}
+          onComplete={() => setShowOnboarding(false)}
+        />
+      )}
+
+      {trialInfo && !trialInfo.isExpired && company?.subscription_status === "trial" && (
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border flex items-start gap-3",
+            getTrialBannerStyle() === "info" &&
+              "bg-blue-50 border-blue-200 text-blue-900 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-100",
+            getTrialBannerStyle() === "warning" &&
+              "bg-amber-50 border-amber-300 text-amber-900 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-100",
+            getTrialBannerStyle() === "critical" &&
+              "bg-red-50 border-red-300 text-red-900 dark:bg-red-950/30 dark:border-red-700 dark:text-red-100"
+          )}
+        >
+          <Clock className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-sm sm:text-base">
+              {trialInfo.daysLeft === 0
+                ? "Deneme süreniz bugün doluyor"
+                : trialInfo.daysLeft === 1
+                  ? "Deneme süreniz yarın doluyor"
+                  : `Deneme süreniz ${trialInfo.daysLeft} gün kaldı`}
+            </p>
+            <p className="text-xs sm:text-sm font-medium mt-1 opacity-90">
+              Bitiş tarihi: {formatTrialDate(trialInfo.trialEndsAt)} — Kesintisiz devam etmek için lisans satın alın
+            </p>
+          </div>
+          <a
+            href="#/app/settings"
+            className="flex-shrink-0 text-xs font-black underline hover:no-underline"
+          >
+            Bilgi
+          </a>
+        </div>
+      )}
+
+      {trialInfo && !trialInfo.isExpired && company?.subscription_status === "active" && company.license_expires_at && (
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border flex items-start gap-3",
+            trialInfo.daysLeft! >= 7
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-100"
+              : "bg-amber-50 border-amber-300 text-amber-900 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-100"
+          )}
+        >
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-sm sm:text-base">
+              {trialInfo.daysLeft === null
+                ? "Lisans aktif"
+                : trialInfo.daysLeft === 0
+                  ? "Lisans bugün bitecek"
+                  : trialInfo.daysLeft === 1
+                    ? "Lisans yarın bitecek"
+                    : `Lisans ${trialInfo.daysLeft} gün sonra bitecek`}
+            </p>
+            <p className="text-xs sm:text-sm font-medium mt-1 opacity-90">
+              Paket: <span className="font-black">{company.subscription_plan?.toUpperCase()}</span> — Bitiş: {formatTrialDate(company.license_expires_at)}
+            </p>
+          </div>
+          <a
+            href="#/app/settings"
+            className="flex-shrink-0 text-xs font-black underline hover:no-underline"
+          >
+            Bilgi
+          </a>
+        </div>
+      )}
+
+      {company?.subscription_status === "expired" && (
+        <div className="rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border border-red-300 bg-red-50 text-red-900 dark:bg-red-950/30 dark:border-red-700 dark:text-red-100 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-sm sm:text-base">Lisans süresi doldu</p>
+            <p className="text-xs sm:text-sm font-medium mt-1 opacity-90">
+              Yeni kayıt ve güncellemeler kısıtlı. Lisans yenilemek için satış ekibimize ulaşın.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white sm:text-3xl">

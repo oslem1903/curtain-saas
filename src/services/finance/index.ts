@@ -11,6 +11,7 @@ export * from "./errors";
 export * from "./deps";
 export * from "./decisions";
 export * from "./customerCollectionService";
+export * from "./customerInstallmentService";
 export * from "./supplierPaymentService";
 export * from "./installerPaymentService";
 export * from "./financeService";
