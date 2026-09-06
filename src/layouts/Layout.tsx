@@ -28,7 +28,8 @@ import {
   FilePlus2,
   Zap,
   TrendingUp,
-  Activity
+  Activity,
+  Wallet
 } from "lucide-react";
 
 
@@ -779,6 +780,7 @@ export const Layout = () => {
 
               {hasModule("installation") && <NavItem to="/installations" icon={UserCog} label="Montajlar" onClick={closeMobileMenu} />}
               {hasModule("accounting") && <NavItem to="/accounting" icon={Calculator} label="Finans" onClick={closeMobileMenu} />}
+              {hasModule("collections") && !hasModule("accounting") && <NavItem to="/collections" icon={Wallet} label="Tahsilatlar" onClick={closeMobileMenu} />}
               {hasModule("catalogs") && <NavItem to="/catalogs" icon={Palette} label="Kartela Yönetimi" onClick={closeMobileMenu} />}
               {hasModule("staff") && <NavItem to="/staff" icon={UserCog} label="Personel" onClick={closeMobileMenu} />}
               <NavItem to="/settings" icon={Settings} label="Ayarlar" onClick={closeMobileMenu} />

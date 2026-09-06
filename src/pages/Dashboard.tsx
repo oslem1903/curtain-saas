@@ -23,8 +23,8 @@ import { useAuth } from "../context/AuthContext";
 import { cn } from "../utils/cn";
 import OnboardingWizard from "../components/OnboardingWizard";
 import { DemoDataGenerator } from "../components/DemoDataGenerator";
-import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
-import type { OrderPaymentPlan, OrderInstallment, LedgerPayment } from "../utils/installments";
+import { buildDashboardDueRows, todayDateOnly, bucketForDueDate, collectionRowStatus, daysBetween } from "../utils/installments";
+import type { OrderPaymentPlan, OrderInstallment, LedgerPayment, CollectionRowStatus } from "../utils/installments";
 
 type AppointmentRow = {
   id: string;
@@ -57,6 +57,8 @@ type DueRow = {
   installmentNo?: number;
   totalInstallments?: number;
   isInconsistent?: boolean;
+  orderId?: string;
+  status?: CollectionRowStatus;
 };
 
 type SupplierDueRow = {
@@ -97,6 +99,16 @@ type DashboardData = {
   completedInstallations: number;
   monthSales: number;
   monthCost: number;
+  // Faz 2.6 — Collections.tsx ile AYNI kova tanimlarini (bucketForDueDate)
+  // kullanan Dashboard tahsilat ozeti. Yukaridaki todayCollections/
+  // overdueCollections/weekCollections ("Yaklaşan İşler"in 7-gunluk
+  // penceresi + "Günün Özeti" gelir dusuncesi icin) BILEREK DEGISTIRILMEDI.
+  todayDueCollections: DueRow[];
+  weekDueCollections: DueRow[];
+  monthDueCollections: DueRow[];
+  upcomingCollectionsTable: DueRow[];
+  undeterminedCollectionsCount: number;
+  undeterminedCollectionsAmount: number;
 };
 
 type TrialInfo = {
@@ -120,6 +132,22 @@ const emptyData: DashboardData = {
   completedInstallations: 0,
   monthSales: 0,
   monthCost: 0,
+  todayDueCollections: [],
+  weekDueCollections: [],
+  monthDueCollections: [],
+  upcomingCollectionsTable: [],
+  undeterminedCollectionsCount: 0,
+  undeterminedCollectionsAmount: 0,
+};
+
+// Collections.tsx'teki STATUS_META ile AYNI etiket/renk sozlugu — iki ekranda
+// ayni durum farkli gorunmesin diye.
+const COLLECTION_STATUS_META: Record<CollectionRowStatus, { label: string; className: string }> = {
+  overdue: { label: "Gecikmiş", className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
+  today: { label: "Bugün", className: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" },
+  upcoming: { label: "Yaklaşıyor", className: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
+  partial: { label: "Kısmi", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+  undetermined: { label: "Vadesi Belirsiz", className: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300" },
 };
 
 function pickOne<T>(value: T | T[] | null | undefined): T | null {
@@ -284,7 +312,7 @@ function MetricCard({
   value: string;
   note: string;
   icon: any;
-  tone: "blue" | "emerald" | "amber" | "violet";
+  tone: "blue" | "emerald" | "amber" | "violet" | "red" | "orange" | "indigo";
   onClick: () => void;
 }) {
   const tones = {
@@ -292,6 +320,9 @@ function MetricCard({
     emerald: "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-200 dark:border-emerald-900/40",
     amber: "bg-amber-50 text-amber-700 border-amber-100 dark:bg-amber-950/20 dark:text-amber-200 dark:border-amber-900/40",
     violet: "bg-violet-50 text-violet-700 border-violet-100 dark:bg-violet-950/20 dark:text-violet-200 dark:border-violet-900/40",
+    red: "bg-red-50 text-red-700 border-red-100 dark:bg-red-950/20 dark:text-red-200 dark:border-red-900/40",
+    orange: "bg-orange-50 text-orange-700 border-orange-100 dark:bg-orange-950/20 dark:text-orange-200 dark:border-orange-900/40",
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-100 dark:bg-indigo-950/20 dark:text-indigo-200 dark:border-indigo-900/40",
   }[tone];
 
   return (
@@ -324,7 +355,10 @@ function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any
 export const Dashboard = () => {
   const navigate = useNavigate();
   const { effectiveRole: role, realRole, viewingUserId } = useRole();
-  const { company } = useAuth();
+  const { company, hasModule } = useAuth();
+  // Faz 2.6: Muhasebe modulu olan paketlerde "Tahsilatlar" mevcut /accounting
+  // ekranina, olmayanlarda (Solo) yeni /collections ekranina yonlendirir.
+  const collectionsTarget = useMemo(() => (hasModule("accounting") ? "/accounting" : "/collections"), [hasModule]);
   const [data, setData] = useState<DashboardData>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -374,7 +408,11 @@ export const Dashboard = () => {
         appointmentQuery.order("start_at", { ascending: true }),
         supabase.from("installation_jobs").select("id,order_id,customer_name,status,scheduled_date,scheduled_time,total_amount").eq("company_id", ctx.company_id).gte("scheduled_date", todayStr).lte("scheduled_date", weekEnd).order("scheduled_date", { ascending: true }),
         supabase.from("orders").select("id,created_at,status,total_amount,paid_amount,remaining_amount,customer:customers(name)").eq("company_id", ctx.company_id).order("created_at", { ascending: false }).limit(8),
-        supabase.from("orders").select("id,remaining_amount,total_amount,paid_amount,payment_due_date,customer:customers(name)").eq("company_id", ctx.company_id).not("payment_due_date", "is", null),
+        // Faz 2.6: artik SADECE payment_due_date DOLU siparisler degil, tum
+        // firma siparisleri cekiliyor — "Vadesi Belirsiz" (ne aktif plani ne
+        // vade tarihi olan, kalan borcu olan) siparisleri de saymak icin
+        // (Collections.tsx ile ayni kural).
+        supabase.from("orders").select("id,remaining_amount,total_amount,paid_amount,payment_due_date,status,customer:customers(name)").eq("company_id", ctx.company_id),
         supabase.from("supplier_transactions").select("supplier_id,amount,due_date,transaction_type,suppliers(name)").eq("company_id", ctx.company_id).eq("transaction_type", "debt"),
         supabase.from("customers").select("id", { count: "exact", head: true }).eq("company_id", ctx.company_id),
         supabase.from("income").select("amount,income_date").eq("company_id", ctx.company_id).gte("income_date", todayStart.toISOString()).lte("income_date", todayEnd.toISOString()),
@@ -444,16 +482,22 @@ export const Dashboard = () => {
         });
       }
 
-      const { rows: planDueRowsRaw } = buildDashboardDueRows(plans, installmentsByPlan, paymentsByOrder, planOrderLiveTotals, todayDateOnly());
+      // Faz 2.6: Collections.tsx ile AYNI "bugun" ve kova mantigi (bucketForDueDate/
+      // collectionRowStatus) — tek dogruluk kaynagi, ayri bir hesaplama YOK.
+      const todayForBuckets = todayDateOnly();
+
+      const { rows: planDueRowsRaw } = buildDashboardDueRows(plans, installmentsByPlan, paymentsByOrder, planOrderLiveTotals, todayForBuckets);
       const planDueRows: DueRow[] = planDueRowsRaw.map((r) => ({
         id: `${r.orderId}-inst-${r.installmentNo}`,
+        orderId: r.orderId,
         name: planOrderCustomerNames[r.orderId] || "Müşteri",
         amount: r.remainingAmount,
         due: r.dueDate,
-        target: "/accounting",
+        target: collectionsTarget,
         installmentNo: r.installmentNo,
         totalInstallments: r.totalInstallments,
         isInconsistent: r.isInconsistent,
+        status: collectionRowStatus(bucketForDueDate(r.dueDate, todayForBuckets), r.status === "partial"),
       }));
 
       const todayMeasurements = appointments.filter((a) => {
@@ -475,25 +519,57 @@ export const Dashboard = () => {
       // asagidaki planDueRows zaten o siparisin taksitlerini iceriyor (cift
       // gosterim engellenir). Plani OLMAYAN siparislerde davranis birebir
       // eskisiyle aynidir.
+      // Teklif/taslak/iptal siparisler aktif borc/tahsilat hesaplarina girmez
+      // (Collections.tsx/Customers.tsx'teki ayni kural).
+      const relevantDueOrders = dueOrders.filter((order) => !["draft", "cancelled", "quoted"].includes(String(order.status ?? "").toLowerCase()));
+
       const customerDue: DueRow[] = [
-        ...dueOrders
-          .filter((order) => !planOrderIdSet.has(order.id))
+        ...relevantDueOrders
+          .filter((order) => !planOrderIdSet.has(order.id) && order.payment_due_date)
           .map((order) => {
             const paid = Number(order.paid_amount ?? 0);
             const total = Number(order.total_amount ?? 0);
             const remaining = Number(order.remaining_amount ?? Math.max(total - paid, 0));
             const customer = pickOne(order.customer);
+            const dueDateStr = String(order.payment_due_date).slice(0, 10);
             return {
               id: order.id,
+              orderId: order.id,
               name: customer?.name || "Müşteri",
               amount: remaining,
-              due: order.payment_due_date,
-              target: "/accounting",
+              due: dueDateStr,
+              target: collectionsTarget,
+              status: collectionRowStatus(bucketForDueDate(dueDateStr, todayForBuckets), paid > 0.01),
             };
           })
           .filter((row) => row.amount > 0.01 && row.due),
         ...planDueRows,
       ];
+
+      // "Vadesi Belirsiz" — aktif plani YOK, payment_due_date YOK, kalan borcu
+      // VAR siparisler (Collections.tsx'teki ayni tanim). Tarihli tablolara
+      // KARISTIRILMAZ, yalnizca kisa bir sayac/link olarak gosterilir.
+      const undeterminedOrders = relevantDueOrders.filter((order) => {
+        if (planOrderIdSet.has(order.id) || order.payment_due_date) return false;
+        const paid = Number(order.paid_amount ?? 0);
+        const total = Number(order.total_amount ?? 0);
+        const remaining = Number(order.remaining_amount ?? Math.max(total - paid, 0));
+        return remaining > 0.01;
+      });
+      const undeterminedCollectionsCount = undeterminedOrders.length;
+      const undeterminedCollectionsAmount = undeterminedOrders.reduce((sum, order) => {
+        const paid = Number(order.paid_amount ?? 0);
+        const total = Number(order.total_amount ?? 0);
+        return sum + Number(order.remaining_amount ?? Math.max(total - paid, 0));
+      }, 0);
+
+      const todayDueCollections = customerDue.filter((row) => bucketForDueDate(row.due, todayForBuckets) === "today");
+      const weekDueCollections = customerDue.filter((row) => bucketForDueDate(row.due, todayForBuckets) === "week");
+      const monthDueCollections = customerDue.filter((row) => bucketForDueDate(row.due, todayForBuckets) === "month");
+      const upcomingCollectionsTable = customerDue
+        .filter((row) => bucketForDueDate(row.due, todayForBuckets) !== "overdue")
+        .sort((a, b) => a.due.localeCompare(b.due))
+        .slice(0, 10);
 
       const supplierDueRows: SupplierDueRow[] = supplierRows
         .map((row) => ({
@@ -577,13 +653,19 @@ export const Dashboard = () => {
         completedInstallations: completedJobsRes.status === "fulfilled" && !completedJobsRes.value.error ? completedJobsRes.value.count ?? 0 : 0,
         monthSales: monthOrders.reduce((sum, order) => sum + Number(order.total_amount ?? 0), 0),
         monthCost,
+        todayDueCollections,
+        weekDueCollections,
+        monthDueCollections,
+        upcomingCollectionsTable,
+        undeterminedCollectionsCount,
+        undeterminedCollectionsAmount,
       });
     } catch (e: any) {
       setError(e?.message || "Panel verileri yüklenemedi.");
     } finally {
       setLoading(false);
     }
-  }, [role, realRole, viewingUserId]);
+  }, [role, realRole, viewingUserId, collectionsTarget]);
 
   useEffect(() => {
     void loadDashboard();
@@ -629,7 +711,10 @@ export const Dashboard = () => {
 
   const monthProfit = data.monthSales - data.monthCost;
   const supplierDueTotal = useMemo(() => [...data.supplierDue, ...data.supplierOverdue].reduce((sum, row) => sum + row.amount, 0), [data.supplierDue, data.supplierOverdue]);
-  const collectionTotal = useMemo(() => data.todayCollections.reduce((sum, row) => sum + row.amount, 0), [data.todayCollections]);
+  const overdueCollectionsAmount = useMemo(() => data.overdueCollections.reduce((sum, row) => sum + row.amount, 0), [data.overdueCollections]);
+  const weekDueAmount = useMemo(() => data.weekDueCollections.reduce((sum, row) => sum + row.amount, 0), [data.weekDueCollections]);
+  const monthDueAmount = useMemo(() => data.monthDueCollections.reduce((sum, row) => sum + row.amount, 0), [data.monthDueCollections]);
+  const todayDueAmount = useMemo(() => data.todayDueCollections.reduce((sum, row) => sum + row.amount, 0), [data.todayDueCollections]);
 
   if (role === "unknown") {
     return <div className="p-4 text-sm font-bold text-slate-500">Panel hazırlanıyor...</div>;
@@ -741,6 +826,20 @@ export const Dashboard = () => {
           </div>
         </div>
       )}
+
+      {!loading && data.overdueCollections.length > 0 && (
+        <div className="rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border border-red-300 bg-red-50 text-red-900 dark:bg-red-950/30 dark:border-red-700 dark:text-red-100 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-sm sm:text-base">{data.overdueCollections.length} taksit/müşteri gecikmiş tahsilat bekliyor</p>
+            <p className="text-xs sm:text-sm font-medium mt-1 opacity-90">Toplam gecikmiş tutar: {money(overdueCollectionsAmount)}</p>
+          </div>
+          <button type="button" onClick={() => go(collectionsTarget)} className="flex-shrink-0 text-xs font-black underline hover:no-underline">
+            Tahsilatları Gör
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white sm:text-3xl">
@@ -761,12 +860,15 @@ export const Dashboard = () => {
 
       <SummaryCard loading={loading} data={data} />
 
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {loading ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />) : (
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {loading ? Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-32" />) : (
           <>
             <MetricCard title="Ölçüler" value={String(data.todayMeasurements.length)} note="Bugünkü ölçü adedi" icon={Ruler} tone="blue" onClick={() => go("/appointments/new")} />
             <MetricCard title="Montajlar" value={String(data.todayInstallations.length)} note="Bugünkü montaj adedi" icon={Hammer} tone="emerald" onClick={() => go("/route/today")} />
-            <MetricCard title="Tahsilatlar" value={money(collectionTotal)} note={`${data.todayCollections.length} müşteri bekliyor`} icon={CreditCard} tone="amber" onClick={() => go("/accounting")} />
+            <MetricCard title="Geciken Tahsilat" value={money(overdueCollectionsAmount)} note={`${data.overdueCollections.length} kayıt`} icon={AlertTriangle} tone="red" onClick={() => go(collectionsTarget)} />
+            <MetricCard title="Bugün Tahsilat" value={money(todayDueAmount)} note={`${data.todayDueCollections.length} kayıt`} icon={CreditCard} tone="orange" onClick={() => go(collectionsTarget)} />
+            <MetricCard title="Bu Hafta Tahsilat" value={money(weekDueAmount)} note={`${data.weekDueCollections.length} kayıt`} icon={Clock} tone="indigo" onClick={() => go(collectionsTarget)} />
+            <MetricCard title="Bu Ay Tahsilat" value={money(monthDueAmount)} note={`${data.monthDueCollections.length} kayıt`} icon={Clock3} tone="blue" onClick={() => go(collectionsTarget)} />
             <MetricCard title="Tedarikçi Ödemeleri" value={money(supplierDueTotal)} note={`${data.supplierOverdue.length} geciken, ${data.supplierDue.length} vadesi gelen`} icon={Truck} tone="violet" onClick={() => go("/suppliers")} />
           </>
         )}
@@ -779,7 +881,7 @@ export const Dashboard = () => {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <ActionButton label="Yeni Ölçü" icon={Ruler} onClick={() => go("/measurements/new", { fresh: true })} />
           <ActionButton label="Yeni Sipariş" icon={ShoppingCart} onClick={() => go("/orders/new")} />
-          <ActionButton label="Tahsilat Yap" icon={Banknote} onClick={() => go("/accounting")} />
+          <ActionButton label="Tahsilat Yap" icon={Banknote} onClick={() => go(collectionsTarget)} />
           <ActionButton label="Ödeme Yap" icon={ReceiptText} onClick={() => go("/suppliers")} />
           <ActionButton label="Randevu Oluştur" icon={CalendarPlus} onClick={() => go("/appointments/new")} />
         </div>
@@ -836,6 +938,63 @@ export const Dashboard = () => {
             </div>
           )}
         </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-black text-slate-950 dark:text-white">Yaklaşan Tahsilatlar</h2>
+          <div className="flex items-center gap-3">
+            {data.undeterminedCollectionsCount > 0 && (
+              <button type="button" onClick={() => go(collectionsTarget)} className="text-xs font-bold text-slate-500 underline hover:text-slate-700 dark:hover:text-slate-300">
+                Vadesi Belirsiz {data.undeterminedCollectionsCount} kayıt
+              </button>
+            )}
+            <button type="button" onClick={() => go(collectionsTarget)} className="text-xs font-black text-primary-600">Tümünü Gör</button>
+          </div>
+        </div>
+        {loading ? (
+          <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
+        ) : data.upcomingCollectionsTable.length === 0 ? (
+          <div className="rounded-2xl bg-slate-50 p-6 text-sm font-bold text-slate-500 dark:bg-slate-800/50">Yaklaşan tahsilat yok.</div>
+        ) : (
+          <div className="space-y-2">
+            {data.upcomingCollectionsTable.map((row) => {
+              const meta = COLLECTION_STATUS_META[row.status ?? "upcoming"];
+              const daysUntil = daysBetween(todayDateOnly(), row.due);
+              const label = row.installmentNo
+                ? (row.totalInstallments === 1 ? "Tek Vade" : `${row.installmentNo}/${row.totalInstallments} Taksit`)
+                : "Vadeli Bakiye";
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => row.orderId && go(`/orders/${row.orderId}`)}
+                  className="block w-full rounded-2xl border border-slate-100 p-3 text-left transition hover:border-primary-200 hover:bg-primary-50/40 dark:border-slate-800 dark:hover:bg-primary-950/10"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-black text-slate-950 dark:text-white">{row.name}</span>
+                        {row.orderId && <span className="text-xs font-bold text-blue-600">#{row.orderId.slice(0, 8).toUpperCase()}</span>}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <span>{label}</span>
+                        <span>•</span>
+                        <span>Vade: {new Date(`${row.due}T12:00:00`).toLocaleDateString("tr-TR")}</span>
+                        <span>•</span>
+                        <span>{daysUntil === 0 ? "bugün" : `${daysUntil} gün kaldı`}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-black text-slate-800 dark:text-slate-100">{money(row.amount)}</span>
+                      <span className={cn("rounded-lg px-2 py-1 text-[10px] font-black", meta.className)}>{meta.label}</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.55fr)]">

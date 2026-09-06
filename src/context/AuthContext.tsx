@@ -35,7 +35,12 @@ type CompanyState = {
 
 export const CORE_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "catalogs", "staff"];
 // Solo Perdeci: kartela (catalogs) ve personel (staff) modülleri pakete dahil DEĞİL
-export const SOLO_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "suppliers", "installation"];
+// "collections" (Tahsilatlar): Solo'da Muhasebe menüsü olmadığı için ayrı bir
+// tahsilat ekranı sunar. PRO/ENTERPRISE de SOLO_MODULES'u spread ettiği için bu
+// modülü teknik olarak "sahip" olur — ama Tahsilatlar menü öğesi ayrıca
+// hasModule("accounting") kontrolüyle bastırılır (bkz. Layout.tsx), böylece
+// Muhasebesi olan paketlerde ikinci bir menü oluşmaz.
+export const SOLO_MODULES = ["admin", "measurements", "orders", "customers", "appointments", "suppliers", "installation", "collections"];
 export const PRO_MODULES = [...SOLO_MODULES, "accounting", "staff", "catalogs", "reports", "expenses", "profit"];
 export const ENTERPRISE_MODULES = [...PRO_MODULES, "vehicles", "commissions", "warehouse", "branches"];
 
@@ -57,6 +62,7 @@ const MODULE_ALIASES: Record<string, string[]> = {
     customers: ["customers"],
     appointments: ["appointments"],
     branches: ["branches"],
+    collections: ["collections"],
 };
 
 function normalizeEnabledModules(modules: string[]) {

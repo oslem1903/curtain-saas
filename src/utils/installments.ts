@@ -76,7 +76,7 @@ export function computeLiveNetPaid(payments: LedgerPayment[]): number {
   }, 0);
 }
 
-function daysBetween(fromStr: string, toStr: string): number {
+export function daysBetween(fromStr: string, toStr: string): number {
   const from = new Date(`${fromStr}T00:00:00`);
   const to = new Date(`${toStr}T00:00:00`);
   return Math.round((to.getTime() - from.getTime()) / 86400000);
@@ -115,6 +115,107 @@ export function computePlanForOrder(
   });
 
   return { plan, installments: computed, liveNetPaid, paidSincePlan, isStale, isInconsistent };
+}
+
+// ============================================================================
+// Odeme plani TASLAK olusturma — OrderDetail.tsx (mevcut siparise SONRADAN
+// plan kurma) ve NewOrder.tsx/Quotes.tsx (siparis olusturulurken plan
+// taslagi toplama) arasinda PAYLASILAN tek dogrulama mantigi. RPC cagirmaz,
+// yalnizca formdaki taslagi create/rebuild_order_installment_plan'in kendi
+// dogrulamasiyla ayni kurallarla (tutar>0, vade dolu, toplam=kalan) kontrol
+// edip normalize eder.
+// ============================================================================
+
+export type InstallmentDraftRow = { amount: string; dueDate: string };
+export type InstallmentPlanDraftInput = { installmentNo: number; amount: number; dueDate: string };
+
+function formatTLForMessage(n: number): string {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(Number(n ?? 0));
+}
+
+export function buildInstallmentPlanFromDraft(
+  mode: "single" | "multi",
+  remainingAmount: number,
+  singleDueDate: string,
+  rows: InstallmentDraftRow[],
+): { installments: InstallmentPlanDraftInput[] } | { error: string } {
+  if (mode === "single") {
+    const amount = Math.max(remainingAmount, 0);
+    if (!singleDueDate) return { error: "Vade tarihi seçin." };
+    if (amount <= 0) return { error: "Kalan borç 0 olduğu için plan oluşturulamaz." };
+    return { installments: [{ installmentNo: 1, amount, dueDate: singleDueDate }] };
+  }
+
+  const parsed = rows.map((r, idx) => ({
+    installmentNo: idx + 1,
+    amount: Number(r.amount),
+    dueDate: r.dueDate,
+  }));
+  if (parsed.some((r) => !Number.isFinite(r.amount) || r.amount <= 0)) {
+    return { error: "Her taksidin tutarı 0'dan büyük olmalı." };
+  }
+  if (parsed.some((r) => !r.dueDate)) {
+    return { error: "Her taksidin vade tarihi girilmeli." };
+  }
+  const sum = parsed.reduce((s, r) => s + r.amount, 0);
+  if (Math.abs(sum - remainingAmount) > 0.01) {
+    return { error: `Taksit toplamı (${formatTLForMessage(sum)}) kalan borca (${formatTLForMessage(remainingAmount)}) eşit olmalı.` };
+  }
+  return { installments: parsed };
+}
+
+// ============================================================================
+// Tarih kovalama — Collections.tsx VE Dashboard.tsx'in AYNI tanimi kullanmasi
+// icin burada tek yerde tutulur (birbirini tekrar etmeyen, birbirinden farkli
+// kovalar): Geciken (vade<bugun) / Bugun (vade=bugun) / Bu Hafta (yarindan
+// bulunulan haftanin pazarina kadar) / Bu Ay (bu haftadan sonra ay sonuna
+// kadar) / Ileri Tarihli (ay sonrasi).
+// ============================================================================
+
+export type DateBucketKey = "overdue" | "today" | "week" | "month" | "future";
+export type CollectionRowStatus = "overdue" | "today" | "upcoming" | "partial" | "undetermined";
+
+function toDateOnlyStrLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Bulunulan haftanin (Pazartesi-Pazar) son gunu — Pazar. */
+function endOfWeekSundayStr(todayStr: string): string {
+  const d = new Date(`${todayStr}T00:00:00`);
+  const day = d.getDay(); // 0=Pazar..6=Cumartesi
+  const add = day === 0 ? 0 : 7 - day;
+  d.setDate(d.getDate() + add);
+  return toDateOnlyStrLocal(d);
+}
+
+/** Bulunulan ayin son gunu. */
+function endOfMonthStr(todayStr: string): string {
+  const d = new Date(`${todayStr}T00:00:00`);
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return toDateOnlyStrLocal(end);
+}
+
+/** Tarih kovalari BIRBIRINI TEKRAR ETMEZ: her vade tam olarak bir kovaya duser. */
+export function bucketForDueDate(dueDateStr: string, todayStr: string): DateBucketKey {
+  if (dueDateStr < todayStr) return "overdue";
+  if (dueDateStr === todayStr) return "today";
+  const weekEnd = endOfWeekSundayStr(todayStr);
+  if (dueDateStr <= weekEnd) return "week";
+  const monthEnd = endOfMonthStr(todayStr);
+  if (dueDateStr <= monthEnd) return "month";
+  return "future";
+}
+
+/** Kismi odeme, zaman kovasindan ONCELIKLIDIR (Collections.tsx/Dashboard.tsx ortak kurali). */
+export function collectionRowStatus(bucket: DateBucketKey | "undetermined", isPartial: boolean): CollectionRowStatus {
+  if (bucket === "undetermined") return "undetermined";
+  if (isPartial) return "partial";
+  if (bucket === "overdue") return "overdue";
+  if (bucket === "today") return "today";
+  return "upcoming";
 }
 
 export type DashboardDueRow = {

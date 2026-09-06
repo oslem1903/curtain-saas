@@ -15,6 +15,7 @@ const MODULE_LABELS: Record<string, string> = {
     warehouse:    "Depo Yönetimi",
     staff:        "Personel",
     catalogs:     "Kartela Yönetimi",
+    collections:  "Tahsilatlar",
 };
 
 const MODULE_REQUIRED_PLAN: Record<string, string> = {

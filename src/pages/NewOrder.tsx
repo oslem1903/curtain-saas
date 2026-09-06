@@ -9,6 +9,10 @@ import { twMerge } from "tailwind-merge";
 import { getNotificationSettings, scheduleReminderNotification } from "../utils/localNotifications";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
+import { createFinanceService } from "../services/finance";
+import { buildInstallmentPlanFromDraft } from "../utils/installments";
+import type { InstallmentDraftRow } from "../utils/installments";
+import PaymentSetupSection from "../components/PaymentSetupSection";
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 async function getContext() { return getEffectiveTenantContext(); }
@@ -287,6 +291,16 @@ export default function NewOrder() {
     const [pendingConvertAppointmentId, setPendingConvertAppointmentId] = useState<string>("");
     const [note, setNote] = useState("");
     const [status, setStatus] = useState<Status>("new_order");
+
+    // Odeme Bilgileri (pesinat + kalan borc icin vade/taksit taslagi) —
+    // hicbir RPC burada cagrilmaz, yalnizca taslak toplanir; gercek
+    // customer_record_collection / create_order_installment_plan cagrilari
+    // siparis+kalemler basariyla olusturulduktan SONRA handleSave() icinde
+    // yapilir (bkz. asagida).
+    const [depositInput, setDepositInput] = useState("");
+    const [paymentPlanChoice, setPaymentPlanChoice] = useState<"single" | "multi" | "undetermined">("undetermined");
+    const [planSingleDueDate, setPlanSingleDueDate] = useState("");
+    const [planRows, setPlanRows] = useState<InstallmentDraftRow[]>([{ amount: "", dueDate: "" }]);
 
     // Quote dönüşümünde ürün satırını anında başlat — varsayılan "Salon 100×200" satırı gelmesin
     const [items, setItems] = useState<OrderItemUI[]>(() => {
@@ -747,6 +761,13 @@ export default function NewOrder() {
     const totalCost = useMemo(() => itemsComputed.reduce((acc, it) => acc + safeNumber(it.supplier_total_cost), 0), [itemsComputed]);
     const profit = useMemo(() => grandTotal - totalCost, [grandTotal, totalCost]);
 
+    // Odeme Bilgileri taslagi icin turetilen degerler — depositInput negatif
+    // veya siparis toplamindan buyuk YAZILABİLİR (kullanici hala yaziyor
+    // olabilir), gercek engelleme handleSave()'de yapilir; burada yalnizca
+    // PaymentSetupSection'a dogru "kalan" degerini gostermek icin kirpiyoruz.
+    const depositAmountRaw = safeNumber(depositInput, 0);
+    const remainingForPlan = Math.max(grandTotal - Math.max(depositAmountRaw, 0), 0);
+
     async function ensureCustomerId(cid: string): Promise<string> {
         if (customerId) return customerId;
         const name = customerInput.trim();
@@ -798,6 +819,40 @@ export default function NewOrder() {
         if (!companyId) { setErr("Şirket bilgisi yüklenemedi."); return; }
         if (!customerId && !customerInput.trim()) { setErr("Lütfen müşteri seçin."); return; }
         if (itemsComputed.length === 0) { setErr("En az 1 ürün eklemelisiniz."); return; }
+
+        // Musteri/siparis/tahsilat/plan kayitlarindan HICBIRI olusturulmadan once
+        // (ensureCustomerId dahil) TUM istemci-tarafi dogrulamalar tamamlanir —
+        // aksi halde basarisiz bir dogrulama "yetim musteri" veya baska yarim
+        // kayit birakabilirdi (ensureCustomerId asagida, bu dogrulamalar
+        // gectikten SONRA cagrilir).
+        const depositRaw = safeNumber(depositInput, 0);
+        if (depositRaw < 0) { setErr("Peşinat negatif olamaz."); return; }
+        const deposit = Math.max(depositRaw, 0);
+        const remaining = Math.max(grandTotal - deposit, 0);
+
+        if (deposit > grandTotal + 0.01) { setErr("Peşinat, sipariş toplamından büyük olamaz."); return; }
+        // "Ödendi" durumu artik SADECE pesinat tam tutari karsiliyorsa
+        // secilebilir — aksi halde orders.status='paid' ile gercek odenen
+        // tutar (customer_record_collection'in yazacagi) birbirini
+        // tutmayan, celiskili bir sipariş oluşurdu.
+        if (status === "paid" && Math.abs(deposit - grandTotal) > 0.01) {
+            setErr("Sipariş 'Ödendi' durumunda ise peşinat tutarı sipariş toplamına tam eşit olmalı.");
+            return;
+        }
+        for (const it of itemsComputed) {
+            if (!it.width_cm || it.width_cm <= 0) { setErr(`${it.product_name || it.product_type}: Genişlik 0'dan büyük olmalı`); return; }
+            if (!it.height_cm || it.height_cm <= 0) { setErr(`${it.product_name || it.product_type}: Yükseklik 0'dan büyük olmalı`); return; }
+            if (!it.qty || it.qty <= 0) { setErr(`${it.product_name || it.product_type}: Miktar 0'dan büyük olmalı`); return; }
+        }
+        // Odeme plani taslagini SIPARIS OLUSTURULMADAN ONCE dogrula — kotu
+        // taslak yuzunden yarim/celiskili siparis birakilmasin. "Vadesi
+        // Belirsiz" secildiyse veya kalan borc yoksa hic dogrulanmaz/plan
+        // kurulmaz.
+        if (paymentPlanChoice !== "undetermined" && remaining > 0.01) {
+            const draftCheck = buildInstallmentPlanFromDraft(paymentPlanChoice, remaining, planSingleDueDate, planRows);
+            if ("error" in draftCheck) { setErr(draftCheck.error); return; }
+        }
+
         setSaving(true);
         try {
             const supplierPriceWarnings = (await Promise.all(items.map((item) => persistSupplierPurchasePriceForItem(item)))).filter(Boolean);
@@ -819,35 +874,16 @@ export default function NewOrder() {
             // için o karışık değeri DEĞİL, doğrudan selectedStaff.userId/.employeeId kullanılır.)
             const orderAssignedTo = selectedStaff?.userId || null;
             const orderAssignedStaffId = selectedStaff?.employeeId || null;
-            const deposit = 0;
+            // Pesinat/kalan/plan dogrulamalari yukarida, ensureCustomerId'den
+            // ONCE zaten tamamlandi (deposit/remaining buradan yukaridaki
+            // ayni isimli const'lari kullanir). Gercek finansal kayit
+            // customer_record_collection uzerinden, siparis+kalemler basariyla
+            // olusturulduktan SONRA yapilir (asagida) — boylece siparis/kalem
+            // olusturma basarisizsa hicbir tahsilat/plan olusmaz.
 
-            // Validate: "Ödendi" durumunda deposit veya tam ödeme gerekli
-            if (status === "paid" && deposit <= 0) {
-              throw new Error("Sipariş 'Ödendi' durumunda ise ödeme kaydı gereklidir. Lütfen kapora veya tam ödeme tutarı giriniz.");
-            }
-
-            const remaining = Math.max(grandTotal - deposit, 0);
-            const overpayment = Math.max(deposit - grandTotal, 0);
-            const paymentNote = overpayment > 0 ? `Fazla tahsilat / müşteri alacağı: ${overpayment.toLocaleString("tr-TR", { style: "currency", currency: "TRY" })}` : "";
-            // Validate items before creating order to prevent orphaned records
-            for (const it of itemsComputed) {
-              if (!it.width_cm || it.width_cm <= 0) throw new Error(`${it.product_name || it.product_type}: Genişlik 0'dan büyük olmalı`);
-              if (!it.height_cm || it.height_cm <= 0) throw new Error(`${it.product_name || it.product_type}: Yükseklik 0'dan büyük olmalı`);
-              if (!it.qty || it.qty <= 0) throw new Error(`${it.product_name || it.product_type}: Miktar 0'dan büyük olmalı`);
-            }
-
-            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: [note.trim(), paymentNote].filter(Boolean).join("\n") || null, status, total_amount: grandTotal, deposit_amount: deposit, paid_amount: Math.max(deposit, status === "paid" ? grandTotal : 0), remaining_amount: status === "paid" ? 0 : remaining, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId }]).select("id").single();
+            const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: note.trim() || null, status, total_amount: grandTotal, deposit_amount: 0, paid_amount: 0, remaining_amount: grandTotal, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId }]).select("id").single();
             if (orderErr) throw orderErr;
             const orderId = orderRow.id;
-
-            if (deposit > 0) {
-              const { error: paymentErr } = await supabase.from("payments").insert({ company_id: companyId, order_id: orderId, payment_date: new Date().toISOString(), amount: deposit, method: "kapora", note: overpayment > 0 ? paymentNote : "Kapora / ön ödeme" });
-              if (paymentErr) {
-                // Payment error - delete order to prevent orphan
-                await supabase.from("orders").delete().eq("id", orderId);
-                throw new Error(`Ödeme kaydı oluşturulamadı: ${paymentErr.message}`);
-              }
-            }
 
             const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
             // Tek tek insert edilir: order_items.select() batch-insert'te DB'nin dönüş sırasını
@@ -862,7 +898,8 @@ export default function NewOrder() {
                 .select("id")
                 .single();
               if (itemErr) {
-                // Items error - şimdiye kadar eklenen kalemleri + order + payment'ı temizle (orphan bırakma)
+                // Items error - şimdiye kadar eklenen kalemleri + order'ı temizle (orphan bırakma).
+                // Bu noktada henüz hiçbir finansal kayıt (tahsilat/plan) oluşmadı.
                 if (insertedItems.length > 0) {
                   await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
                 }
@@ -870,6 +907,55 @@ export default function NewOrder() {
                 throw new Error(`Sipariş kalemleri eklenemedi: ${itemErr.message}`);
               }
               insertedItems.push(insertedItem);
+            }
+
+            // Peşinat — customer_record_collection üzerinden TEK kayıt (tahsilat
+            // ledger'ının tek doğruluk kaynağı, aynı OrderDetail.tsx'in "+ Ödeme
+            // Ekle" akışı). Başarısız olursa sipariş+kalemler geri alınır — henüz
+            // hiçbir finansal kayıt oluşmadığı için bu güvenlidir.
+            let overpayment = 0;
+            if (deposit > 0) {
+              const finance = createFinanceService();
+              const depositResult = await finance.customerCollections.recordCollection({
+                companyId, orderId, amount: deposit, method: "nakit", note: "Sipariş peşinatı",
+              });
+              if (depositResult.status !== "success") {
+                if (insertedItems.length > 0) {
+                  await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
+                }
+                await supabase.from("orders").delete().eq("id", orderId);
+                throw new Error(`Peşinat kaydedilemedi: ${depositResult.status === "error" ? depositResult.error.message : "bilinmeyen hata"}`);
+              }
+              overpayment = depositResult.data.overpaymentAmount ?? 0;
+            }
+
+            // Ödeme planı — yalnızca "Vadesi Belirsiz" seçilmediyse ve kalan borç
+            // varsa kurulur. Başarısız olursa sipariş/peşinat GERİ ALINMAZ:
+            // peşinat gerçek, geri döndürülemez bir tahsilat kaydıdır (append-only
+            // ledger, customer_cancel_collection dışında asla silinmez) — bunu
+            // "geri almak" için ayrı bir iptal işlemi gerekirdi ki bu siparişi
+            // finansal olarak tutarsız bırakırdı, o yüzden burada YAPILMAZ.
+            // Bunun yerine kullanıcıya açık bir uyarı gösterilir; plan Sipariş
+            // Detayı'ndan sonradan kurulabilir.
+            // Plan basarisiz olursa kullanicinin kaydin "yarim" kaldigini
+            // fark etmeden ekrandan ayrilmamasi icin sabit, acik bir mesaj
+            // kullanilir ve akisin sonunda siparis detayina yonlendirilir
+            // (bkz. asagidaki planFailureMessage kontrolu).
+            const PLAN_FAILURE_MESSAGE = "Sipariş ve peşinat kaydedildi ancak ödeme planı oluşturulamadı. Planı Sipariş Detayı ekranından yeniden oluşturabilirsiniz.";
+            let planFailureMessage = "";
+            if (paymentPlanChoice !== "undetermined" && remaining > 0.01) {
+              const draft = buildInstallmentPlanFromDraft(paymentPlanChoice, remaining, planSingleDueDate, planRows);
+              if ("error" in draft) {
+                planFailureMessage = PLAN_FAILURE_MESSAGE;
+              } else {
+                const finance = createFinanceService();
+                const planResult = await finance.customerInstallments.createPlan({
+                  companyId, orderId, installments: draft.installments,
+                });
+                if (planResult.status !== "success") {
+                  planFailureMessage = PLAN_FAILURE_MESSAGE;
+                }
+              }
             }
             if (wantAppointment && apptDate && apptTime) {
                 const startAt = new Date(`${apptDate}T${apptTime}:00`).toISOString();
@@ -951,7 +1037,19 @@ export default function NewOrder() {
                 }
             }
 
-            const allWarnings = [...supplierPriceWarnings, ...cariWarnings];
+            const overpaymentWarning = overpayment > 0 ? `Peşinat sipariş toplamını aşıyor, müşteri alacaklı: ${formatTL(overpayment)}` : "";
+            const allWarnings = [...supplierPriceWarnings, ...cariWarnings, ...(overpaymentWarning ? [overpaymentWarning] : [])];
+
+            // Plan olusturma basarisiz olduysa siparis/peşinat yine de gecerli
+            // (geri alinmadi) — kullanici bunu KACIRMASIN diye ozel mesaj
+            // gosterilip listeye degil, dogrudan olusturulan siparisin
+            // detayina yonlendirilir.
+            if (planFailureMessage) {
+              alert([planFailureMessage, ...allWarnings].join("\n\n"));
+              nav(`/orders/${orderId}`);
+              return;
+            }
+
             if (allWarnings.length > 0) {
               alert(`Sipariş kaydedildi, ancak şu uyarılar var:\n\n${allWarnings.join("\n")}`);
             } else {
@@ -1298,6 +1396,53 @@ export default function NewOrder() {
                                         {label}
                                     </button>
                                 ))}
+                            </div>
+                        </div>
+
+                        <div className="space-y-3 pt-2 border-t border-slate-100">
+                            <label className="text-xs font-bold text-slate-500">Ödeme Bilgileri</label>
+
+                            <div>
+                                <label className="mb-1 block text-[10px] font-bold text-slate-400">Şimdi Alınan Peşinat (₺, opsiyonel)</label>
+                                <input
+                                    type="number" min={0} value={depositInput}
+                                    onChange={(e) => setDepositInput(e.target.value)}
+                                    placeholder="0"
+                                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="mb-1 block text-[10px] font-bold text-slate-400">Kalan Borç İçin</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button type="button" onClick={() => setPaymentPlanChoice("single")} className={cn("rounded-xl px-2 py-2 text-[10px] font-black", paymentPlanChoice === "single" ? "bg-indigo-600 text-white" : "border border-slate-200 dark:border-slate-700 text-slate-500")}>
+                                        Tek Vade
+                                    </button>
+                                    <button type="button" onClick={() => setPaymentPlanChoice("multi")} className={cn("rounded-xl px-2 py-2 text-[10px] font-black", paymentPlanChoice === "multi" ? "bg-indigo-600 text-white" : "border border-slate-200 dark:border-slate-700 text-slate-500")}>
+                                        Taksitli
+                                    </button>
+                                    <button type="button" onClick={() => setPaymentPlanChoice("undetermined")} className={cn("rounded-xl px-2 py-2 text-[10px] font-black", paymentPlanChoice === "undetermined" ? "bg-indigo-600 text-white" : "border border-slate-200 dark:border-slate-700 text-slate-500")}>
+                                        Vadesi Belirsiz
+                                    </button>
+                                </div>
+                            </div>
+
+                            {paymentPlanChoice !== "undetermined" && remainingForPlan > 0.01 ? (
+                                <PaymentSetupSection
+                                    remainingAmount={remainingForPlan}
+                                    mode={paymentPlanChoice}
+                                    onModeChange={setPaymentPlanChoice}
+                                    singleDueDate={planSingleDueDate}
+                                    onSingleDueDateChange={setPlanSingleDueDate}
+                                    rows={planRows}
+                                    onRowsChange={setPlanRows}
+                                    formatMoney={formatTL}
+                                    hideModeToggle
+                                />
+                            ) : null}
+
+                            <div className="text-[10px] font-bold text-slate-400">
+                                Sipariş Toplamı: {formatTL(grandTotal)} — Peşinat: {formatTL(Math.max(depositAmountRaw, 0))} — Kalan: {formatTL(remainingForPlan)}
                             </div>
                         </div>
 

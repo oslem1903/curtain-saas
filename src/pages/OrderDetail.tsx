@@ -7,7 +7,8 @@ import { normalizeRole, type RoleState } from "../auth/roles";
 import { logAction } from "../utils/audit";
 import { notifyPaymentReceived } from "../services/notificationManager";
 import { createFinanceService } from "../services/finance";
-import { computePlanForOrder } from "../utils/installments";
+import { computePlanForOrder, buildInstallmentPlanFromDraft } from "../utils/installments";
+import PaymentSetupSection from "../components/PaymentSetupSection";
 import {
     Plus,
     Trash2,
@@ -1297,6 +1298,10 @@ export default function OrderDetail() {
             setPaymentError("Tahsilat tutarı 0'dan büyük olmalı.");
             return;
         }
+        if (amount > remaining + 0.01) {
+            setPaymentError(`Tahsilat tutarı siparişin kalan borcunu (${fmtTL(remaining)}) aşamaz.`);
+            return;
+        }
 
         setSaving(true);
         setPaymentError("");
@@ -1355,6 +1360,18 @@ export default function OrderDetail() {
         }
     }
 
+    // Taksit satırındaki "Tahsil Et" — o anki kalan tutarı MEVCUT tahsilat
+    // formuna ön doldurur. Ayrı bir ödeme sistemi/RPC YOKTUR: kullanıcı tutarı
+    // değiştirebilir ve kaydettiğinde aynı handleAddPayment() → customer_record_collection
+    // akışı çalışır; dağıtım her zamanki gibi FIFO'dur (bu taksite "bağlı" bir
+    // ödeme oluşmaz — bkz. computePlanForOrder).
+    function handleCollectInstallment(installmentRemainingAmount: number) {
+        setPaymentError("");
+        setPaymentSuccess("");
+        setPaymentAmount(String(Math.round(installmentRemainingAmount * 100) / 100));
+        setShowPaymentForm(true);
+    }
+
     function resetPlanForm() {
         setPlanMode("single");
         setPlanSingleDueDate("");
@@ -1372,39 +1389,12 @@ export default function OrderDetail() {
         if (!id || !order) return;
         setPlanError("");
 
-        let installments: Array<{ installmentNo: number; amount: number; dueDate: string }>;
-        if (planMode === "single") {
-            const amount = Math.max(remaining, 0);
-            if (!planSingleDueDate) {
-                setPlanError("Vade tarihi seçin.");
-                return;
-            }
-            if (amount <= 0) {
-                setPlanError("Kalan borç 0 olduğu için plan oluşturulamaz.");
-                return;
-            }
-            installments = [{ installmentNo: 1, amount, dueDate: planSingleDueDate }];
-        } else {
-            const parsed = planRows.map((r, idx) => ({
-                installmentNo: idx + 1,
-                amount: Number(r.amount),
-                dueDate: r.dueDate,
-            }));
-            if (parsed.some((r) => !Number.isFinite(r.amount) || r.amount <= 0)) {
-                setPlanError("Her taksidin tutarı 0'dan büyük olmalı.");
-                return;
-            }
-            if (parsed.some((r) => !r.dueDate)) {
-                setPlanError("Her taksidin vade tarihi girilmeli.");
-                return;
-            }
-            const sum = parsed.reduce((s, r) => s + r.amount, 0);
-            if (Math.abs(sum - remaining) > 0.01) {
-                setPlanError(`Taksit toplamı (${fmtTL(sum)}) kalan borca (${fmtTL(remaining)}) eşit olmalı.`);
-                return;
-            }
-            installments = parsed;
+        const draft = buildInstallmentPlanFromDraft(planMode, remaining, planSingleDueDate, planRows);
+        if ("error" in draft) {
+            setPlanError(draft.error);
+            return;
         }
+        const installments = draft.installments;
 
         setPlanSaving(true);
         try {
@@ -1887,6 +1877,9 @@ export default function OrderDetail() {
 
                     {planComputation ? (
                         <div className="mt-3 space-y-3">
+                            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-2 text-[11px] font-bold text-indigo-700 dark:border-indigo-900/40 dark:bg-indigo-950/20 dark:text-indigo-300">
+                                ℹ Tahsilat en eski açık taksitten başlayarak dağıtılır.
+                            </div>
                             {planComputation.isStale ? (
                                 <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
                                     ⚠ Sipariş tutarı plan oluşturulduğundan beri değişmiş. Planı güncel duruma göre yeniden oluşturun.
@@ -1907,6 +1900,7 @@ export default function OrderDetail() {
                                             <th className="px-3 py-2 text-right text-[10px] font-black uppercase text-indigo-600">Kalan</th>
                                             <th className="px-3 py-2 text-left text-[10px] font-black uppercase text-indigo-600">Vade</th>
                                             <th className="px-3 py-2 text-left text-[10px] font-black uppercase text-indigo-600">Durum</th>
+                                            {canManagePlan ? <th className="px-3 py-2 text-right text-[10px] font-black uppercase text-indigo-600">İşlem</th> : null}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1926,6 +1920,20 @@ export default function OrderDetail() {
                                                         {inst.status === "paid" ? "Ödendi" : inst.status === "partial" ? "Kısmi" : inst.status === "overdue" ? `Gecikti (${inst.daysUntilDue * -1} gün)` : `${inst.daysUntilDue} gün kaldı`}
                                                     </span>
                                                 </td>
+                                                {canManagePlan ? (
+                                                    <td className="px-3 py-2 text-right">
+                                                        {inst.status !== "paid" ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCollectInstallment(inst.remainingAmount)}
+                                                                title="Tahsilat formunu bu taksidin kalan tutarıyla ön doldurur; tutarı değiştirebilirsiniz. Ödeme yine en eski açık taksitten başlayarak dağıtılır."
+                                                                className="rounded-lg border border-emerald-300 px-2.5 py-1 text-[10px] font-black text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300"
+                                                            >
+                                                                Tahsil Et
+                                                            </button>
+                                                        ) : null}
+                                                    </td>
+                                                ) : null}
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1955,49 +1963,16 @@ export default function OrderDetail() {
                                 <div className="text-xs font-black text-slate-500">Kalan borç: {fmtTL(remaining)}</div>
                                 <button type="button" onClick={() => setShowPlanForm(false)} className="text-slate-400 hover:text-slate-600">✕</button>
                             </div>
-                            <div className="flex gap-2">
-                                <button type="button" onClick={() => setPlanMode("single")} className={`rounded-xl px-4 py-2 text-xs font-black ${planMode === "single" ? "bg-indigo-600 text-white" : "border border-slate-300 text-slate-600 dark:border-slate-700"}`}>
-                                    Tek Vade
-                                </button>
-                                <button type="button" onClick={() => setPlanMode("multi")} className={`rounded-xl px-4 py-2 text-xs font-black ${planMode === "multi" ? "bg-indigo-600 text-white" : "border border-slate-300 text-slate-600 dark:border-slate-700"}`}>
-                                    Taksitlendir
-                                </button>
-                            </div>
-
-                            {planMode === "single" ? (
-                                <div>
-                                    <label className="mb-1 block text-xs font-bold text-slate-500">Vade Tarihi</label>
-                                    <input type="date" value={planSingleDueDate} onChange={(e) => setPlanSingleDueDate(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {planRows.map((row, idx) => (
-                                        <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                                            <input
-                                                type="number" min={0} placeholder={`${idx + 1}. taksit tutarı`}
-                                                value={row.amount}
-                                                onChange={(e) => setPlanRows((prev) => prev.map((r, i) => (i === idx ? { ...r, amount: e.target.value } : r)))}
-                                                className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-                                            />
-                                            <input
-                                                type="date"
-                                                value={row.dueDate}
-                                                onChange={(e) => setPlanRows((prev) => prev.map((r, i) => (i === idx ? { ...r, dueDate: e.target.value } : r)))}
-                                                className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-                                            />
-                                            <button type="button" onClick={() => setPlanRows((prev) => prev.filter((_, i) => i !== idx))} disabled={planRows.length <= 1} className="rounded-xl border border-slate-300 px-3 text-slate-500 disabled:opacity-40 dark:border-slate-700">
-                                                <Trash2 className="h-4 w-4" />
-                                            </button>
-                                        </div>
-                                    ))}
-                                    <button type="button" onClick={() => setPlanRows((prev) => [...prev, { amount: "", dueDate: "" }])} className="text-xs font-black text-indigo-600 hover:underline">
-                                        + Taksit Ekle
-                                    </button>
-                                    <div className="text-xs font-bold text-slate-500">
-                                        Toplam: {fmtTL(planRows.reduce((s, r) => s + (Number(r.amount) || 0), 0))} / {fmtTL(remaining)}
-                                    </div>
-                                </div>
-                            )}
+                            <PaymentSetupSection
+                                remainingAmount={remaining}
+                                mode={planMode}
+                                onModeChange={setPlanMode}
+                                singleDueDate={planSingleDueDate}
+                                onSingleDueDateChange={setPlanSingleDueDate}
+                                rows={planRows}
+                                onRowsChange={setPlanRows}
+                                formatMoney={fmtTL}
+                            />
 
                             {planError ? <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700 dark:bg-red-950/30 dark:text-red-300">{planError}</div> : null}
 

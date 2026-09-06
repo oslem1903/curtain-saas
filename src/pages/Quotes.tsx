@@ -9,6 +9,10 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { DELIVERY_DATE_LABEL, todayISO, isValidDeliveryDate, orderDeliveryFields } from "../utils/order";
 import { postSupplierDebt } from "../utils/supplierCari";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
+import { createFinanceService } from "../services/finance";
+import { buildInstallmentPlanFromDraft } from "../utils/installments";
+import type { InstallmentDraftRow } from "../utils/installments";
+import PaymentSetupSection from "../components/PaymentSetupSection";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +95,8 @@ function parseGroupId(note: string | null): string | null {
   return m ? m[1].trim() : null;
 }
 
+function safeNumber(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -106,6 +112,19 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
   const [converting, setConverting] = useState<string | null>(null);
   // Termin (teslim tarihi) siparişe çevirme aşamasında girilir; her teklif grubu için ayrı tutulur.
   const [terminDates, setTerminDates] = useState<Record<string, string>>({});
+  // Ödeme Bilgileri (peşinat + ödeme planı taslağı) — NewOrder.tsx'teki aynı prensiple,
+  // her teklif grubu için ayrı tutulur (aynı ekranda birden fazla bekleyen grup olabilir).
+  const [depositInputs, setDepositInputs] = useState<Record<string, string>>({});
+  const [paymentPlanChoices, setPaymentPlanChoices] = useState<Record<string, "single" | "multi" | "undetermined">>({});
+  const [planSingleDueDates, setPlanSingleDueDates] = useState<Record<string, string>>({});
+  const [planRowsMap, setPlanRowsMap] = useState<Record<string, InstallmentDraftRow[]>>({});
+
+  function getPlanRows(groupId: string): InstallmentDraftRow[] {
+    return planRowsMap[groupId] ?? [{ amount: "", dueDate: "" }];
+  }
+  function getPlanChoice(groupId: string): "single" | "multi" | "undetermined" {
+    return paymentPlanChoices[groupId] ?? "undetermined";
+  }
 
   async function loadData() {
     setLoading(true);
@@ -177,6 +196,26 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       return;
     }
 
+    // Sipariş/kalem/tahsilat/plan kayıtlarından HİÇBİRİ oluşturulmadan önce
+    // müşteri-bağımsız TÜM doğrulamalar tamamlanır (NewOrder.tsx'teki aynı
+    // prensip) — kötü bir peşinat/plan taslağı yüzünden yarım/çelişkili
+    // sipariş bırakılmasın. Quotes.tsx'te müşteri zaten var (ölçüden geliyor),
+    // bu yüzden "yetim müşteri" riski yok — ama yetim sipariş/kalem riski aynen var.
+    const groupTotal = group.totalEstimate;
+    const depositRaw = safeNumber(depositInputs[group.groupId], 0);
+    if (depositRaw < 0) { setErr("Peşinat negatif olamaz."); return; }
+    const deposit = Math.max(depositRaw, 0);
+    const remaining = Math.max(groupTotal - deposit, 0);
+    if (deposit > groupTotal + 0.01) { setErr("Peşinat, sipariş toplamından büyük olamaz."); return; }
+    const planChoice = getPlanChoice(group.groupId);
+    if (planChoice !== "undetermined" && remaining > 0.01) {
+      const draftCheck = buildInstallmentPlanFromDraft(
+        planChoice, remaining, planSingleDueDates[group.groupId] ?? "", getPlanRows(group.groupId),
+      );
+      if ("error" in draftCheck) { setErr(draftCheck.error); return; }
+    }
+
+    setErr("");
     setConverting(group.groupId);
     try {
       const ctx = await getEffectiveTenantContext();
@@ -366,6 +405,48 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         alert(`Sipariş oluşturuldu, ancak aşağıdaki saha bilgileri aktarılamadı:\n\n${photoTransferWarnings.join("\n")}`);
       }
 
+      // 3.6) Peşinat — customer_record_collection üzerinden TEK kayıt (NewOrder.tsx'teki
+      // aynı akış). Başarısız olursa sipariş+kalemler geri alınır — henüz hiçbir
+      // finansal kayıt oluşmadığı için bu güvenlidir.
+      let overpayment = 0;
+      if (deposit > 0) {
+        const finance = createFinanceService();
+        const depositResult = await finance.customerCollections.recordCollection({
+          companyId: ctx.company_id, orderId, amount: deposit, method: "nakit", note: "Sipariş peşinatı",
+        });
+        if (depositResult.status !== "success") {
+          if (insertedItems.length > 0) {
+            await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
+          }
+          await supabase.from("orders").delete().eq("id", orderId);
+          throw new Error(`Peşinat kaydedilemedi: ${depositResult.status === "error" ? depositResult.error.message : "bilinmeyen hata"}`);
+        }
+        overpayment = depositResult.data.overpaymentAmount ?? 0;
+      }
+
+      // 3.7) Ödeme planı — yalnızca "Vadesi Belirsiz" seçilmediyse ve kalan borç varsa
+      // kurulur. Başarısız olursa sipariş/peşinat GERİ ALINMAZ (peşinat gerçek,
+      // geri döndürülemez bir tahsilat kaydıdır) — kullanıcıya açık bir mesaj
+      // gösterilip sipariş detayına yönlendirilir (bkz. akışın sonu).
+      const PLAN_FAILURE_MESSAGE = "Sipariş ve peşinat kaydedildi ancak ödeme planı oluşturulamadı. Planı Sipariş Detayı ekranından yeniden oluşturabilirsiniz.";
+      let planFailureMessage = "";
+      if (planChoice !== "undetermined" && remaining > 0.01) {
+        const draft = buildInstallmentPlanFromDraft(planChoice, remaining, planSingleDueDates[group.groupId] ?? "", getPlanRows(group.groupId));
+        if ("error" in draft) {
+          planFailureMessage = PLAN_FAILURE_MESSAGE;
+        } else {
+          const finance = createFinanceService();
+          const planResult = await finance.customerInstallments.createPlan({
+            companyId: ctx.company_id, orderId, installments: draft.installments,
+          });
+          if (planResult.status !== "success") {
+            planFailureMessage = PLAN_FAILURE_MESSAGE;
+          }
+        }
+      }
+      const overpaymentWarning = overpayment > 0 ? `Peşinat sipariş toplamını aşıyor, müşteri alacaklı: ${fmtTL(overpayment)}` : "";
+      if (overpaymentWarning) alert(overpaymentWarning);
+
       // 4) Tedarikçi borçları (Her kalem için ayrı ayrı işleyip order_item'a bağlayalım)
       const supplierDebtWarnings: string[] = [];
       for (const item of insertedItems) {
@@ -408,6 +489,15 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       }
 
       setRows(prev => prev.map(r => apptIds.includes(r.id) ? { ...r, order_id: orderId } : r));
+
+      // Plan oluşturma başarısız olduysa sipariş/peşinat yine de geçerli (geri
+      // alınmadı) — kullanıcı bunu KAÇIRMASIN diye özel mesaj gösterilip
+      // doğrudan oluşturulan siparişin detayına yönlendirilir.
+      if (planFailureMessage) {
+        alert(planFailureMessage);
+        nav(`/orders/${orderId}`);
+        return;
+      }
       nav("/orders", { state: { newOrderId: orderId } });
     } catch (e: any) {
       console.error("Sipariş oluşturma hatası tam log:", e, e?.stack);
@@ -582,6 +672,51 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
                         className="rounded-xl border border-slate-200 px-2.5 py-2 text-xs font-bold outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950"
                       />
                     </label>
+
+                    {/* Ödeme Bilgileri — peşinat + ödeme planı taslağı (NewOrder.tsx'teki aynı bileşen/kural). */}
+                    <div className="w-full sm:w-72 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/40">
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold text-slate-400">Şimdi Alınan Peşinat (₺, opsiyonel)</label>
+                        <input
+                          type="number" min={0} value={depositInputs[group.groupId] ?? ""}
+                          onChange={(e) => setDepositInputs(prev => ({ ...prev, [group.groupId]: e.target.value }))}
+                          placeholder="0"
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold text-slate-400">Kalan Borç İçin</label>
+                        <div className="flex gap-1.5">
+                          {(["single", "multi", "undetermined"] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setPaymentPlanChoices(prev => ({ ...prev, [group.groupId]: mode }))}
+                              className={`flex-1 rounded-lg px-2 py-1.5 text-[10px] font-black ${getPlanChoice(group.groupId) === mode ? "bg-indigo-600 text-white" : "border border-slate-300 text-slate-600 dark:border-slate-700"}`}
+                            >
+                              {mode === "single" ? "Tek Vade" : mode === "multi" ? "Taksitli" : "Vadesi Belirsiz"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {getPlanChoice(group.groupId) !== "undetermined" && Math.max(group.totalEstimate - Math.max(safeNumber(depositInputs[group.groupId], 0), 0), 0) > 0.01 && (
+                        <PaymentSetupSection
+                          remainingAmount={Math.max(group.totalEstimate - Math.max(safeNumber(depositInputs[group.groupId], 0), 0), 0)}
+                          mode={getPlanChoice(group.groupId) === "multi" ? "multi" : "single"}
+                          onModeChange={() => { /* NewOrder.tsx'teki gibi asıl mod seçimi yukarıdaki 3'lü butonlardan yapılır */ }}
+                          singleDueDate={planSingleDueDates[group.groupId] ?? ""}
+                          onSingleDueDateChange={(v) => setPlanSingleDueDates(prev => ({ ...prev, [group.groupId]: v }))}
+                          rows={getPlanRows(group.groupId)}
+                          onRowsChange={(rows) => setPlanRowsMap(prev => ({ ...prev, [group.groupId]: rows }))}
+                          formatMoney={fmtTL}
+                          hideModeToggle
+                        />
+                      )}
+                      <div className="text-[10px] font-bold text-slate-500">
+                        Sipariş Toplamı: {fmtTL(group.totalEstimate)} — Peşinat: {fmtTL(Math.max(safeNumber(depositInputs[group.groupId], 0), 0))} — Kalan: {fmtTL(Math.max(group.totalEstimate - Math.max(safeNumber(depositInputs[group.groupId], 0), 0), 0))}
+                      </div>
+                    </div>
+
                     <div className="flex items-center justify-end gap-2">
                       <button onClick={() => handleEditGroup(group)} className="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"><Pencil className="h-4 w-4" /> Düzenle</button>
                       <button onClick={() => handleCancelGroup(group)} disabled={cancelling === group.groupId} className="inline-flex items-center gap-1 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800"><XCircle className="h-4 w-4" /> İptal Et</button>

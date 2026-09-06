@@ -30,6 +30,7 @@ import MeasurementEntry from "./pages/MeasurementEntry";
 import AppointmentDetail from "./pages/AppointmentDetail";
 import { Suppliers } from "./pages/Suppliers";
 import { Accounting } from "./pages/Accounting";
+import Collections from "./pages/Collections";
 import { Settings } from "./pages/Settings";
 import SupplierLedger from "./pages/SupplierLedger";
 import Products from "./pages/Products";
@@ -418,6 +419,16 @@ export default function App() {
                   <RoleGate allow={["admin", "accountant"]}>
                     <ModuleGate module="accounting">
                       <Accounting />
+                    </ModuleGate>
+                  </RoleGate>
+                }
+              />
+                <Route
+                path="collections"
+                element={
+                  <RoleGate allow={["admin", "accountant"]}>
+                    <ModuleGate module="collections">
+                      <Collections />
                     </ModuleGate>
                   </RoleGate>
                 }
