@@ -401,8 +401,16 @@ export const Layout = () => {
                  const display = getTrialDisplayInfo(comp);
                  if (display.isTrialPlan) {
                      setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft });
-                     const isSuperAdminWriteDemo = realRole === "super_admin" && localStorage.getItem("demo_company_id") && localStorage.getItem("demo_read_only") === "false";
-                     if (display.isExpired && !isSuperAdminWriteDemo) {
+                     // Süper adminin KENDİ hesabı gerçek bir firmaya (company_members üzerinden,
+                     // demo_company_id OLMADAN) bağlıysa VE o firmanın denemesi dolmuşsa, ctx.company_id
+                     // buraya o firmanın ID'sini getirir — display.isExpired TRUE olur ve aşağıdaki
+                     // setAppReadOnlyMode(true), isReadOnly GLOBAL değişkenini true yapar. Bu, süper
+                     // adminin İLGİSİZ Süper Admin panel işlemlerini (örn. başka bir firmanın modülünü
+                     // açma) bile engelliyordu (2026-09-09 QA oturumunda canlı doğrulandı: PATCH isteği
+                     // ağa HİÇ gönderilmiyordu). Süper admin HER ZAMAN muaf olmalı — yalnızca "yazma
+                     // demo modunda" değil, kendi hesabının durumundan BAĞIMSIZ olarak.
+                     const isSuperAdminExempt = realRole === "super_admin";
+                     if (display.isExpired && !isSuperAdminExempt) {
                          setIsExpiredTrial(true);
                          setShowPurchaseScreen(true);
                          setAppReadOnlyMode(true);
