@@ -31,6 +31,7 @@ type QuoteRow = {
   height_cm: number | null;
   rounded_width_cm: number | null;
   rounded_height_cm: number | null;
+  estimated_area_m2: number | null;
   quantity: number | null;
   unit_price: number | null;
   supplier_id: string | null;
@@ -71,12 +72,20 @@ function productLabel(t: string | null | undefined): string {
   return map[String(t ?? "").toLowerCase()] ?? (t || "Ürün");
 }
 
+// Alan hesabı MeasurementEntry.tsx'teki calculate() ile AYNI olmalı (stor/zebra: yuvarlanmış min
+// ölçüler; tül/fon: pile çarpanı + dikiş payı ile kumaş eni) — ürün türüne göre FARKLI kurallar
+// içerdiği için burada TEKRAR (yanlış/basitleştirilmiş width*height ile) hesaplanmaz, ölçü
+// aşamasında zaten doğru hesaplanıp appointments.estimated_area_m2'ye yazılmış değer kullanılır.
+// Fallback yalnızca bu alan hiç yoksa (çok eski/elle eklenmiş kayıtlar) devreye girer.
+function areaM2Of(row: QuoteRow): number {
+  if (row.estimated_area_m2 != null) return row.estimated_area_m2;
+  return ((row.width_cm ?? 0) / 100) * ((row.height_cm ?? 0) / 100);
+}
+
 function calcEstimate(row: QuoteRow): number {
-  const w = (row.width_cm ?? 0) / 100;
-  const h = (row.height_cm ?? 0) / 100;
   const qty = Math.max(1, row.quantity ?? 1);
   const price = row.unit_price ?? 0;
-  return w * h * qty * price;
+  return areaM2Of(row) * qty * price;
 }
 
 function fmtTL(n: number): string {
@@ -134,7 +143,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
 
       let { data, error } = await supabase
         .from("appointments")
-        .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,quantity,unit_price,supplier_id,supplier_unit_cost,note,customer:customers(name,phone)")
+        .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,estimated_area_m2,quantity,unit_price,supplier_id,supplier_unit_cost,note,customer:customers(name,phone)")
         .eq("company_id", ctx.company_id)
         .eq("type", "measurement")
         .in("status", ["done", "cancelled"])
@@ -144,7 +153,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       if (error) {
         const fb = await supabase
           .from("appointments")
-          .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,quantity,unit_price,note,customer:customers(name,phone)")
+          .select("id,created_at,status,order_id,customer_id,address,room_name,product_type,model_name,color_name,width_cm,height_cm,rounded_width_cm,rounded_height_cm,estimated_area_m2,quantity,unit_price,note,customer:customers(name,phone)")
           .eq("company_id", ctx.company_id)
           .eq("type", "measurement")
           .in("status", ["done", "cancelled"])
@@ -227,12 +236,13 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       let totalSupplierLineTotal = 0;
 
       const itemsPayload = group.rows.map(row => {
-        const widthM  = (row.width_cm  ?? 100) / 100;
-        const heightM = (row.height_cm ?? 200) / 100;
         const qty      = Math.max(1, row.quantity ?? 1);
         const unitPrice = row.unit_price ?? 0;
         const supplierUnitCost = row.supplier_unit_cost ?? 0;
-        const areaM2    = widthM * heightM;
+        // areaM2Of(): ölçü aşamasında hesaplanmış, ürün-türüne-göre-doğru alan (bkz. calcEstimate
+        // üstündeki not) — width_cm*height_cm ile YENIDEN hesaplanmaz (tül/fon'un pile+dikiş payı
+        // kuralını, stor/zebra'nın min-ölçü+yuvarlama kuralını sessizce kaybederdi).
+        const areaM2    = areaM2Of(row);
         const lineTotal = areaM2 * qty * unitPrice;
         const supplierLineTotal = areaM2 * qty * supplierUnitCost;
 
