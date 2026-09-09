@@ -1,4 +1,4 @@
-import { Page } from "@playwright/test";
+import { Page, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -12,11 +12,17 @@ export const hasAuthState = () => fs.existsSync(STATE_PATH);
 export const allowWrites = () => process.env.E2E_ALLOW_WRITES === "1";
 
 // super_admin oturumunu, bir TEST firması üzerinden "admin" demo görünümüne geçirir.
-// (openDemo akışının test eşdeğeri: demo_company_id + yazma açık + header'dan admin rolü.)
-// Döndürür: seçilen test firması. Reload yapıldığı için bu çağrıdan SONRA sayfa
-// gezintisi navHash() ile (reload'suz) yapılmalı; aksi halde rol super_admin'e döner.
-// Supabase realtime websocket açık kaldığı için "networkidle" asla oturmaz ve
-// 30s timeout'u boşa yer. Bunun yerine window.supabase hazır olana kadar bekle.
+// GERÇEK "İşlem Modu" butonuna tıklar (SuperAdminCompanies.tsx::openDemo(company,"admin",false)) —
+// localStorage'ı elle yazıp reload etmek YERİNE, çünkü openDemo bir SPA nav() yapıyor ve rol
+// geçişi yalnızca reload OLMADAN doğru çalışıyor (2026-09-09 QA oturumunda canlı doğrulandı: reload
+// sonrası RoleContext'in mount effect'i demo_viewing_role'u siper-admin icin sifirliyor). Eskiden bu
+// fonksiyon header'daki rol seçiciyi arıyordu ("Süper Admin" option'lı <select>) — bu artık YANLIŞ
+// çünkü (a) etiket "Süper Yönetici"ye değişti, (b) demo/tenant modundayken kutu firmanın
+// enabled_roles'una göre filtreleniyor ve "Süper Admin" hiçbir zaman seçenek olarak görünmüyor.
+// Döndürür: seçilen test firması. Bu çağrıdan SONRA sayfa gezintisi navHash() ile (reload'suz)
+// yapılmalı; aksi halde rol super_admin'e döner.
+// Supabase realtime websocket açık kaldığı için "networkidle" asla oturmaz ve 30s timeout'u boşa
+// yer. Bunun yerine window.supabase hazır olana kadar bekle.
 async function waitSupabaseReady(page: Page) {
   await page.waitForLoadState("domcontentloaded").catch(() => {});
   await page.waitForFunction(() => !!(window as any).supabase, null, { timeout: 15_000 }).catch(() => {});
@@ -25,6 +31,22 @@ async function waitSupabaseReady(page: Page) {
 export async function actAsTestCompanyAdmin(page: Page): Promise<{ id: string; name: string }> {
   await page.goto("/#/super-admin/companies", { waitUntil: "domcontentloaded" });
   await waitSupabaseReady(page);
+  // storageState.json, kaydedildiği anda tarayıcıda AÇIK olan demo/impersonation localStorage
+  // anahtarlarını da (demo_company_id vb.) olduğu gibi yakalar — kaydeden kişi daha önce elle
+  // "İşlem Modu"na girmişse bu, HER testin BAŞKA bir firmanın demo bağlamıyla başlamasına yol açar.
+  // Temiz bir başlangıç için önce açıkça temizle (clearDemoTenantContext ile aynı anahtarlar).
+  await page.evaluate(() => {
+    localStorage.removeItem("demo_company_id");
+    localStorage.removeItem("demo_read_only");
+    localStorage.removeItem("demo_viewing_role");
+    localStorage.removeItem("demo_viewing_user_id");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitSupabaseReady(page);
+  // Bu sayfa firma başına ayrı istatistik sorguları attığı için (37+ firma) yüklenmesi uzun
+  // sürüyor ve liste sürekli yeniden render oluyor — "Yükleniyor..." kaybolana kadar bekle,
+  // aksi halde arama kutusuna yazma/tıklama sürekli devam eden re-render'larla yarışır.
+  await page.waitForFunction(() => !document.body.innerText.includes("Yükleniyor..."), null, { timeout: 30_000 }).catch(() => {});
 
   const company = await page.evaluate(async () => {
     const sb = (window as any).supabase;
@@ -40,19 +62,41 @@ export async function actAsTestCompanyAdmin(page: Page): Promise<{ id: string; n
   });
   if (!company) throw new Error("Test firması bulunamadı (companies içinde 'test/demo' adlı firma yok).");
 
-  // Yazma-etkin demo bağlamı.
+  // Arama kutusuna firma adını yaz — 37+ karttan doğru "İşlem Modu" butonunu tekilleştirmek için.
+  // Filtrelemenin GERÇEKTEN uygulandığını (yalnızca hedef firmanın kartı kaldığını) bekle — aksi
+  // halde React henüz yeniden render etmeden tıklama YANLIŞ (örn. alfabetik ilk) karta gidebilir.
+  await page.getByPlaceholder("Firma ara...").fill(company.name);
+  await expect(page.getByRole("button", { name: "İşlem Modu" })).toHaveCount(1, { timeout: 10_000 });
+  await page.getByRole("button", { name: "İşlem Modu" }).click({ timeout: 10_000 });
+  await page.waitForURL(/#\/(dashboard|accounting|route\/today)/, { timeout: 15_000 });
+  await waitSupabaseReady(page);
+  await page.waitForTimeout(800);
+  return company;
+}
+
+// actAsTestCompanyAdmin'in HAFİF alternatifi: /super-admin/companies'in yavaş, firma-başına-ayrı-
+// sorgulu listesini (bkz. 2026-09-09 QA oturumunda ayrıca bildirilen performans sorunu) hiç
+// YÜKLEMEDEN, doğrudan localStorage'a demo bağlamını yazıp BİR KEZ reload eder. "İşlem Modu"
+// butonunun kendisini test etmeyen (yalnızca yazma-etkin bir tenant bağlamına ihtiyaç duyan)
+// testler için kullanılır — actAsTestCompanyAdmin'in kendisi (buton tıklama akışının doğru
+// çalıştığını doğrulayan testler için) hâlâ mevcut ve ayrı kalır.
+export async function enterDemoWriteModeDirect(page: Page, companyId: string, companyName: string, targetRoute = "/dashboard"): Promise<{ id: string; name: string }> {
+  // Süper admin, demo_company_id HENÜZ set edilmeden hedef rotaya gidince uygulama onu kendi
+  // paneline (/#/super-admin/companies) yönlendirebiliyor — ama localStorage.setItem sayfanın O
+  // ANKİ rotasından TAMAMEN bağımsız çalışır (origin bazlı). Bu yüzden: önce hedef rotaya git (nereye
+  // yönlendirilirse yönlendirilsin fark etmez), localStorage'ı yaz, SONRA reload et — bu reload artık
+  // demo_company_id ZATEN VARKEN, hedef rotanın hash'iyle baştan başlar.
+  await page.goto(`/#${targetRoute}`, { waitUntil: "domcontentloaded" });
   await page.evaluate((cid) => {
     localStorage.setItem("demo_company_id", cid);
     localStorage.setItem("demo_read_only", "false");
-  }, company.id);
-  await page.reload();
+    localStorage.removeItem("demo_viewing_role");
+    localStorage.removeItem("demo_viewing_user_id");
+  }, companyId);
+  await page.reload({ waitUntil: "domcontentloaded" });
   await waitSupabaseReady(page);
-
-  // Header rol seçicisinden admin'e geç (React state güncellenir, reload yok).
-  const roleSelect = page.locator("select", { has: page.locator("option", { hasText: "Süper Admin" }) }).first();
-  await roleSelect.selectOption("admin");
-  await page.waitForTimeout(1200);
-  return company;
+  await page.waitForTimeout(800);
+  return { id: companyId, name: companyName };
 }
 
 // Reload'suz SPA gezintisi (hash değişimi) — demo admin rolünü korur.
