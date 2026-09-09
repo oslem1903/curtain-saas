@@ -5,13 +5,15 @@
 // Tüm authed testler bu storageState'i tekrar kullanır — testler arası login yok.
 //
 // Çalıştır:  node scripts/e2e-record-auth.mjs
+// Farklı bir dosyaya kaydetmek için (mevcut oturumun üzerine yazmadan):
+//            node scripts/e2e-record-auth.mjs tests/e2e/.auth/state.company1-admin.json
 // ============================================================
 import { chromium } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:5173";
-const OUT = path.resolve(process.cwd(), "tests/e2e/.auth/state.json");
+const OUT = path.resolve(process.cwd(), process.argv[2] || "tests/e2e/.auth/state.json");
 
 const browser = await chromium.launch({ headless: false });
 const context = await browser.newContext();
