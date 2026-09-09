@@ -114,6 +114,10 @@ export default function SuperAdminCompanies() {
     const nav = useNavigate();
     const { effectiveRole, setViewingRoleAndUser } = useRole();
     const [pendingImpersonationRedirect, setPendingImpersonationRedirect] = useState(false);
+    // openDemo() (Demo İzle / İşlem Modu) için "Firma Olarak Giriş" ile AYNI sorunun aynı çözümü:
+    // effectiveRole gerçekten (RoleContext state'i) commit edilene kadar nav() ERTELENİR — bkz.
+    // aşağıdaki effect ve impersonation'ın onSuccess'indeki aynı desen/yorum.
+    const [pendingDemoNav, setPendingDemoNav] = useState<{ role: "admin" | "accountant" | "installer"; target: string } | null>(null);
     const [companies, setCompanies] = useState<CompanyStats[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -138,6 +142,13 @@ export default function SuperAdminCompanies() {
             nav("/dashboard");
         }
     }, [pendingImpersonationRedirect, effectiveRole, nav]);
+
+    useEffect(() => {
+        if (pendingDemoNav && effectiveRole === pendingDemoNav.role) {
+            setPendingDemoNav(null);
+            nav(pendingDemoNav.target);
+        }
+    }, [pendingDemoNav, effectiveRole, nav]);
 
     async function loadCompanies() {
         setLoading(true);
@@ -359,11 +370,18 @@ export default function SuperAdminCompanies() {
     }
 
     function openDemo(company: CompanyStats, role: "admin" | "accountant" | "installer", readOnly = true) {
+        // ESKİ HALİ (localStorage.setItem("demo_viewing_role", ...) + doğrudan nav()) hiçbir yerde
+        // okunmayan bir anahtara yazıyordu — effectiveRole (RoleContext state'i) "super_admin"de
+        // kalmaya devam ediyor, bu yüzden hedef sayfadaki RoleGate girişi reddedip
+        // /super-admin/companies'e geri yönlendiriyordu (2026-09-09 QA oturumunda network/route
+        // trace'iyle doğrulandı — Demo İzle/İşlem Modu SESSİZCE çalışmıyordu). Çözüm, aşağıdaki
+        // impersonation (Firma Olarak Giriş) onSuccess'inde ZATEN kullanılan AYNI desen:
+        // setViewingRoleAndUser ile React state'i gerçekten güncelle, nav()'ı effectiveRole bunu
+        // yansıtana kadar ERTELE (bkz. yukarıdaki pendingDemoNav effect'i).
         setDemoTenantContext(company.id, readOnly);
-        localStorage.setItem("demo_viewing_role", role);
-        localStorage.removeItem("demo_viewing_user_id");
+        setViewingRoleAndUser(role, null);
         const target = role === "accountant" ? "/accounting" : role === "installer" ? "/route/today" : "/dashboard";
-        nav(target);
+        setPendingDemoNav({ role, target });
     }
 
     const filtered = companies.filter((company) =>
