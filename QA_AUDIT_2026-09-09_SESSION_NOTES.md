@@ -338,6 +338,52 @@ jalousie/picasso için reduktör/kurdelalı gibi EK çarpanlar uyguluyor (satır
 gösterilen tahmini fiyat, doğrudan sipariş oluşturmadaki nihai fiyattan farklı olabilir. Kapsam/zaman
 kısıtı nedeniyle bu oturumda dokunulmadı, ayrı bir bulgu olarak not edildi.
 
+## 10. KRİTİK UYGULAMA HATASI BULUNDU VE DÜZELTİLDİ: openDemo() rolü hiç değiştirmiyordu
+E2E testinin network trace'i (console/network/pageerror loglanarak) incelendiğinde, aynı 37 firmanın
+company_devices/support_tickets sorgularının DEFALARCA (bazı company_id'ler 4+ kez) tekrarlandığı
+görüldü — tek seferlik yavaşlık değil, sürekli tekrar. Kök neden: `SuperAdminCompanies.tsx::openDemo()`
+(Demo İzle/İşlem Modu butonları) firma bağlamını (`demo_company_id`) doğru ayarlıyordu ama
+`effectiveRole`'ü (RoleContext) HİÇ "admin"e çevirmiyordu — yalnızca hiçbir yerde okunmayan ölü bir
+localStorage anahtarına (`demo_viewing_role`) yazıyordu. Sonuç: `/dashboard`, `/measurements/new` gibi
+sayfalardaki `RoleGate`, rol hâlâ "super_admin" olduğu için erişimi reddedip `/super-admin/companies`'e
+geri yönlendiriyordu — bu da firma listesinin yeniden yüklenmesine (ve tekrar sorgu fırtınasına) yol
+açıyordu. AYNI SORUN, AYNI DOSYADA "Firma Olarak Giriş" (impersonation) akışı için ZATEN bulunup
+düzeltilmişti (kod içindeki yorum bunu doğruluyor) — ama `openDemo()`'ya hiç uygulanmamıştı.
+**DÜZELTME (commit ffc6815):** `openDemo()`, impersonation'daki kanıtlanmış desene taşındı
+(`setViewingRoleAndUser` + effectiveRole gerçekten commit edilene kadar navigasyonu erteleyen effect).
+CANLI DOĞRULANDI: company.authed.spec.ts VE curtain-flow.authed.spec.ts artık PASS.
+
+## 11. KRİTİK FİYAT HATASI DOĞRULANDI (commit 59d86ff) — canlı E2E ile kanıtlandı
+Bölüm 9'daki bulgu artık gerçek tıklama/yazma ile doğrulandı:
+[tests/e2e/curtain-flow.authed.spec.ts](tests/e2e/curtain-flow.authed.spec.ts) — Test Company 1'de
+gerçek bir tül ölçüsü (en=200cm, boy=250cm, pile 1'e 3, birim fiyat=420₺/m²) girildi, Teklif'e
+kaydedildi, Siparişe çevrildi. SONUÇ: `appointments.estimated_area_m2`=6.15, `estimated_total`=2583₺
+VE nihai `order_items.line_total`=2583₺ — DÜZELTME ÖNCESİ bu son değer yanlışlıkla 2100₺ olacaktı
+(width×height hatası). **1 passed (22.8s).**
+
+## 12. Android build: BAŞARILI (C:\PerdePRO-Build, NTFS) — kanıtlı
+Kullanıcı onayıyla proje (node_modules/.git/eski release'ler HARİÇ) `C:\PerdePRO-Build`'e kopyalandı,
+`npm install` + `npm run build` + `npx cap sync android` + `gradlew assembleDebug` sırayla çalıştırıldı.
+**BUILD SUCCESSFUL (1m 4s, 338/338 görev)** — APK: `C:\PerdePRO-Build\android\app\build\outputs\apk\debug\app-debug.apk`
+(9.45 MB, doğrulandı).
+
+KÖK NEDEN ARAŞTIRMASI (kullanıcı talebi üzerine, FAT32'yi tek neden saymadan): (1) D:\ sürücüsünde
+bir Gradle daemon'ı çalışır durumdaydı — `gradlew --stop` ile durduruldu, AMA sorun devam etti (bu,
+daemon'ın TEK başına neden olmadığını kanıtlıyor). (2) D:\ sürücüsü FAT32 (`Get-Volume` ile
+doğrulandı) — `gradlew clean` bile build klasörünü silemedi ("Unable to delete directory"), bu
+NTFS'e özgü dosya-özniteliği/kilit semantiğinin FAT32'de çalışmadığını gösteriyor. (3) AYRICA, C:\
+kopyasında BAŞKA bir engel daha çıktı: `android/local.properties`'teki SDK yolu `.android-sdk`
+(D:\'de, proje-özel, kısmi bir SDK) idi — Android Gradle Plugin bunu "Invalid file path" ile
+REDDETTİ (muhtemelen cross-drive veya format sorunu). Bilgisayarda zaten TAM bir Android Studio SDK'sı
+vardı (`C:\Users\Oslem\AppData\Local\Android\Sdk`, android-36 + build-tools 36.1.0) — buna
+yönlendirilince build başarıyla tamamlandı. SONUÇ: FAT32 GERÇEK bir katkıda bulunan neden (D:\'de
+clean bile başarısız oldu), ama TEK neden değildi — SDK yolu sorunu AYRI ve EŞİT ÖNEMDE bir engeldi.
+D:\ üzerinde SDK yolu düzeltilse bile FAT32 sorunu muhtemelen devam ederdi (clean testi bunu gösteriyor).
+
+**NOT:** Bu yalnızca DEBUG build'dir (imzasız, geliştirme amaçlı). RELEASE (imzalı, Play Store'a
+yüklenebilir AAB) için keystore/imzalama AYRI onay gerektiriyor — talimatlar gereği bu adımda
+DURULDU, ilerlenmedi.
+
 ## 8. Kalan işler / bloke olanlar
 - E2E oturumlu test paketi: kullanıcının `node scripts/e2e-record-auth.mjs` çalıştırıp elle giriş
   yapması bekleniyor.
