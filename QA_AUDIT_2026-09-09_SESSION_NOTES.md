@@ -384,6 +384,58 @@ D:\ üzerinde SDK yolu düzeltilse bile FAT32 sorunu muhtemelen devam ederdi (cl
 yüklenebilir AAB) için keystore/imzalama AYRI onay gerektiriyor — talimatlar gereği bu adımda
 DURULDU, ilerlenmedi.
 
+## 13. Test kullanıcısı hazırlığı — 2 bulgu daha (ikisi de düzeltildi)
+
+**Bulgu A (hata değil, kasıtlı paket kısıtlaması):** Test Company 1'in `enabled_modules`'ında
+`"staff"` yoktu — bu yüzden Personel sayfası/menüsü `ModuleGate` tarafından gizleniyordu. DÜZELTME
+DEĞİL, doğru araç kullanıldı: Süper Admin panelindeki "Firma Modülleri" → "Personel" toggle'ı ile
+(uygulamanın kendi sağladığı mekanizma) Test Company 1 için AÇILDI. Doğrulandı:
+`enabled_modules: ["orders","customers","appointments","staff"]`.
+
+**Bulgu B (KRİTİK, gerçek uygulama hatası, DÜZELTİLDİ — commit 193b1b4):** Bulgu A'yı UI üzerinden
+uygulamaya çalışırken "Firma güncellenemedi" hatasıyla karşılaşıldı. `page.on("request")` ile TÜM ağ
+trafiği izlenerek KANITLANDI: `companies` tablosuna PATCH isteği **ağa hiç gönderilmiyordu** — istemci
+tarafında (customFetch'in salt-okunur koruması) engelleniyordu. Kök neden: süper admin hesabının
+KENDİSİ `company_members` üzerinden gerçek bir firmaya ("PerdePro", kendi firması) bağlı, ve o
+firmanın denemesi GERÇEKTEN dolmuş (`trial_ends_at: 2026-04-20`, `is_pilot: false`). `Layout.tsx`'in
+deneme-kontrolü bunu süper adminin KENDİ oturumu için de değerlendirip GLOBAL `isReadOnly` bayrağını
+`true` yapıyordu — bu da Süper Admin panelindeki, o firmayla hiçbir ilgisi olmayan işlemleri (başka
+bir firmanın modülünü açma gibi) bile engelliyordu. Mevcut `isSuperAdminWriteDemo` istisnası yalnızca
+"aktif olarak başka bir firmayı demo/yazma modunda görüntülerken" durumunu kapsıyordu, süper adminin
+KENDİ panelini kullanma durumunu KAPSAMIYORDU. **DÜZELTME:** süper admin artık bu deneme-kilidinden
+KOŞULSUZ muaf (`isSuperAdminExempt = realRole === "super_admin"`) — tıpkı `is_super_admin()`'in
+kod tabanındaki HER YERDE firma kontrollerini atlamasına benzer şekilde. Canlı doğrulandı: düzeltme
+sonrası AYNI modül-toggle işlemi başarıyla tamamlandı.
+
+**ÖNEMLİ NOT (yanlış giden ilk teşhis, düzeltildi):** Bu bulgudan ÖNCE, aynı semptomu ("Failed to
+fetch" / "Firma güncellenemedi") **yanlışlıkla** "kayıtlı oturumun refresh-token rotasyonu nedeniyle
+iptal edildiği" şeklinde yorumlamıştım. Kullanıcı bunu kanıtsız kabul etmeme itiraz etti ("Failed to
+fetch hatasını tek başına token iptalinin kanıtı sayma") — HAKLI çıktı: oturum sağlıklıydı
+(`sb.auth.getSession()` ile doğrulandı, geçerli `expires_at`), asıl sorun yukarıdaki isReadOnly
+bug'ıydı. Ders: istemci-taraflı senkron guard'lar (customFetch gibi) network sekmesinde/DevTools'ta
+GÖRÜNMEZ — bu tür "sessiz" engellemeleri teşhis ederken önce `page.on("request")` ile isteğin ağa
+gidip gitmediğini doğrulamak gerekiyor, hata mesajının GÖRÜNÜŞTE ağ hatası olması yeterli kanıt değil.
+
+## 14. Migration 012/013 inceleme dokümanı hazırlandı
+[MIGRATION_012_013_REVIEW.md](MIGRATION_012_013_REVIEW.md) — tam SQL karşılaştırması, "31 firma"
+bulgusunun tekrar-üretilebilir sorgusu, test durumu ve geri alma planı. SADECE İNCELEME, UYGULAMA
+ONAYI DEĞİL.
+
+## 15. YARIN DEVAM: kaldığımız yer
+- **Sıradaki somut adım:** Test Company 1'de "Personel" sayfası artık açık → Yeni Personel Kartı
+  oluştur → rol ata (davet kodu üretilir) → kullanıcı KENDİ e-postasını seçip `/join` sayfasından
+  şifresini kendisi belirleyerek kayıt olur. Henüz personel kartı OLUŞTURULMADI (email seçimi
+  kullanıcıdan bekleniyordu, oturum kesildi).
+- Migration 011/012/013: HENÜZ UYGULANMADI, onay bekliyor (012/013 için inceleme dokümanı hazır).
+- Tahsilat/montaj akışlarının aynı titizlikte canlı E2E testi HENÜZ YAPILMADI (ölçü→teklif→sipariş
+  zaten PASS, bkz. bölüm 11).
+- Normal (süper admin olmayan) kullanıcıyla izolasyon testi HENÜZ YAPILMADI (yukarıdaki personel
+  akışı tamamlanınca mümkün olacak).
+- Android: debug build C:\PerdePRO-Build'de BAŞARILI ve GÜNCEL kaynakla senkron (commit 68d6f22
+  itibarıyla `diff -rq` ile tam eşleşme doğrulandı, sonrasında 193b1b4/Layout.tsx fix'i C: kopyasına
+  HENÜZ YANSITILMADI — yarın devam edilirse önce bu senkronize edilmeli). Release/imzalama hâlâ ayrı
+  onay bekliyor.
+
 ## 8. Kalan işler / bloke olanlar
 - E2E oturumlu test paketi: kullanıcının `node scripts/e2e-record-auth.mjs` çalıştırıp elle giriş
   yapması bekleniyor.
