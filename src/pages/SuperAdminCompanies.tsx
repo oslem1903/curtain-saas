@@ -177,7 +177,7 @@ export default function SuperAdminCompanies() {
                     plan_status: company.plan_status || (company.is_active === false ? "suspended" : "trial"),
                     is_active: company.is_active !== false,
                     read_only: company.read_only === true,
-                    trial_end: company.trial_end || company.trial_ends_at || null,
+                    trial_end: company.trial_ends_at || null,
                     user_count: userCount || 0,
                     open_tickets: openTickets || 0,
                     last_error_at: lastError?.[0]?.created_at || null,

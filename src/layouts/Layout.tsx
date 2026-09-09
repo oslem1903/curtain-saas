@@ -39,6 +39,7 @@ import { clearDemoTenantContext, getEffectiveTenantContext, supabase, setAppRead
 import { canAccess, roleLabel, type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { useAuth } from "../context/AuthContext";
+import { getTrialDisplayInfo, formatTrialDateTR } from "../utils/trialLicense";
 import { useSupportModal } from "../context/SupportModalContext";
 import { useImpersonation } from "../context/ImpersonationContext";
 import SupportModal from "../components/SupportModal";
@@ -235,7 +236,7 @@ function getPurchaseUrl() {
 }
 
 function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) {
-  const endedAt = trialInfo?.trialEndsAt ? formatTR(trialInfo.trialEndsAt) : null;
+  const endedAt = trialInfo?.trialEndsAt ? formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true }) : null;
 
   return (
     <div className="min-h-[60vh] flex items-center justify-center">
@@ -379,27 +380,29 @@ export const Layout = () => {
       if (!ctx.user || !alive) return;
 
 
-      // Trial check
+      // Trial check — Layout'un KENDI bagimsiz kilit kapisi. AuthContext'teki
+      // ana kilitten (status:"locked") AYRIDIR ama AYNI paylasilan
+      // trialLicense.ts fonksiyonlarini kullanir (trial_ends_at TEK
+      // dogruluk kaynagi, is_pilot=true HER ZAMAN muaf) — boylece pilot bir
+      // firma burada da kilitlenmez.
       if (ctx.company_id) {
          setCompanyName(ctx.company_name || "Perde SaaS");
          setCompanyLogo(ctx.company_logo || null);
          try {
              const { data: comp } = await supabase
                    .from("companies")
-                   .select("subscription_plan, trial_ends_at, enabled_roles")
+                   .select("subscription_plan, plan_status, trial_ends_at, is_pilot, enabled_roles")
                    .eq("id", ctx.company_id)
                    .maybeSingle();
 
              if (comp) {
                  setCompanyEnabledRoles(Array.isArray((comp as any).enabled_roles) ? (comp as any).enabled_roles : []);
-                 const plan = comp.subscription_plan || 'trial';
-                 if (plan === 'trial') {
-                     const endsAt = comp.trial_ends_at ? new Date(comp.trial_ends_at).getTime() : 0;
-                     const trialEndsAt = endsAt > 0 ? new Date(endsAt) : null;
-                     const daysLeft = endsAt > 0 ? Math.max(0, Math.ceil((endsAt - Date.now()) / (24 * 60 * 60 * 1000))) : null;
-                     setTrialInfo({ plan, trialEndsAt, isExpired: endsAt > 0 && Date.now() > endsAt, daysLeft });
+                 const plan = comp.subscription_plan || comp.plan_status || 'trial';
+                 const display = getTrialDisplayInfo(comp);
+                 if (display.isTrialPlan) {
+                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft });
                      const isSuperAdminWriteDemo = realRole === "super_admin" && localStorage.getItem("demo_company_id") && localStorage.getItem("demo_read_only") === "false";
-                     if (endsAt > 0 && Date.now() > endsAt && !isSuperAdminWriteDemo) {
+                     if (display.isExpired && !isSuperAdminWriteDemo) {
                          setIsExpiredTrial(true);
                          setShowPurchaseScreen(true);
                          setAppReadOnlyMode(true);
@@ -841,8 +844,8 @@ export const Layout = () => {
 	          <div className="border-b border-slate-200 bg-white/90 px-4 py-2 text-xs font-bold text-slate-600 dark:border-slate-800 dark:bg-slate-900/90 dark:text-slate-300">
 	            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 	              <span>Paket: <span className="text-slate-900 dark:text-white">{packageDisplayName(company.package_code || company.subscription_plan)}</span></span>
-	              {company.trial_end || company.trial_ends_at ? (
-	                <span>Deneme bitiş: {formatTR(new Date(company.trial_end || company.trial_ends_at || ""))}</span>
+	              {company.trial_ends_at ? (
+	                <span>Deneme bitiş: {formatTrialDateTR(company.trial_ends_at, { withTime: true })}</span>
 	              ) : null}
 	              {readOnly ? <span className="text-red-600">Read-only mod aktif</span> : null}
 	              {isDemoWriteMode ? <span className="text-emerald-600">Süper admin işlem modu aktif</span> : null}
@@ -1172,7 +1175,7 @@ export const Layout = () => {
           {!showPurchaseScreen && trialInfo && !trialInfo.isExpired && trialInfo.daysLeft != null && trialInfo.daysLeft <= 1 && (
             <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
               ⏳ Deneme süreniz {trialInfo.daysLeft === 0 ? "bugün" : "yarın"} doluyor
-              {trialInfo.trialEndsAt ? ` (${formatTR(trialInfo.trialEndsAt)})` : ""}. Kesintisiz devam etmek için lisans satın alın.
+              {trialInfo.trialEndsAt ? ` (${formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true })})` : ""}. Kesintisiz devam etmek için lisans satın alın.
             </div>
           )}
           {showPurchaseScreen &&

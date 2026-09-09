@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import type { User } from "@supabase/supabase-js";
 import { supabase, setAppReadOnlyMode } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
+import { isTrialExpired } from "../utils/trialLicense";
 
 type CompanyState = {
     id: string;
@@ -122,17 +123,6 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Prom
             },
         );
     });
-}
-
-function isTrialExpired(company: CompanyState) {
-    if (company.is_pilot) return false;
-    const status = String(company.plan_status ?? "").toLowerCase();
-    if (status === "expired") return true;
-    if (status === "active" || status === "lifetime") return false;
-
-    const rawEnd = company.trial_end || company.trial_ends_at;
-    if (!rawEnd) return false;
-    return new Date(rawEnd).getTime() < Date.now();
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

@@ -25,6 +25,7 @@ import OnboardingWizard from "../components/OnboardingWizard";
 import { DemoDataGenerator } from "../components/DemoDataGenerator";
 import { buildDashboardDueRows, todayDateOnly, bucketForDueDate, collectionRowStatus, daysBetween } from "../utils/installments";
 import type { OrderPaymentPlan, OrderInstallment, LedgerPayment, CollectionRowStatus } from "../utils/installments";
+import { getTrialDisplayInfo, formatTrialDateTR } from "../utils/trialLicense";
 
 type AppointmentRow = {
   id: string;
@@ -682,18 +683,20 @@ export const Dashboard = () => {
       setShowOnboarding(true);
     }
 
-    // Calculate trial/license info
+    // Calculate trial/license info — deneme tarafi artik PAYLASILAN
+    // trialLicense.ts uzerinden (trial_ends_at TEK dogruluk kaynagi,
+    // is_pilot=true HER ZAMAN muaf, Europe/Istanbul takvim gunune gore
+    // kalan gun) — Layout.tsx'teki ayni fonksiyonlarla birebir tutarli.
+    // Ucretli lisans (license_expires_at) tarafina DOKUNULMADI.
     const now = new Date().getTime();
     let info: TrialInfo | null = null;
 
-    if (company.subscription_status === "trial" && company.trial_ends_at) {
-      const trialEnd = new Date(company.trial_ends_at).getTime();
-      const daysLeftMs = trialEnd - now;
-      const daysLeft = Math.ceil(daysLeftMs / (24 * 60 * 60 * 1000));
+    const trialDisplay = getTrialDisplayInfo(company);
+    if (trialDisplay.isTrialPlan && company.trial_ends_at) {
       info = {
-        daysLeft: Math.max(0, daysLeft),
+        daysLeft: trialDisplay.daysLeft != null ? Math.max(0, trialDisplay.daysLeft) : null,
         trialEndsAt: company.trial_ends_at,
-        isExpired: daysLeft < 0,
+        isExpired: trialDisplay.isExpired,
       };
     } else if (company.subscription_status === "active" && company.license_expires_at) {
       const licenseEnd = new Date(company.license_expires_at).getTime();
@@ -729,12 +732,7 @@ export const Dashboard = () => {
   }
 
   function formatTrialDate(iso: string | null) {
-    if (!iso) return "";
-    return new Date(iso).toLocaleDateString("tr-TR", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
+    return formatTrialDateTR(iso);
   }
 
   return (
