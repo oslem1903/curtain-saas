@@ -1102,7 +1102,6 @@ export const Accounting = () => {
                     p_note: incomeNote || null,
                     p_source: source,
                     p_create_transaction: true,
-                    p_idempotency_key: incomeIntentKeyRef.current,
                 });
 
                 if (error) throw error;
@@ -1176,7 +1175,6 @@ export const Accounting = () => {
                 p_status: expenseStatus || "paid",
                 p_supplier_id: expenseSupplierId || null,
                 p_create_transaction: (expenseStatus || "paid") === "paid",
-                p_idempotency_key: idempotencyKeyRef.current,
             });
 
             if (error) throw error;
