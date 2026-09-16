@@ -1,3 +1,4 @@
+import { requestText } from "../utils/requestText";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { CheckCircle2, MapPin, Navigation, NotebookPen, Phone, RefreshCcw, Route } from "lucide-react";
@@ -297,7 +298,7 @@ export default function TodayRoute() {
   }
 
   async function addNote(row: Row) {
-    const text = prompt("Randevu notu:", row.note ?? "");
+    const text = await requestText("Randevu notu:", row.note ?? "");
     if (text === null) return;
     setMarkingId(row.id);
     try {
@@ -318,7 +319,7 @@ export default function TodayRoute() {
   }
 
   async function reportIssue(row: Row) {
-    const text = prompt("Sorunu kısaca yazın:");
+    const text = await requestText("Sorunu kısaca yazın:");
     if (text === null) return;
     const nextNote = [row.note, `Sorun: ${text.trim()}`].filter(Boolean).join("\n");
     setMarkingId(row.id);

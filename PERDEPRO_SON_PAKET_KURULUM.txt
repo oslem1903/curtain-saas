@@ -1,0 +1,37 @@
+PERDEPRO SON PAKET - KURULUM SIRASI
+===================================
+
+1) ZIP dosyasini D:\curtain-saas klasorunun icine cikartin.
+   Windows "dosyalar degistirilsin mi?" derse Evet deyin.
+
+2) Supabase > SQL Editor'da proje kokundeki su dosyayi acip calistirin:
+   supabase_migration_014_atomic_invoice_save.sql
+
+   Beklenen sonuc: Success. No rows returned.
+
+3) PowerShell:
+
+   Set-Location 'D:\curtain-saas'
+   npm run build
+
+   Beklenen: "built in ...". 500 kB chunk mesaji hata degil, uyaridir.
+
+4) Uygulamayi calistirin:
+
+   npm run dev
+
+5) Hizli kontrol:
+   - Tamamlanmis sipariste "Montaj Takibine Git" dugmesi /installations sayfasini acar.
+   - Yeni siparis, urun kalemiyle birlikte kaydolur.
+   - Teklif ve siparis tutarlari kuruslu ve ayni gorunur.
+   - Supabase'de PERDEPRO_RELEASE_CHECK_READONLY.sql calistirilir.
+
+NOTLAR
+-----
+- Migration 014 gecici invoice demo politikalarini kaldirip kalici tenant
+  politikalarini kurar.
+- Migration 011/012/013 bu pakette korunur; 013 lisans suresi dolmus gercek
+  firmalari aninda kilitleyebilecegi icin salt-okunur kontrol sonucu gorulmeden
+  calistirilmamalidir.
+- npm run build basariliysa dist klasoru olusur. ZIP uretmesi beklenmez.
+

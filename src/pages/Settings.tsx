@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
-import { X, Check, Bell, LifeBuoy } from "lucide-react";
+import { X, Check, Bell, LifeBuoy, Download } from "lucide-react";
 import { CompanySettingsCard } from "../components/CompanySettingsCard";
 import { LicenseCard } from "../components/LicenseCard";
+import { exportBackupWorkbook } from "../utils/backupExport";
+import { getEffectiveTenantContext } from "../supabaseClient";
 
 type MyTicket = {
     id: string;
@@ -37,6 +39,7 @@ export const Settings = () => {
     const [notificationSettings, setNotificationSettings] = useState(() => getNotificationSettings());
     const [myTickets, setMyTickets] = useState<MyTicket[]>([]);
     const [ticketsLoading, setTicketsLoading] = useState(false);
+    const [backupLoading, setBackupLoading] = useState(false);
 
     useEffect(() => {
         async function loadProfile() {
@@ -101,6 +104,21 @@ export const Settings = () => {
         setMessage({ type: "success", text: "Bildirim ayarları kaydedildi." });
     }
 
+    async function downloadBackup() {
+        setBackupLoading(true);
+        try {
+            const ctx = await getEffectiveTenantContext();
+            const result = await exportBackupWorkbook({
+                companyId: ctx.company_id,
+                dateFrom: "2000-01-01",
+                dateTo: "2100-12-31",
+            });
+            setMessage({ type: "success", text: `Yedek indirildi (${Object.values(result.sheetCounts).reduce((a, b) => a + b, 0)} kayıt).` });
+        } catch (e: any) {
+            setMessage({ type: "error", text: e?.message || "Yedek oluşturulamadı." });
+        } finally { setBackupLoading(false); }
+    }
+
     async function handleRequestNotificationPermission() {
         const allowed = await ensureNotificationPermission();
         setMessage({
@@ -127,6 +145,18 @@ export const Settings = () => {
 
             {/* Company Settings Card */}
             <CompanySettingsCard />
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white">Veri Yedekleme</h2>
+                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Sipariş, ölçü, teklif, müşteri, tedarikçi cari, montaj ve tahsilat verilerini ayrı Excel sekmelerine indirir.</p>
+                    </div>
+                    <button onClick={downloadBackup} disabled={backupLoading} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
+                        <Download className="h-4 w-4" /> {backupLoading ? "Hazırlanıyor..." : "Excel Yedeği İndir"}
+                    </button>
+                </div>
+            </section>
 
             {/* License Card */}
             <LicenseCard />

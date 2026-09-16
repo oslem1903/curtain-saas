@@ -3,6 +3,11 @@ import { ChevronDown, ChevronUp, UserCog, Wallet, X, Printer, FileSpreadsheet, D
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
 import { ManualEarningModal } from "../components/ManualEarningModal";
+import { todayLocalISO } from "../utils/date";
+import { PAYMENT_METHOD_OPTIONS, paymentLabelOrDash } from "../utils/paymentLabels";
+import { printHtmlDocument } from "../utils/printDocument";
+import SecureImage from "../components/SecureImage";
+import SecureLink from "../components/SecureLink";
 
 const financeService = createFinanceService();
 
@@ -150,19 +155,20 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             const ctx = await getEffectiveTenantContext();
             setCompanyId(ctx.company_id);
 
-            const { data: emps } = await supabase
+            const { data: emps, error: employeeError } = await supabase
                 .from("employees")
                 .select("id, user_id, full_name, target_role")
                 .eq("company_id", ctx.company_id)
                 .eq("is_active", true)
                 .order("full_name");
+            if (employeeError) throw employeeError;
 
             // Aynı isimli kayıtları tekilleştir; tüm kimlikleri grupla
             // (duplicate kayıtların işleri/ödemeleri tek kartta toplanır)
             const grouped = new Map<string, Employee>();
             ((emps ?? []) as any[]).forEach((e) => {
                 const name = (e.full_name || "İsimsiz").trim();
-                const key = name.toLocaleLowerCase("tr-TR");
+                const key = e.user_id || e.id;
                 const ids = [e.id, e.user_id].filter(Boolean) as string[];
                 const existing = grouped.get(key);
                 if (existing) {
@@ -463,7 +469,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.setAttribute("download", `montajci_${(emp.full_name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.setAttribute("download", `montajci_${(emp.full_name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${todayLocalISO()}.csv`);
         link.click();
     }
 
@@ -485,10 +491,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             )
             .join("");
 
-        const printWindow = window.open("", "_blank", "width=1200,height=800");
-        if (!printWindow) return;
-
-        printWindow.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>Montajcı Cari Ekstresi - ${emp.full_name}</title>
@@ -558,12 +561,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                     </div>
                 </body>
             </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => {
-            printWindow.print();
-        }, 500);
+        `;
+        void printHtmlDocument(printHtml, { title: "Montajcı Hakediş Ekstresi", fileName: "montajci-ekstresi" });
     }
 
     function draftFor(job: Job, installerIds: string[] = []) {
@@ -724,8 +723,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
     const summaryData = useMemo(() => {
         let totalDebt = 0;
         let totalPaidThisMonth = 0;
-        let pendingJobsCount = 0;
-        let completedJobsThisMonth = 0;
+        const pendingJobsCount = jobs.filter(j => !["completed", "cancelled", "canceled"].includes(j.status ?? "waiting")).length;
+        const completedJobsThisMonth = jobs.filter(j => j.status === "completed").length;
         let earnedThisMonth = 0;
 
         const now = new Date();
@@ -736,7 +735,6 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             if (bal) totalDebt += bal.remaining;
             
             const empJobs = jobsForInstaller(emp);
-            pendingJobsCount += empJobs.filter(j => j.status !== "completed" && j.status !== "cancelled" && j.status !== "canceled").length;
             
             // "Bu Ay Tamamlanan" = bu ay içinde status=completed olan işler
             // updated_at varsa kullan (gerçek tamamlanma zamanı); yoksa scheduled_date'e düş
@@ -745,7 +743,6 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 const dateKey = j.updated_at || j.scheduled_date || "";
                 return dateKey >= startOfMonth;
             });
-            completedJobsThisMonth += completedThisMonth.length;
             earnedThisMonth += completedThisMonth.reduce((acc, j) => acc + getJobEarningAmount(j, emp.allIds), 0);
         });
 
@@ -765,7 +762,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             completedJobsThisMonth,
             earnedThisMonth
         };
-    }, [sortedInstallers, ledger, jobsForInstaller, txs, getJobEarningAmount]);
+    }, [sortedInstallers, ledger, jobsForInstaller, txs, getJobEarningAmount, jobs]);
 
     if (loading) return <div className="p-10 text-center text-sm text-slate-500">Montajcı cari yükleniyor...</div>;
 
@@ -1001,9 +998,9 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                                                             {item.photos.length > 0 && (
                                                                                                 <div className="mt-1 flex gap-1">
                                                                                                     {item.photos.slice(0, 2).map((photo, pidx) => (
-                                                                                                        <a key={pidx} href={photo.url} target="_blank" rel="noreferrer" className="h-6 w-6 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
-                                                                                                            <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
-                                                                                                        </a>
+                                                                                                        <SecureLink key={pidx} href={photo.url} target="_blank" rel="noreferrer" className="h-6 w-6 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                                                                                            <SecureImage src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                                                                                        </SecureLink>
                                                                                                     ))}
                                                                                                     {item.photos.length > 2 && (
                                                                                                         <div className="h-6 w-6 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-[8px] font-bold text-slate-500">+{item.photos.length - 2}</div>
@@ -1295,7 +1292,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                             {/* Ödeme Yap modalı */}
                             {payModalId === emp.id && (
                                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-                                    <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+                                    <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                                         <div className="flex items-center justify-between">
                                             <h3 className="text-lg font-black text-slate-900 dark:text-white">{emp.full_name} — Ödeme Yap</h3>
                                             <button onClick={() => setPayModalId(null)} className="rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700">✕</button>
@@ -1334,9 +1331,9 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                             <div>
                                                 <label className="mb-1 block text-xs font-bold text-slate-500">Yöntem</label>
                                                 <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
-                                                    <option value="nakit">Nakit</option>
-                                                    <option value="eft">EFT</option>
-                                                    <option value="havale">Havale</option>
+                                                    {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
                                                 </select>
                                             </div>
                                         </div>
@@ -1415,8 +1412,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                             <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
                                                 {tx.description || (tx.transaction_type === "cancel" ? "İptal" : "Ödeme")}
                                             </td>
-                                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300 capitalize">
-                                                {tx.payment_method || "—"}
+                                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                                                {paymentLabelOrDash(tx.payment_method)}
                                             </td>
                                             <td className={`px-4 py-3 text-right font-black whitespace-nowrap ${tx.transaction_type === "cancel" ? "text-red-600" : "text-emerald-600"}`}>
                                                 {tx.transaction_type === "cancel" ? "+" : "−"} {formatTL(Number(tx.amount))}

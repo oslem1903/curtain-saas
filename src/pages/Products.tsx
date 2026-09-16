@@ -7,7 +7,7 @@ async function getContext() {
     return getEffectiveTenantContext();
 }
 
-type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "diger";
+type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "plicell" | "rustik" | "dekoratif_ray" | "kruvaze" | "katlamali_mekanizma" | "ip_perde" | "aksesuar" | "diger";
 
 type ProductRow = {
     id: string;
@@ -120,6 +120,13 @@ function categoryLabel(category: string | null | undefined) {
             return "Jaluzi";
         case "picasso":
             return "Picasso";
+        case "plicell": return "Plise / Plicell";
+        case "rustik": return "Rustik";
+        case "dekoratif_ray": return "Dekoratif Ray";
+        case "kruvaze": return "Kruvaze Perde";
+        case "katlamali_mekanizma": return "Katlamalı Mekanizma";
+        case "ip_perde": return "İp Perde";
+        case "aksesuar": return "Aksesuar";
         default:
             return "Diğer";
     }
@@ -646,6 +653,13 @@ export default function Products() {
                                 <option value="fon">Fon</option>
                                 <option value="jalousie">Jaluzi</option>
                                 <option value="picasso">Picasso</option>
+                                <option value="plicell">Plise / Plicell</option>
+                                <option value="rustik">Rustik</option>
+                                <option value="dekoratif_ray">Dekoratif Ray</option>
+                                <option value="kruvaze">Kruvaze Perde</option>
+                                <option value="katlamali_mekanizma">Katlamalı Mekanizma</option>
+                                <option value="ip_perde">İp Perde</option>
+                                <option value="aksesuar">Aksesuar</option>
                                 <option value="diger">Diğer</option>
                             </select>
                         </div>

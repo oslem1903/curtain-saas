@@ -1,5 +1,4 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { supabase } from '../supabaseClient';
 
 interface Props {
   children: ReactNode;
@@ -22,63 +21,6 @@ export class ErrorBoundary extends Component<Props, State> {
   public async componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
 
-    const currentPage = window.location.hash || window.location.pathname || '/';
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: cm } = await supabase
-        .from('company_members')
-        .select('company_id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      // Insert error log with actual database schema
-      try {
-        await supabase.from('error_logs').insert({
-          company_id: cm?.company_id,
-          user_id: user.id,
-          message: error.message || 'Unknown error',
-          stack: error.stack,
-          path: currentPage,
-          user_agent: navigator.userAgent,
-          error_message: error.message,
-          error_stack: error.stack,
-          page_url: window.location.href,
-          browser_info: {
-            userAgent: navigator.userAgent,
-            language: navigator.language,
-          },
-          device_info: {
-            platform: navigator.platform,
-            screen: `${window.screen.width}x${window.screen.height}`,
-          },
-          app_version: '1.0.0',
-        });
-      } catch {
-        // Silently fail - don't break error boundary
-        console.error('Failed to log error to Supabase');
-      }
-
-      // Also record as activity
-      if (user.id) {
-        try {
-          await supabase.rpc('record_user_activity', {
-            p_activity_type: 'error',
-            p_company_id: cm?.company_id,
-            p_page: window.location.pathname,
-            p_action: 'uncaught_exception',
-            p_metadata: { message: error.message },
-          });
-        } catch {
-          // Silently fail
-          console.error('Failed to record error activity');
-        }
-      }
-    } catch (e) {
-      console.error('Failed to log error to Supabase:', e);
-    }
   }
 
   private resetError = () => {
@@ -98,7 +40,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="space-y-2">
               <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Hata Oluştu</h1>
               <p className="text-slate-500 dark:text-slate-400">
-                Beklenmeyen bir hata oluştu. Teknik ekibimize otomatik bildirim gönderildi. 
+                Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin. Sorun sürerse destek ekibine bildirin. 
               </p>
             </div>
             <button
@@ -108,7 +50,7 @@ export class ErrorBoundary extends Component<Props, State> {
               Tekrar Dene
             </button>
             <button
-              onClick={() => window.location.href = '/'}
+              onClick={() => window.location.hash = '/login'}
               className="w-full py-3 text-slate-500 hover:text-slate-700 font-medium"
             >
               Giriş Sayfasına Git

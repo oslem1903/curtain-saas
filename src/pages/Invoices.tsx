@@ -6,6 +6,8 @@ import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { withoutDeleted } from "../utils/softDelete";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
+import { todayLocalISO } from "../utils/date";
+import { printHtmlDocument } from "../utils/printDocument";
 
 type InvoiceRow = {
     id: string;
@@ -361,7 +363,7 @@ export default function Invoices() {
             invoiceStatusLabel(effectiveStatus(invoice)),
         ]);
 
-        const filename = `faturalar_${new Date().toISOString().slice(0, 10)}.csv`;
+        const filename = `faturalar_${todayLocalISO()}.csv`;
         const content = [headers, ...rows].map((row) => row.join(";")).join("\n");
         await shareOrDownloadTextFile({
             filename,
@@ -392,10 +394,7 @@ export default function Invoices() {
             )
             .join("");
 
-        const printWindow = window.open("", "_blank", "width=1200,height=800");
-        if (!printWindow) return;
-
-        printWindow.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>Fatura Listesi</title>
@@ -428,10 +427,8 @@ export default function Invoices() {
                     </table>
                 </body>
             </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        printWindow.print();
+        `;
+        void printHtmlDocument(printHtml, { title: "Fatura Listesi", fileName: "fatura-listesi" });
     }
 
     return (

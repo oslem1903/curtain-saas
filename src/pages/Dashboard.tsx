@@ -26,6 +26,7 @@ import { DemoDataGenerator } from "../components/DemoDataGenerator";
 import { buildDashboardDueRows, todayDateOnly, bucketForDueDate, collectionRowStatus, daysBetween } from "../utils/installments";
 import type { OrderPaymentPlan, OrderInstallment, LedgerPayment, CollectionRowStatus } from "../utils/installments";
 import { getTrialDisplayInfo, formatTrialDateTR } from "../utils/trialLicense";
+import { toLocalDateISO } from "../utils/date";
 
 type AppointmentRow = {
   id: string;
@@ -168,8 +169,21 @@ function isoOf(row: { start_at?: string | null; scheduled_at?: string | null }) 
   return row.start_at || row.scheduled_at || null;
 }
 
+/**
+ * Render sirasinda Date.now() cagirmadan "simdi"yi verir (React 19 saflik kurali).
+ * Dakikada bir tazelenir; gecikme rozetleri sayfa acikken de dogru kalir.
+ */
+function useNowTick(intervalMs = 60_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 function dateOnly(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return toLocalDateISO(date);
 }
 
 function startOfToday() {
@@ -253,8 +267,11 @@ const SummaryCard = memo(function SummaryCard({
   data: DashboardData;
 }) {
   const first = data.upcoming[0];
-  const overdueCount = data.upcoming.filter((item) => item.when.getTime() < Date.now()).length + data.overdueCollections.length + data.supplierOverdue.length;
-  const tone = overdueCount > 0 ? "red" : first && first.when.getTime() - Date.now() <= 60 * 60 * 1000 ? "amber" : "blue";
+  // Render sirasinda Date.now() cagirmak saf-olmayan bir islemdir (React 19 kurali).
+  // Zamani bir kez, effect ile alip state'te tutariz; dakikada bir tazelenir.
+  const now = useNowTick();
+  const overdueCount = data.upcoming.filter((item) => item.when.getTime() < now).length + data.overdueCollections.length + data.supplierOverdue.length;
+  const tone = overdueCount > 0 ? "red" : first && first.when.getTime() - now <= 60 * 60 * 1000 ? "amber" : "blue";
   const classes = {
     blue: "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-100",
     amber: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-100",

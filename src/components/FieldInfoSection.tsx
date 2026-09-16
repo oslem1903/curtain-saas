@@ -3,6 +3,7 @@ import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capa
 import { Capacitor } from "@capacitor/core";
 import { Camera, ImagePlus, Trash2, X } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import SecureImage from "./SecureImage";
 
 interface Photo {
   id: string;
@@ -151,7 +152,7 @@ export default function FieldInfoSection({
           <div className="mb-3">
             {selectedPhotoUrl ? (
               <div className="relative">
-                <img src={selectedPhotoUrl} alt="Seçili fotoğraf" className="max-h-48 w-full rounded-lg object-cover" />
+                <SecureImage src={selectedPhotoUrl} alt="Seçili fotoğraf" className="max-h-48 w-full rounded-lg object-cover" />
                 <button
                   onClick={() => setSelectedPhotoUrl(null)}
                   className="absolute right-2 top-2 rounded-full bg-black/50 p-1 text-white hover:bg-black/70"
@@ -163,7 +164,7 @@ export default function FieldInfoSection({
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6">
                 {photos.map((photo) => (
                   <div key={photo.id} className="group relative aspect-square">
-                    <img
+                    <SecureImage
                       src={photo.url}
                       alt="Ürün fotoğrafı"
                       className="h-full w-full rounded-lg border border-slate-300 object-cover dark:border-slate-600 cursor-pointer hover:border-primary-500"

@@ -1,3 +1,4 @@
+import { requestText } from "../utils/requestText";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -162,13 +163,13 @@ export default function FieldDashboard() {
   }
 
   async function addNote(task: TaskRow) {
-    const text = window.prompt("Bu görev için not yazın:", task.note ?? "");
+    const text = await requestText("Bu görev için not yazın:", task.note ?? "");
     if (text === null) return;
     await updateTask(task, { note: text.trim() || null });
   }
 
   async function reportIssue(task: TaskRow) {
-    const text = window.prompt("Sorunu kısaca yazın:");
+    const text = await requestText("Sorunu kısaca yazın:");
     if (text === null) return;
     const nextNote = [task.note, `Sorun: ${text.trim()}`].filter(Boolean).join("\n");
     await updateTask(task, { status: "postponed", note: nextNote });

@@ -62,7 +62,17 @@ export default function DeploymentHistory() {
                 p_limit: 100,
             });
 
-            if (fetchError) throw fetchError;
+            if (fetchError) {
+                // Canary RPC'si kurulmamış eski projelerde ekranı hata ile
+                // kilitleme; mevcut sürüm kayıtlarını geçmiş olarak göster.
+                if (/get_canary_history|schema cache|does not exist/i.test(fetchError.message || "")) {
+                    const fallback = await supabase.from("version_releases").select("version,created_at").order("created_at", { ascending: false }).limit(100);
+                    if (fallback.error) throw fetchError;
+                    setDeployments((fallback.data || []).map((r: any) => ({ version: r.version, deployment_date: r.created_at, total_companies: 0, companies_updated: 0, companies_failed: 0, companies_rolled_back: 0, error_rate_percentage: 0, status: "completed" })));
+                    return;
+                }
+                throw fetchError;
+            }
 
             let filteredData = data || [];
 

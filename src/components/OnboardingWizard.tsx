@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
-import { CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 
 type OnboardingWizardProps = {
   companyId: string;
@@ -52,7 +53,7 @@ export default function OnboardingWizard({
   packageCode = "solo",
   onComplete,
 }: OnboardingWizardProps) {
-  const { company } = useAuth();
+  const { company, refreshAuth } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -89,6 +90,19 @@ export default function OnboardingWizard({
         return;
       }
 
+      // Confirm persistence before closing; other devices use this flag too.
+      const { data: savedCompany, error: readError } = await supabase
+        .from("companies")
+        .select("onboarding_completed")
+        .eq("id", companyId)
+        .single();
+      if (readError) throw readError;
+      if (savedCompany?.onboarding_completed !== true) {
+        throw new Error("Başlangıç kaydı tamamlanmadı. Lütfen tekrar deneyin.");
+      }
+
+      // Dashboard is remounted on navigation: refresh its shared company state.
+      await refreshAuth();
       onComplete();
     } catch (e: any) {
       setError(e?.message || "Bilinmeyen hata");
@@ -97,24 +111,24 @@ export default function OnboardingWizard({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden">
+  return createPortal(
+    <div role="dialog" aria-modal="true" aria-label="Başlangıç kurulumu" className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))", paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
+      <div className="flex min-h-0 max-h-full w-full max-w-2xl flex-col bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-primary-600 to-primary-700 px-6 py-8 sm:px-8">
+        <div className="shrink-0 bg-gradient-to-r from-primary-600 to-primary-700 px-4 py-4 sm:px-8 sm:py-6">
           <div className="flex items-center gap-3 mb-2">
             <div className="flex-shrink-0">
               <div className="flex items-center justify-center h-10 w-10 rounded-full bg-white/20">
                 <span className="text-lg font-black text-white">{step}</span>
               </div>
             </div>
-            <h1 className="text-2xl font-black text-white">PerdePRO'ya Hoş Geldin</h1>
+            <h1 className="text-xl sm:text-2xl font-black text-white">PerdePRO'ya Hoş Geldin</h1>
           </div>
           <p className="text-primary-50 text-sm">3 adımda başlangıç yap</p>
         </div>
 
         {/* Progress bar */}
-        <div className="h-1 bg-slate-200 dark:bg-slate-800">
+        <div className="h-1 shrink-0 bg-slate-200 dark:bg-slate-800">
           <div
             className="h-full bg-primary-600 transition-all duration-300"
             style={{ width: `${(step / 3) * 100}%` }}
@@ -122,7 +136,7 @@ export default function OnboardingWizard({
         </div>
 
         {/* Content */}
-        <div className="px-6 py-8 sm:px-8">
+        <div key={step} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8">
           {step === 1 && (
             <div className="space-y-6">
               <div>
@@ -177,17 +191,7 @@ export default function OnboardingWizard({
 
               {error && <div className="rounded-xl bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-200">{error}</div>}
 
-              <button
-                onClick={() => {
-                  setError("");
-                  setStep(2);
-                }}
-                disabled={!companyName.trim()}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary-600 px-6 py-3 text-white font-semibold hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Devam Et
-                <ArrowRight className="w-4 h-4" />
-              </button>
+
             </div>
           )}
 
@@ -237,7 +241,7 @@ export default function OnboardingWizard({
                 <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
                   Aktif Modüller ({modules.length})
                 </h3>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {modules.map((mod) => (
                     <div
                       key={mod}
@@ -252,21 +256,7 @@ export default function OnboardingWizard({
                 </div>
               </div>
 
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setStep(1)}
-                  className="flex-1 px-6 py-3 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                >
-                  Geri
-                </button>
-                <button
-                  onClick={() => setStep(3)}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-primary-600 px-6 py-3 text-white font-semibold hover:bg-primary-700 transition-colors"
-                >
-                  Devam Et
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
+
             </div>
           )}
 
@@ -333,26 +323,28 @@ export default function OnboardingWizard({
 
               {error && <div className="rounded-xl bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-200">{error}</div>}
 
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setStep(2)}
-                  className="flex-1 px-6 py-3 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                >
-                  Geri
-                </button>
-                <button
-                  onClick={handleCompleteOnboarding}
-                  disabled={loading}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                  Başla
-                </button>
-              </div>
+
             </div>
           )}
         </div>
+        <div className="shrink-0 border-t border-slate-200 bg-white dark:bg-slate-900 px-4 py-3 sm:px-8">
+          <div className="flex gap-3">
+            {step > 1 && (
+              <button type="button" disabled={loading} onClick={() => { setError(""); setStep(step - 1); }}
+                className="min-h-12 flex-1 rounded-xl border border-slate-300 px-3 py-3 font-semibold text-slate-700 dark:text-slate-200 disabled:opacity-50">
+                Geri
+              </button>
+            )}
+            <button type="button" disabled={loading || !companyName.trim()}
+              onClick={() => { if (step === 3) { void handleCompleteOnboarding(); } else { setError(""); setStep(step + 1); } }}
+              className="min-h-12 flex-1 flex items-center justify-center gap-2 rounded-xl bg-primary-600 px-3 py-3 font-semibold text-white disabled:opacity-50">
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              {step === 3 ? "Kaydet ve Başla" : "Devam Et"}
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

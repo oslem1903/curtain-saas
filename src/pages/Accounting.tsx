@@ -17,9 +17,11 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { logAction } from "../utils/audit";
+import { PAYMENT_METHOD_OPTIONS, paymentLabel, paymentLabelOrDash } from "../utils/paymentLabels";
 import { createFinanceService } from "../services/finance/index";
 import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
 import type { OrderPaymentPlan, OrderInstallment, LedgerPayment } from "../utils/installments";
+import { toLocalDateISO, todayLocalISO } from "../utils/date";
 
 
 function startOfDay(d: Date) {
@@ -251,10 +253,10 @@ export const Accounting = () => {
     // --- Tarih Filtreleme Durumu ---
     const [startDate, setStartDate] = useState<string>(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+        return toLocalDateISO(new Date(d.getFullYear(), d.getMonth(), 1));
     });
     const [endDate, setEndDate] = useState<string>(() => {
-        return new Date().toISOString().split('T')[0];
+        return todayLocalISO();
     });
 
     const [unpaidExpenseTotal, setUnpaidExpenseTotal] = useState(0);
@@ -291,7 +293,7 @@ export const Accounting = () => {
     const [collectionOrderId, setCollectionOrderId] = useState("");
     const [collectionAmount, setCollectionAmount] = useState("");
     const [collectionMethod, setCollectionMethod] = useState("nakit");
-    const [collectionDate, setCollectionDate] = useState(new Date().toISOString().slice(0, 10));
+    const [collectionDate, setCollectionDate] = useState(todayLocalISO());
     const [collectionNote, setCollectionNote] = useState("");
 
     const [saving, setSaving] = useState(false);
@@ -314,7 +316,7 @@ export const Accounting = () => {
     }, [incomeAmount, incomeSourceType, incomeOrderId, incomeDescription, incomePaymentMethod, incomeNote]);
 
     const [expenseAmount, setExpenseAmount] = useState("");
-    const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [expenseDate, setExpenseDate] = useState(() => todayLocalISO());
     const [expenseDueDate, setExpenseDueDate] = useState("");
     const [expenseDocumentNo, setExpenseDocumentNo] = useState("");
     const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
@@ -334,7 +336,7 @@ export const Accounting = () => {
     const [supplierPaymentAmount, setSupplierPaymentAmount] = useState("");
     const [supplierPaymentMethod, setSupplierPaymentMethod] = useState("nakit");
     const [supplierPaymentNote, setSupplierPaymentNote] = useState("");
-    const [supplierPaymentDate, setSupplierPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+    const [supplierPaymentDate, setSupplierPaymentDate] = useState(todayLocalISO());
 
     const selectedSupplierDebt = useMemo(() => {
         if (!supplierPaymentSupplierId) return null;
@@ -997,7 +999,7 @@ export const Accounting = () => {
             ];
         });
 
-        const filename = `finansal_ozet_${new Date().toISOString().slice(0, 10)}.csv`;
+        const filename = `finansal_ozet_${todayLocalISO()}.csv`;
         const content = [headers, ...rows].map(e => e.join(";")).join("\n");
         await shareOrDownloadTextFile({
             filename,
@@ -1018,17 +1020,17 @@ export const Accounting = () => {
     const setQuickRange = (range: 'today' | 'thisMonth' | 'lastMonth') => {
         const now = new Date();
         if (range === 'today') {
-            const day = now.toISOString().split('T')[0];
+            const day = toLocalDateISO(now);
             setStartDate(day);
             setEndDate(day);
         } else if (range === 'thisMonth') {
-            setStartDate(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]);
-            setEndDate(now.toISOString().split('T')[0]);
+            setStartDate(toLocalDateISO(new Date(now.getFullYear(), now.getMonth(), 1)));
+            setEndDate(toLocalDateISO(now));
         } else if (range === 'lastMonth') {
             const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
             const last = new Date(now.getFullYear(), now.getMonth(), 0);
-            setStartDate(first.toISOString().split('T')[0]);
-            setEndDate(last.toISOString().split('T')[0]);
+            setStartDate(toLocalDateISO(first));
+            setEndDate(toLocalDateISO(last));
         }
     };
 
@@ -1189,7 +1191,7 @@ export const Accounting = () => {
             }).catch(err => console.error("Audit log failed:", err));
 
             setExpenseAmount("");
-            setExpenseDate(new Date().toISOString().slice(0, 10));
+            setExpenseDate(todayLocalISO());
             setExpenseDueDate("");
             setExpenseDocumentNo("");
             setExpenseCategory(EXPENSE_CATEGORIES[0]);
@@ -1260,7 +1262,7 @@ export const Accounting = () => {
             setCollectionMethod("nakit");
             setCollectionNote("");
             setCollectionDueDate("");
-            setCollectionDate(new Date().toISOString().slice(0, 10));
+            setCollectionDate(todayLocalISO());
             await loadData();
 
             // Fazla tahsilatta müşteri alacağını bildir; normal tahsilatta
@@ -1336,7 +1338,7 @@ export const Accounting = () => {
             setSupplierPaymentMethod("nakit");
             setSupplierPaymentNote("");
             setSupplierPaymentDueDate("");
-            setSupplierPaymentDate(new Date().toISOString().slice(0, 10));
+            setSupplierPaymentDate(todayLocalISO());
             setShowSupplierPaymentModal(false);
 
             await loadData();
@@ -1918,7 +1920,7 @@ export const Accounting = () => {
                                         <div className="text-sm font-medium text-slate-900 dark:text-white">
                                             {getSupplierName(p.supplier_id)}
                                             {p.payment_method ? (
-                                                <span className="text-slate-500"> — {p.payment_method}</span>
+                                                <span className="text-slate-500"> — {paymentLabel(p.payment_method)}</span>
                                             ) : null}
                                         </div>
 
@@ -2243,12 +2245,16 @@ export const Accounting = () => {
 
                         <div>
                             <label className="block text-sm font-medium mb-1">Ödeme Yöntemi</label>
-                            <input
+                            <select
                                 value={incomePaymentMethod}
                                 onChange={(e) => setIncomePaymentMethod(e.target.value)}
                                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="Nakit / Havale / Kart"
-                            />
+                            >
+                                <option value="">Seçiniz</option>
+                                {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
                         </div>
 
                         <div>
@@ -2453,12 +2459,16 @@ export const Accounting = () => {
 
                         <div>
                             <label className="block text-sm font-medium mb-1">Ödeme Yöntemi</label>
-                            <input
+                            <select
                                 value={expensePaymentMethod}
                                 onChange={(e) => setExpensePaymentMethod(e.target.value)}
                                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="Nakit / Havale / Kart"
-                            />
+                            >
+                                <option value="">Seçiniz</option>
+                                {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
                         </div>
 
                         <div>
@@ -2567,7 +2577,7 @@ export const Accounting = () => {
                                                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.income_date ? new Date(r.income_date).toLocaleDateString("tr-TR") : "—"}</td>
                                                     <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{r.description || "—"}</td>
                                                     <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{r.order_id ? `#${r.order_id.slice(0, 8).toUpperCase()}` : "—"}</td>
-                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell capitalize">{r.payment_method || "—"}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{paymentLabelOrDash(r.payment_method)}</td>
                                                     <td className="px-4 py-3 text-right font-black text-emerald-600">{formatTL(Number(r.amount ?? 0))}</td>
                                                 </tr>
                                             ))}
@@ -2611,7 +2621,7 @@ export const Accounting = () => {
                                                 <tr key={r.id} className={`border-b border-slate-50 dark:border-slate-800 ${i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/30"}`}>
                                                     <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{r.transaction_date ? new Date(r.transaction_date).toLocaleDateString("tr-TR") : "—"}</td>
                                                     <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{getSupplierName(r.supplier_id)}</td>
-                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell capitalize">{r.payment_method || "—"}</td>
+                                                    <td className="px-4 py-3 text-slate-500 hidden sm:table-cell">{paymentLabelOrDash(r.payment_method)}</td>
                                                     <td className="px-4 py-3 text-slate-500 hidden sm:table-cell max-w-[200px] truncate" title={r.description || ""}>{r.description || "—"}</td>
                                                     <td className="px-4 py-3 text-right font-black text-rose-600">{formatTL(Number(r.amount ?? 0))}</td>
                                                 </tr>
@@ -2627,7 +2637,7 @@ export const Accounting = () => {
 
             {/* ── Bekleyen Tahsilat Modalı ── */}
             {showCollectionModal && (() => {
-                const todayStr = new Date().toISOString().slice(0, 10);
+                const todayStr = todayLocalISO();
                 const pendingOrders = orderIncomeOptions
                     .filter((o) => {
                         const total = Number(o.total_amount ?? 0);
@@ -2720,11 +2730,9 @@ export const Accounting = () => {
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 mb-1">Ödeme Yöntemi</label>
                                             <select value={collectionMethod} onChange={(e) => setCollectionMethod(e.target.value)} className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950 text-sm">
-                                                <option value="nakit">Nakit</option>
-                                                <option value="eft">EFT</option>
-                                                <option value="havale">Havale</option>
-                                                <option value="kredi_karti">Kredi Kartı</option>
-                                                <option value="cek">Çek</option>
+                                                {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
                                             </select>
                                         </div>
                                         <div>
@@ -2823,7 +2831,7 @@ export const Accounting = () => {
 
             {showSupplierPaymentModal && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
+                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">
                                 Tedarikçiye Ödeme
@@ -2925,11 +2933,9 @@ export const Accounting = () => {
                                 onChange={(e) => setSupplierPaymentMethod(e.target.value)}
                                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
                             >
-                                <option value="nakit">Nakit</option>
-                                <option value="eft">EFT</option>
-                                <option value="havale">Havale</option>
-                                <option value="kredi_karti">Kredi Kartı</option>
-                                <option value="cek">Çek</option>
+                                {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
                             </select>
                         </div>
 

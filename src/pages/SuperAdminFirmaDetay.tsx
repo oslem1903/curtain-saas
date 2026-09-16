@@ -1,3 +1,4 @@
+import AdminInterventionPanel from "../components/AdminInterventionPanel";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -18,7 +19,7 @@ import { tr } from "date-fns/locale";
 import { supabase, setDemoTenantContext } from "../supabaseClient";
 import { cn } from "../utils/cn";
 
-type Tab = "ozet" | "destek" | "cihazlar" | "hatalar" | "yedeklemeler";
+type Tab = "ozet" | "destek" | "cihazlar" | "hatalar" | "yedeklemeler" | "mudahale";
 
 type CompanyDetail = {
     id: string;
@@ -199,9 +200,9 @@ export default function SuperAdminFirmaDetay() {
         }
     }
 
-    async function loadTabData(id: string) {
+    async function loadTabData(id: string, selectedTab: Tab = activeTab) {
         try {
-            switch (activeTab) {
+            switch (selectedTab) {
                 case "destek": {
                     const { data } = await supabase
                         .from("support_tickets")
@@ -463,12 +464,12 @@ export default function SuperAdminFirmaDetay() {
 
                 {/* Tab Navigation */}
                 <div className="mb-6 flex gap-2 border-b border-slate-200 dark:border-slate-800 overflow-x-auto">
-                    {(["ozet", "destek", "cihazlar", "hatalar", "yedeklemeler"] as const).map((tab) => (
+                    {(["ozet", "destek", "cihazlar", "hatalar", "yedeklemeler", "mudahale"] as const).map((tab) => (
                         <button
                             key={tab}
                             onClick={() => {
                                 setActiveTab(tab);
-                                loadTabData(company.id);
+                                loadTabData(company.id, tab);
                             }}
                             className={cn(
                                 "px-4 py-2 text-sm font-black whitespace-nowrap border-b-2 transition",
@@ -482,15 +483,17 @@ export default function SuperAdminFirmaDetay() {
                             {tab === "cihazlar" && "Cihazlar"}
                             {tab === "hatalar" && "Hata Logları"}
                             {tab === "yedeklemeler" && "Yedeklemeler"}
+                            {tab === "mudahale" && "Kayıt Düzeltme"}
                         </button>
                     ))}
                 </div>
 
+                {activeTab === "mudahale" && <AdminInterventionPanel companyId={company.id} />}
                 {/* Tab Content */}
                 <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
                     {activeTab === "ozet" && (
                         <div className="grid grid-cols-1 gap-4">
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <InfoItem label="Oluşturma Tarihi" value={format(new Date(company.created_at), "d MMMM yyyy", { locale: tr })} />
                                 <InfoItem label="Paket" value={company.subscription_plan || "-"} />
                                 <InfoItem label="Modüller" value={company.enabled_modules?.length || 0} />

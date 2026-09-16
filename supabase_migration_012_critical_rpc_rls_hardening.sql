@@ -1,81 +1,110 @@
 -- ============================================================================
--- MIGRATION 012: KRİTİK — finansal RPC'lere firma-yetki kontrolü ekleme,
--- supplier_transactions/installer_transactions RLS'ini kapatma, temel yetki
--- fonksiyonlarına search_path pinleme.
+-- MIGRATION 012 (REVIZYON 2, DARALTILMIŞ) — KRİTİK: finansal RPC'lere firma-
+-- yetki kontrolü ekleme + temel yetki fonksiyonlarına search_path pinleme.
 --
 -- HENÜZ PRODUCTION'DA ÇALIŞTIRILMADI. Önce incelenip onaylanacak, sonra
 -- Supabase SQL Editor'da elle çalıştırılacak.
 --
--- BULGU (2026-09-09 denetimi — kod üzerinden doğrulandı, canlı DB'de ayrıca
--- teyit edilmeli):
+-- REVIZYON 2 (15.09.2026) — salt-okunur canlı durum tespiti sonrası daraltıldı:
 --
--- 1) supabase_payment_transaction_safety.sql içindeki 7 fonksiyon
---    (record_order_payment, record_invoice_save, record_income_entry,
---    record_expense_entry, record_installer_payment, cancel_installer_payment,
---    record_supplier_payment) SECURITY DEFINER'dır, `authenticated`'a
---    GRANT EXECUTE edilmiştir, ve gövdelerinde p_company_id'nin ÇAĞIRANIN
---    GERÇEKTEN ÜYESİ OLDUĞU bir firma olup olmadığını kontrol eden HİÇBİR
---    satır yoktur. Giriş yapmış herhangi bir kullanıcı, başka bir firmanın
---    company_id'sini vererek o firmanın gelir/gider/tahsilat/tedarikçi/
---    montajcı defterine sahte kayıt ekleyebilir/silebilir.
+--   0) DUZELTME (ilk calistirma denemesi sonrasi, 15.09.2026): GRANT EXECUTE
+--      ON FUNCTION public.record_income_entry (parametre listesi olmadan)
+--      "function name ... is not unique" (42725) hatasi verdi. Kok neden:
+--      record_income_entry ve record_expense_entry'nin CANLI imzasi, bu
+--      migration'ın (revizyon 1'den kalma) varsaydigi "orijinal guvenliksiz"
+--      imzadan FARKLIYDI — production'da bu ikisi baska bir oturumda
+--      IDEMPOTENCY_KEY destegiyle YENIDEN yazilmis (fazladan p_idempotency_key
+--      parametresi + idempotency kontrol bloğu). Benim CREATE OR REPLACE'im
+--      eski (yanlis) imzayla calisinca, transaction icinde GECICI olarak
+--      IKINCI bir overload olusturdu — GRANT'i belirsiz hale getirdi. Simdi
+--      bu iki fonksiyon icin CANLI GERCEK govde (idempotency dahil) BIREBIR
+--      korunuyor, SADECE search_path ekleniyor. Ayrica tum GRANT ifadelerine
+--      tam parametre-tipi listesi eklendi (bir daha ASLA belirsiz olmasin diye).
 --
---    Bu migration, DAHA YENİ ve DOĞRU yazılmış kardeş RPC'lerde (örn.
---    supabase_customer_collection_finance_rpc.sql'deki
---    customer_record_collection) ZATEN kullanılan AYNI deseni uygular:
---        IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
---            RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
---        END IF;
---        IF NOT public.is_company_accounting(p_company_id) THEN
---            RAISE EXCEPTION 'unauthorized: bu islem icin muhasebe yetkisi gerekli';
---        END IF;
---    Fonksiyonların GERİ KALANI (parametreler, dönüş tipi, iş mantığı,
---    RETURN/EXCEPTION yapısı) BİREBİR AYNI kalır — yalnızca en başa bu 2
---    kontrol ve `SET search_path = public` eklenir.
+--   1) RLS/POLİTİKA BÖLÜMÜ TAMAMEN ÇIKARILDI. Revizyon 1, installer_transactions
+--      / supplier_transactions üzerindeki `installer_transactions_insert`,
+--      `supplier_transactions_insert`, `supplier_transactions_update` adlı
+--      politikaların WITH CHECK/USING (TRUE) olduğunu varsayıyordu (2026-09-09
+--      koddan denetimi). 15.09.2026 CANLI salt-okunur sorgu bu politikaların
+--      ARTIK O ADLARLA MEVCUT OLMADIĞINI gösterdi — production'da bunların
+--      yerini `installer_transactions_admin_update`, `company_members_
+--      supplier_transactions` (cmd=ALL) gibi FARKLI adlı, zaten firma-kapsamlı
+--      politikalar almış (`company_id IN (SELECT company_members.company_id
+--      FROM company_members WHERE ...)` — TRUE değil). Yani bu güvenlik açığı
+--      BAŞKA BİR YOLDAN ZATEN KAPANMIŞ. Revizyon 1'i olduğu gibi çalıştırmak,
+--      kendi preflight kontrolünde ("installer_transactions_insert politikasi
+--      bulunamadi") HATA VERİP migration'ı durdururdu. Bu revizyon o bölümü
+--      tamamen kaldırır — artık hiçbir politika DROP/CREATE edilmiyor.
 --
--- 2) supabase_rls_hardening_critical.sql'deki installer_transactions_insert
---    (WITH CHECK (TRUE)) ve supplier_transactions_insert/update
---    (WITH CHECK/USING (TRUE)) politikaları, herhangi bir authenticated
---    kullanıcının PostgREST üzerinden DOĞRUDAN (RPC'ye bile gerek olmadan)
---    başka bir firmanın tedarikçi/montajcı cari hareketini eklemesine/
---    değiştirmesine izin veriyor. Bu migration, AYNI dosyadaki `income`
---    tablosu için ZATEN kullanılan doğru deseni uygular:
---        FOR INSERT WITH CHECK (is_company_accounting(company_id))
---    installer_transactions_insert'in "Triggered by system, not user" yorumu
---    yanıltıcıdır — src/pages/NewOrder.tsx, OrderDetail.tsx, SupplierLedger.tsx,
---    utils/supplierCari.ts DOĞRUDAN supplier_transactions'a insert/update
---    yapıyor (installer_transactions'a doğrudan frontend insert'i YOK, ama
---    aynı sıkılaştırma zarar vermez — hiçbir canlı akış TRUE'ya bağımlı değil).
+--   2) record_invoice_save BU MİGRASYONUN KAPSAMI DIŞINA ALINDI. Revizyon 1
+--      bu fonksiyonu da CREATE OR REPLACE ediyordu, ama 15.09.2026 canlı
+--      tespiti record_invoice_save'in ARTIK migration 014'ün (daha sonra
+--      hazırlanan, atomik + is_company_writable lisans-yazma kontrollü, DAHA
+--      KAPSAMLI) sürümüyle ÇALIŞTIĞINI gösterdi. Bu migration'ın record_
+--      invoice_save'i BU DOSYADAKİ ESKİ (revizyon 1) haliyle CREATE OR REPLACE
+--      etmesi, migration 014'ün iyileştirmelerini (invoice_items.company_id
+--      yazımı, is_company_writable trial-kapısı, notes alanı) GERİYE ALIRDI.
+--      Bu yüzden bu fonksiyona artık HİÇ DOKUNULMUYOR.
 --
--- 3) is_super_admin(), is_company_member(uuid), is_company_accounting(uuid) —
---    SECURITY DEFINER ama search_path PINLENMEMİŞ (supabase_rls_hardening_
---    critical.sql:30-76). Bu 3 fonksiyon onlarca RLS politikası ve başka
---    fonksiyon tarafından unqualified çağrılıyor — search_path hijack riski.
---    Mantıkları BİREBİR AYNI kalır, yalnızca `SET search_path = public` eklenir.
+--   Geri kalan kapsam (revizyon 1'den DEĞİŞMEDİ, hâlâ CANLI olarak eksik
+--   doğrulandı — 15.09.2026 salt-okunur tespit):
+--     - record_order_payment, record_installer_payment, cancel_installer_payment,
+--       record_supplier_payment: firma-yetki kontrolü YOK (has_012_check=false).
+--     - record_income_entry, record_expense_entry: firma-yetki kontrolü ZATEN
+--       VAR (başka bir yoldan/kısmi bir uygulamayla), ama search_path PİNLİ
+--       DEĞİL. Bu migration onları da CREATE OR REPLACE eder — hedef gövde
+--       değişmez (idempotent), yalnızca search_path eklenmiş olur.
+--     - is_super_admin, is_company_member, is_company_accounting: search_path
+--       PİNLİ DEĞİL (üçü de).
 --
--- BU MIGRATION'DA YAPILMAYANLAR (bilinçli, ayrı onay gerektirir):
+-- ============================================================================
+-- BULGU (orijinal, 2026-09-09 kod denetimi — RPC kısmı hâlâ geçerli):
+-- ============================================================================
+--
+-- supabase_payment_transaction_safety.sql içindeki fonksiyonlar SECURITY
+-- DEFINER'dır, `authenticated`'a GRANT EXECUTE edilmiştir, ve (yukarıda
+-- belirtilen 4'ünün) gövdelerinde p_company_id'nin ÇAĞIRANIN GERÇEKTEN ÜYESİ
+-- OLDUĞU bir firma olup olmadığını kontrol eden HİÇBİR satır yoktur. Giriş
+-- yapmış herhangi bir kullanıcı, başka bir firmanın company_id'sini vererek o
+-- firmanın gelir/gider/tahsilat/tedarikçi/montajcı defterine sahte kayıt
+-- ekleyebilir/silebilir.
+--
+-- Bu migration, DAHA YENİ ve DOĞRU yazılmış kardeş RPC'lerde (örn.
+-- supabase_customer_collection_finance_rpc.sql'deki customer_record_collection)
+-- ZATEN kullanılan AYNI deseni uygular:
+--     IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
+--         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
+--     END IF;
+--     IF NOT public.is_company_accounting(p_company_id) THEN
+--         RAISE EXCEPTION 'unauthorized: bu islem icin muhasebe yetkisi gerekli';
+--     END IF;
+-- Fonksiyonların GERİ KALANI (parametreler, dönüş tipi, iş mantığı,
+-- RETURN/EXCEPTION yapısı) BİREBİR AYNI kalır — yalnızca en başa bu 2 kontrol
+-- ve `SET search_path = public` eklenir.
+--
+-- is_super_admin(), is_company_member(uuid), is_company_accounting(uuid) —
+-- SECURITY DEFINER ama search_path PINLENMEMİŞ. Bu 3 fonksiyon onlarca RLS
+-- politikası ve başka fonksiyon tarafından unqualified çağrılıyor —
+-- search_path hijack riski. Mantıkları BİREBİR AYNI kalır, yalnızca
+-- `SET search_path = public` eklenir.
+--
+-- BU MIGRATION'DA YAPILMAYANLAR (bilinçli, ayrı onay gerektirir/kapsam dışı):
 --   - check_subscription_active(uuid)'nin trial_ends_at NULL durumunda
---     fail-OPEN davranışı (ayrı bir bulgu olarak raporlandı, bu migration'a
---     DAHİL EDİLMEDİ — kullanıcı ayrıca karar verecek).
---   - "Sertleştirilmiş" yeni RPC ailesinin (customer_record_collection vb.)
---     production'a deploy edilip edilmediği/frontend'e bağlanıp bağlanmadığı
---     bu migration'ın kapsamı DIŞINDA.
---   - update_installation_completion'a DOKUNULMADI (migration 008'deki güncel
---     hali zaten doğru — bu dosyanın İÇİNDE eski bir kopyası var ama bu
---     migration onu YENİDEN OLUŞTURMUYOR, CREATE OR REPLACE ETMİYOR).
+--     fail-OPEN davranışı — migration 013 (ayrı, iş kararı gerektiren onay).
+--   - record_invoice_save — migration 014'ün sürümü zaten canlı, DOKUNULMUYOR.
+--   - installer_transactions / supplier_transactions RLS politikaları —
+--     zaten başka bir yoldan firma-kapsamlı hale getirilmiş, DOKUNULMUYOR.
 --
--- ROLLBACK: Fonksiyonlar için, bu migration öncesi gövdeyi (supabase_payment_
--- transaction_safety.sql'deki orijinal hali) yeniden CREATE OR REPLACE ile
--- çalıştırın (ama bu güvenlik açığını geri getirir). Politikalar için:
---   DROP POLICY installer_transactions_insert ON public.installer_transactions;
---   CREATE POLICY installer_transactions_insert ON public.installer_transactions FOR INSERT WITH CHECK (TRUE);
---   (supplier_transactions için benzer şekilde — önerilmez.)
+-- ROLLBACK: Fonksiyonlar için, bu migration öncesi gövdeyi yeniden CREATE OR
+-- REPLACE ile çalıştırın (ama bu güvenlik açığını geri getirir — önerilmez).
 -- ============================================================================
 
 BEGIN;
 
 -- ============================================================================
--- PREFLIGHT — 7 fonksiyonun ve 2 tablonun production'da gerçekten beklenen
--- şekilde bulunduğunu doğrular. Sapma varsa hiçbir şey uygulanmaz.
+-- PREFLIGHT — yardımcı fonksiyonların production'da gerçekten bulunduğunu
+-- doğrular. Sapma varsa hiçbir şey uygulanmaz. (Politika-varlığı kontrolleri
+-- REVIZYON 2'de kaldırıldı — artık hiçbir politikaya dokunulmuyor.)
 -- ============================================================================
 
 DO $preflight$
@@ -89,20 +118,13 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'is_super_admin') THEN
     RAISE EXCEPTION 'PREFLIGHT BASARISIZ: public.is_super_admin() bulunamadi — migration DURDURULDU.';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='installer_transactions' AND policyname='installer_transactions_insert') THEN
-    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: installer_transactions_insert politikasi bulunamadi — migration DURDURULDU.';
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='supplier_transactions' AND policyname='supplier_transactions_insert') THEN
-    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: supplier_transactions_insert politikasi bulunamadi — migration DURDURULDU.';
-  END IF;
   RAISE NOTICE 'PREFLIGHT PASS.';
 END;
 $preflight$;
 
 -- ============================================================================
 -- 1) search_path PINLEME — is_super_admin/is_company_member/is_company_accounting.
---    Mantik BIREBIR AYNI (supabase_rls_hardening_critical.sql ile), yalnizca
---    SET search_path = public eklendi.
+--    Mantik BIREBIR AYNI, yalnizca SET search_path = public eklendi.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.is_super_admin()
@@ -145,9 +167,10 @@ END;
 $$;
 
 -- ============================================================================
--- 2) FİNANSAL RPC'LERE FİRMA-YETKİ KONTROLÜ — 7 fonksiyon. Gövdelerin geri
---    kalanı (is mantigi, RETURN/EXCEPTION yapisi) supabase_payment_
---    transaction_safety.sql'deki orijinaliyle BIREBIR AYNI.
+-- 2) FİNANSAL RPC'LERE FİRMA-YETKİ KONTROLÜ — 6 fonksiyon (record_invoice_save
+--    HARİÇ — migration 014'ün sürümü zaten canlı, dokunulmuyor). Gövdelerin
+--    geri kalanı (iş mantığı, RETURN/EXCEPTION yapısı) orijinaliyle BIREBIR
+--    AYNI.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.record_order_payment(
@@ -252,105 +275,46 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.record_invoice_save(
-    p_company_id uuid,
-    p_invoice_id uuid,
-    p_invoice_data jsonb,
-    p_items_data jsonb[]
-)
-RETURNS json
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
-DECLARE
-    v_result json;
-    v_item jsonb;
-    v_count integer;
-BEGIN
-    IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
-        RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
-    END IF;
-    IF NOT public.is_company_accounting(p_company_id) THEN
-        RAISE EXCEPTION 'unauthorized: bu islem icin muhasebe yetkisi gerekli';
-    END IF;
-
-    IF NOT public.check_rate_limit('record_invoice_save', 1, 3) THEN
-        RETURN json_build_object(
-            'success', false,
-            'error', 'Rate limit exceeded. Please wait 3 seconds before creating another invoice.',
-            'invoice_id', NULL
-        );
-    END IF;
-
-    INSERT INTO public.invoices (
-        id, company_id, invoice_no, invoice_type, date, total_tax_exclusive, total_tax_amount,
-        total_tax_inclusive, paid_amount, payment_method, due_date, status, order_id, customer_id,
-        supplier_id, created_at, updated_at
-    ) VALUES (
-        COALESCE(p_invoice_id, gen_random_uuid()), p_company_id,
-        p_invoice_data->>'invoice_no', p_invoice_data->>'invoice_type',
-        (p_invoice_data->>'date')::timestamptz, (p_invoice_data->>'total_tax_exclusive')::numeric,
-        (p_invoice_data->>'total_tax_amount')::numeric, (p_invoice_data->>'total_tax_inclusive')::numeric,
-        (p_invoice_data->>'paid_amount')::numeric, p_invoice_data->>'payment_method',
-        (p_invoice_data->>'due_date')::timestamptz, p_invoice_data->>'status',
-        (p_invoice_data->>'order_id')::uuid, (p_invoice_data->>'customer_id')::uuid,
-        (p_invoice_data->>'supplier_id')::uuid, now(), now()
-    )
-    ON CONFLICT (id) DO UPDATE SET
-        invoice_no = EXCLUDED.invoice_no, total_tax_exclusive = EXCLUDED.total_tax_exclusive,
-        total_tax_amount = EXCLUDED.total_tax_amount, total_tax_inclusive = EXCLUDED.total_tax_inclusive,
-        paid_amount = EXCLUDED.paid_amount, payment_method = EXCLUDED.payment_method,
-        due_date = EXCLUDED.due_date, status = EXCLUDED.status, updated_at = now()
-    RETURNING id INTO p_invoice_id;
-
-    DELETE FROM public.invoice_items WHERE invoice_id = p_invoice_id;
-
-    v_count := 0;
-    FOREACH v_item IN ARRAY p_items_data LOOP
-        INSERT INTO public.invoice_items (
-            invoice_id, description, quantity, unit_price, tax_rate, line_total
-        ) VALUES (
-            p_invoice_id, v_item->>'description', (v_item->>'quantity')::numeric,
-            (v_item->>'unit_price')::numeric, (v_item->>'tax_rate')::numeric, (v_item->>'line_total')::numeric
-        );
-        v_count := v_count + 1;
-    END LOOP;
-
-    v_result := json_build_object('success', true, 'invoice_id', p_invoice_id, 'items_saved', v_count);
-    RETURN v_result;
-
-EXCEPTION WHEN OTHERS THEN
-    v_result := json_build_object('success', false, 'error', SQLERRM, 'error_code', SQLSTATE);
-    RETURN v_result;
-END;
-$$;
-
+-- record_income_entry — CANLI GERCEK govde (idempotency_key destegi dahil)
+-- BIREBIR korunuyor; TEK degisiklik SECURITY DEFINER'dan sonra eklenen
+-- "SET search_path = public" satiridir. Firma-yetki kontrolu zaten canli
+-- olarak mevcuttu (baska bir oturumda eklenmis), degistirilmedi.
 CREATE OR REPLACE FUNCTION public.record_income_entry(
     p_company_id uuid,
-    p_income_date timestamptz,
+    p_income_date timestamp with time zone,
     p_amount numeric,
-    p_payment_method text DEFAULT NULL,
-    p_description text DEFAULT NULL,
-    p_note text DEFAULT NULL,
-    p_source text DEFAULT 'manual',
-    p_order_id uuid DEFAULT NULL,
-    p_create_transaction bool DEFAULT false
+    p_payment_method text DEFAULT NULL::text,
+    p_description text DEFAULT NULL::text,
+    p_note text DEFAULT NULL::text,
+    p_source text DEFAULT 'manual'::text,
+    p_order_id uuid DEFAULT NULL::uuid,
+    p_create_transaction boolean DEFAULT false,
+    p_idempotency_key text DEFAULT NULL::text
 )
 RETURNS json
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
+AS $function$
 DECLARE
     v_income_id uuid;
     v_transaction_id uuid;
+    v_existing public.income%ROWTYPE;
     v_result json;
 BEGIN
-    IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
+
+    -- COMPANY / TENANT AUTHORIZATION
+    IF NOT (
+        p_company_id IN (SELECT public.my_company_ids())
+        OR public.is_super_admin()
+    ) THEN
         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
     END IF;
-    IF NOT public.is_company_accounting(p_company_id) THEN
-        RAISE EXCEPTION 'unauthorized: bu islem icin muhasebe yetkisi gerekli';
-    END IF;
 
-    IF NOT public.check_rate_limit('record_income_entry', 3, 5) THEN
+    -- RATE LIMIT
+    IF NOT public.check_rate_limit(
+        'record_income_entry',
+        3,
+        5
+    ) THEN
         RETURN json_build_object(
             'success', false,
             'error', 'Rate limit exceeded. Please wait before creating more income entries.',
@@ -358,57 +322,152 @@ BEGIN
         );
     END IF;
 
-    INSERT INTO public.income (
-        company_id, income_date, amount, payment_method, description, note, source, order_id, created_at
-    ) VALUES (
-        p_company_id, p_income_date, p_amount, p_payment_method, p_description, p_note, p_source, p_order_id, now()
-    ) RETURNING id INTO v_income_id;
+    -- IDEMPOTENCY
+    IF p_idempotency_key IS NOT NULL THEN
 
-    IF p_create_transaction THEN
-        INSERT INTO public.transactions (
-            company_id, transaction_type, amount, description, reference_table, reference_id, transaction_date, created_at
-        ) VALUES (
-            p_company_id, 'income', p_amount, p_description, 'income', v_income_id, p_income_date, now()
-        ) RETURNING id INTO v_transaction_id;
+        SELECT *
+        INTO v_existing
+        FROM public.income
+        WHERE company_id = p_company_id
+          AND idempotency_key = p_idempotency_key
+        LIMIT 1;
+
+        IF FOUND THEN
+
+            SELECT id
+            INTO v_transaction_id
+            FROM public.transactions
+            WHERE reference_table = 'income'
+              AND reference_id = v_existing.id
+            LIMIT 1;
+
+            RETURN json_build_object(
+                'success', true,
+                'income_id', v_existing.id,
+                'transaction_id', v_transaction_id,
+                'already_existed', true
+            );
+
+        END IF;
+
     END IF;
 
-    v_result := json_build_object('success', true, 'income_id', v_income_id, 'transaction_id', v_transaction_id);
+    -- INCOME INSERT
+    INSERT INTO public.income (
+        company_id,
+        income_date,
+        amount,
+        payment_method,
+        description,
+        note,
+        source,
+        order_id,
+        idempotency_key,
+        created_at
+    )
+    VALUES (
+        p_company_id,
+        p_income_date,
+        p_amount,
+        p_payment_method,
+        p_description,
+        p_note,
+        p_source,
+        p_order_id,
+        p_idempotency_key,
+        now()
+    )
+    RETURNING id INTO v_income_id;
+
+    -- OPTIONAL TRANSACTION LOG
+    IF p_create_transaction THEN
+
+        INSERT INTO public.transactions (
+            company_id,
+            transaction_type,
+            amount,
+            description,
+            reference_table,
+            reference_id,
+            transaction_date,
+            created_at
+        )
+        VALUES (
+            p_company_id,
+            'income',
+            p_amount,
+            p_description,
+            'income',
+            v_income_id,
+            p_income_date,
+            now()
+        )
+        RETURNING id INTO v_transaction_id;
+
+    END IF;
+
+    v_result := json_build_object(
+        'success', true,
+        'income_id', v_income_id,
+        'transaction_id', v_transaction_id
+    );
+
     RETURN v_result;
 
-EXCEPTION WHEN OTHERS THEN
-    v_result := json_build_object('success', false, 'error', SQLERRM, 'error_code', SQLSTATE);
-    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+
+        v_result := json_build_object(
+            'success', false,
+            'error', SQLERRM,
+            'error_code', SQLSTATE
+        );
+
+        RETURN v_result;
 END;
-$$;
+$function$;
 
+-- record_expense_entry — CANLI GERCEK govde (idempotency_key destegi dahil)
+-- BIREBIR korunuyor; TEK degisiklik SECURITY DEFINER'dan sonra eklenen
+-- "SET search_path = public" satiridir. Firma-yetki kontrolu zaten canli
+-- olarak mevcuttu (baska bir oturumda eklenmis), degistirilmedi.
 CREATE OR REPLACE FUNCTION public.record_expense_entry(
     p_company_id uuid,
-    p_expense_date timestamptz,
+    p_expense_date timestamp with time zone,
     p_amount numeric,
-    p_category text DEFAULT NULL,
-    p_description text DEFAULT NULL,
-    p_note text DEFAULT NULL,
-    p_payment_method text DEFAULT NULL,
-    p_status text DEFAULT 'pending',
-    p_supplier_id uuid DEFAULT NULL,
-    p_create_transaction bool DEFAULT false
+    p_category text DEFAULT NULL::text,
+    p_description text DEFAULT NULL::text,
+    p_note text DEFAULT NULL::text,
+    p_payment_method text DEFAULT NULL::text,
+    p_status text DEFAULT 'pending'::text,
+    p_supplier_id uuid DEFAULT NULL::uuid,
+    p_create_transaction boolean DEFAULT false,
+    p_idempotency_key text DEFAULT NULL::text
 )
 RETURNS json
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
+AS $function$
 DECLARE
     v_expense_id uuid;
     v_transaction_id uuid;
+    v_existing public.expenses%ROWTYPE;
     v_result json;
 BEGIN
-    IF NOT (p_company_id IN (SELECT public.my_company_ids()) OR public.is_super_admin()) THEN
+
+    -- COMPANY / TENANT AUTHORIZATION
+    IF NOT (
+        p_company_id IN (SELECT public.my_company_ids())
+        OR public.is_super_admin()
+    ) THEN
         RAISE EXCEPTION 'unauthorized: bu firmaya erisim yok';
     END IF;
-    IF NOT public.is_company_accounting(p_company_id) THEN
-        RAISE EXCEPTION 'unauthorized: bu islem icin muhasebe yetkisi gerekli';
-    END IF;
 
-    IF NOT public.check_rate_limit('record_expense_entry', 3, 5) THEN
+    -- RATE LIMIT
+    IF NOT public.check_rate_limit(
+        'record_expense_entry',
+        3,
+        5
+    ) THEN
         RETURN json_build_object(
             'success', false,
             'error', 'Rate limit exceeded. Please wait before creating more expense entries.',
@@ -416,28 +475,112 @@ BEGIN
         );
     END IF;
 
-    INSERT INTO public.expenses (
-        company_id, expense_date, amount, category, description, note, payment_method, status, supplier_id, created_at
-    ) VALUES (
-        p_company_id, p_expense_date, p_amount, p_category, p_description, p_note, p_payment_method, p_status, p_supplier_id, now()
-    ) RETURNING id INTO v_expense_id;
+    -- IDEMPOTENCY
+    IF p_idempotency_key IS NOT NULL THEN
 
-    IF p_create_transaction THEN
-        INSERT INTO public.transactions (
-            company_id, transaction_type, amount, description, reference_table, reference_id, transaction_date, created_at
-        ) VALUES (
-            p_company_id, 'expense', p_amount, p_description, 'expenses', v_expense_id, p_expense_date, now()
-        ) RETURNING id INTO v_transaction_id;
+        SELECT *
+        INTO v_existing
+        FROM public.expenses
+        WHERE company_id = p_company_id
+          AND idempotency_key = p_idempotency_key
+        LIMIT 1;
+
+        IF FOUND THEN
+
+            SELECT id
+            INTO v_transaction_id
+            FROM public.transactions
+            WHERE reference_table = 'expenses'
+              AND reference_id = v_existing.id
+            LIMIT 1;
+
+            RETURN json_build_object(
+                'success', true,
+                'expense_id', v_existing.id,
+                'transaction_id', v_transaction_id,
+                'already_existed', true
+            );
+
+        END IF;
+
     END IF;
 
-    v_result := json_build_object('success', true, 'expense_id', v_expense_id, 'transaction_id', v_transaction_id);
+    -- EXPENSE INSERT
+    INSERT INTO public.expenses (
+        company_id,
+        expense_date,
+        amount,
+        category,
+        description,
+        note,
+        payment_method,
+        status,
+        supplier_id,
+        idempotency_key,
+        created_at
+    )
+    VALUES (
+        p_company_id,
+        p_expense_date,
+        p_amount,
+        p_category,
+        p_description,
+        p_note,
+        p_payment_method,
+        p_status,
+        p_supplier_id,
+        p_idempotency_key,
+        now()
+    )
+    RETURNING id INTO v_expense_id;
+
+    -- OPTIONAL TRANSACTION LOG
+    IF p_create_transaction THEN
+
+        INSERT INTO public.transactions (
+            company_id,
+            transaction_type,
+            amount,
+            description,
+            reference_table,
+            reference_id,
+            transaction_date,
+            created_at
+        )
+        VALUES (
+            p_company_id,
+            'expense',
+            p_amount,
+            p_description,
+            'expenses',
+            v_expense_id,
+            p_expense_date,
+            now()
+        )
+        RETURNING id INTO v_transaction_id;
+
+    END IF;
+
+    v_result := json_build_object(
+        'success', true,
+        'expense_id', v_expense_id,
+        'transaction_id', v_transaction_id
+    );
+
     RETURN v_result;
 
-EXCEPTION WHEN OTHERS THEN
-    v_result := json_build_object('success', false, 'error', SQLERRM, 'error_code', SQLSTATE);
-    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+
+        v_result := json_build_object(
+            'success', false,
+            'error', SQLERRM,
+            'error_code', SQLSTATE
+        );
+
+        RETURN v_result;
 END;
-$$;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.record_installer_payment(
     p_company_id uuid,
@@ -636,41 +779,22 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.record_order_payment TO authenticated;
-GRANT EXECUTE ON FUNCTION public.record_invoice_save TO authenticated;
-GRANT EXECUTE ON FUNCTION public.record_income_entry TO authenticated;
-GRANT EXECUTE ON FUNCTION public.record_expense_entry TO authenticated;
-GRANT EXECUTE ON FUNCTION public.record_installer_payment TO authenticated;
-GRANT EXECUTE ON FUNCTION public.cancel_installer_payment TO authenticated;
-GRANT EXECUTE ON FUNCTION public.record_supplier_payment TO authenticated;
+-- Tam parametre-tipi listesiyle: "GRANT ... FUNCTION public.x TO ..." adsiz
+-- hali, birden fazla overload olustugunda (bu migration'in ilk denemesinde
+-- oldugu gibi) "function name ... is not unique" hatasi verebiliyor. Tam
+-- imzayla bu risk tamamen ortadan kalkar.
+GRANT EXECUTE ON FUNCTION public.record_order_payment(uuid, uuid, numeric, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_income_entry(uuid, timestamp with time zone, numeric, text, text, text, text, uuid, boolean, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_expense_entry(uuid, timestamp with time zone, numeric, text, text, text, text, text, uuid, boolean, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_installer_payment(uuid, uuid, numeric, timestamp with time zone, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.cancel_installer_payment(uuid, uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_supplier_payment(uuid, uuid, numeric, text, text, timestamp with time zone, boolean, timestamp with time zone) TO authenticated;
 
 -- ============================================================================
--- 3) supplier_transactions / installer_transactions RLS — TRUE yerine
---    is_company_accounting(company_id) (income tablosuyla AYNI desen).
--- ============================================================================
-
-DROP POLICY IF EXISTS installer_transactions_insert ON public.installer_transactions;
-CREATE POLICY installer_transactions_insert ON public.installer_transactions
-FOR INSERT WITH CHECK (
-  is_company_accounting(company_id)
-);
-
-DROP POLICY IF EXISTS supplier_transactions_insert ON public.supplier_transactions;
-CREATE POLICY supplier_transactions_insert ON public.supplier_transactions
-FOR INSERT WITH CHECK (
-  is_company_accounting(company_id)
-);
-
-DROP POLICY IF EXISTS supplier_transactions_update ON public.supplier_transactions;
-CREATE POLICY supplier_transactions_update ON public.supplier_transactions
-FOR UPDATE USING (
-  is_company_accounting(company_id)
-);
-
--- ============================================================================
--- POST-CHECK — 7 fonksiyonun hiçbirinin gövdesinde artık firma-yetki kontrolü
--- eksik değil; 3 politikanın hiçbiri artık ham TRUE değil. Herhangi biri
--- başarısızsa COMMIT ENGELLENİR.
+-- POST-CHECK — 6 fonksiyonun (record_invoice_save HARİÇ) hiçbirinin gövdesinde
+-- artık firma-yetki kontrolü eksik değil, hepsinde search_path pinli; 3
+-- yardımcı fonksiyonda da search_path pinli. Herhangi biri başarısızsa
+-- COMMIT ENGELLENİR. (Politika kontrolleri REVIZYON 2'de kaldırıldı.)
 -- ============================================================================
 
 DO $postcheck$
@@ -678,7 +802,7 @@ DECLARE
   v_fn text;
   v_def text;
 BEGIN
-  FOREACH v_fn IN ARRAY ARRAY['record_order_payment','record_invoice_save','record_income_entry','record_expense_entry','record_installer_payment','cancel_installer_payment','record_supplier_payment'] LOOP
+  FOREACH v_fn IN ARRAY ARRAY['record_order_payment','record_income_entry','record_expense_entry','record_installer_payment','cancel_installer_payment','record_supplier_payment'] LOOP
     SELECT pg_get_functiondef(p.oid) INTO v_def
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = v_fn;
@@ -694,26 +818,20 @@ BEGIN
     END IF;
   END LOOP;
 
-  IF EXISTS (
-    SELECT 1 FROM pg_policies
-    WHERE schemaname='public' AND tablename='installer_transactions' AND policyname='installer_transactions_insert' AND with_check = 'true'
-  ) THEN
-    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: installer_transactions_insert hala TRUE — COMMIT ENGELLENDI.';
-  END IF;
-  IF EXISTS (
-    SELECT 1 FROM pg_policies
-    WHERE schemaname='public' AND tablename='supplier_transactions' AND policyname='supplier_transactions_insert' AND with_check = 'true'
-  ) THEN
-    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: supplier_transactions_insert hala TRUE — COMMIT ENGELLENDI.';
-  END IF;
-  IF EXISTS (
-    SELECT 1 FROM pg_policies
-    WHERE schemaname='public' AND tablename='supplier_transactions' AND policyname='supplier_transactions_update' AND qual = 'true'
-  ) THEN
-    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: supplier_transactions_update hala TRUE — COMMIT ENGELLENDI.';
-  END IF;
+  FOREACH v_fn IN ARRAY ARRAY['is_super_admin','is_company_member','is_company_accounting'] LOOP
+    SELECT pg_get_functiondef(p.oid) INTO v_def
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = v_fn;
 
-  RAISE NOTICE 'DOGRULAMA PASS: 7 fonksiyon firma-yetki kontrollu + search_path pinli, 3 politika artik TRUE degil.';
+    IF v_def IS NULL THEN
+      RAISE EXCEPTION 'DOGRULAMA BASARISIZ: % bulunamadi — COMMIT ENGELLENDI.', v_fn;
+    END IF;
+    IF v_def NOT ILIKE '%SET search_path TO ''public''%' AND v_def NOT ILIKE '%search_path=public%' AND v_def NOT ILIKE '%search_path = public%' THEN
+      RAISE EXCEPTION 'DOGRULAMA BASARISIZ: % icinde search_path pinlenmemis — COMMIT ENGELLENDI.', v_fn;
+    END IF;
+  END LOOP;
+
+  RAISE NOTICE 'DOGRULAMA PASS: 6 finansal RPC firma-yetki kontrollu + search_path pinli, 3 yardimci fonksiyon search_path pinli.';
 END;
 $postcheck$;
 
@@ -724,16 +842,11 @@ NOTIFY pgrst, 'reload schema';
 --
 -- 1) select proname, prosecdef, proconfig from pg_proc
 --    where proname in ('is_super_admin','is_company_member','is_company_accounting',
---    'record_order_payment','record_invoice_save','record_income_entry','record_expense_entry',
+--    'record_order_payment','record_income_entry','record_expense_entry',
 --    'record_installer_payment','cancel_installer_payment','record_supplier_payment');
 --    -- Beklenen: proconfig içinde her satırda 'search_path=public' görünmeli.
 --
--- 2) select tablename, policyname, cmd, qual, with_check from pg_policies
---    where schemaname='public' and tablename in ('supplier_transactions','installer_transactions')
---    order by tablename, policyname;
---    -- Beklenen: hiçbir with_check/qual değeri artık 'true' değil.
---
--- 3) Regresyon: mevcut bir test firmasıyla (Test Company 1/2) gelir/gider
+-- 2) Regresyon: mevcut bir test firmasıyla (Test Company 1/2) gelir/gider
 --    kaydı, sipariş tahsilatı, montajcı ödemesi, tedarikçi ödemesi dene —
 --    hepsi eskisi gibi ÇALIŞMALI (accounting/admin/owner rolündeyken).
 --    Sonra BAŞKA bir firmanın gerçek ID'siyle aynı RPC'leri manuel çağırıp

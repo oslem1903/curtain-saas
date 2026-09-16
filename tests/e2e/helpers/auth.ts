@@ -56,6 +56,9 @@ export async function actAsTestCompanyAdmin(page: Page): Promise<{ id: string; n
     return (
       list.find((c) => /test\s*company\s*1/i.test(c.name || "")) ||
       list.find((c) => /test\s*company\s*2/i.test(c.name || "")) ||
+      // "Test Company 1/2" production'da artik yok (15.09.2026 tespiti) — "oss"
+      // firmasi (aktif, is_pilot=true) gecici test firmasi olarak kullaniliyor.
+      list.find((c) => /^oss$/i.test(c.name || "")) ||
       list.find((c) => /test|demo/i.test(c.name || "")) ||
       null
     );

@@ -67,6 +67,13 @@ function productLabel(t: string | null | undefined): string {
   const map: Record<string, string> = {
     stor: "Stor", zebra: "Zebra", tul: "Tül", fon: "Fon",
     jalousie: "Jaluzi", picasso: "Picasso", plicell: "Plicell",
+    plise: "Plise",
+    rustik: "Rustik",
+    dekoratif_ray: "Dekoratif Ray",
+    kruvaze: "Kruvaze Perde",
+    katlamali_mekanizma: "Katlamalı Mekanizma",
+    ip_perde: "İp Perde",
+    aksesuar: "Aksesuar",
     dikey_tul: "Dikey Tül", dikey_stor: "Dikey Stor",
   };
   return map[String(t ?? "").toLowerCase()] ?? (t || "Ürün");
@@ -89,7 +96,12 @@ function calcEstimate(row: QuoteRow): number {
 }
 
 function fmtTL(n: number): string {
-  return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(n);
+  return new Intl.NumberFormat("tr-TR", {
+    style: "currency",
+    currency: "TRY",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
 }
 
 function fmtDate(iso: string | null): string {
@@ -249,7 +261,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         totalLineTotal += lineTotal;
         totalSupplierLineTotal += supplierLineTotal;
 
-        const isTulFon = row.product_type === "tul" || row.product_type === "fon";
+        const isTulFon = ["tul", "fon", "kruvaze"].includes(row.product_type || "");
         const productNote = [row.model_name, row.color_name, row.room_name].filter(Boolean).join(" / ") || null;
 
         // MeasurementEntry.tsx'in appointments.note içine yazdığı AYNI etiketlerden
@@ -282,6 +294,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         const productOptions: Record<string, any> = {};
         if (row.rounded_width_cm != null) productOptions.rounded_width_cm = row.rounded_width_cm;
         if (row.rounded_height_cm != null) productOptions.rounded_height_cm = row.rounded_height_cm;
+        if (isTulFon) productOptions.pile = /Pile: S/.test(noteStr) ? "S" : /Pile: 3/.test(noteStr) ? "3" : "2";
         if (Object.keys(fieldInfo).length > 0) productOptions.field_info = fieldInfo;
 
         return {
@@ -293,7 +306,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           unit_price: unitPrice,
           line_total: lineTotal,
           room: row.room_name || null,
-          note: productNote,
+          note: [productNote, row.note].filter(Boolean).join("\n") || null,
           sewing_allowance_cm: isTulFon ? 15 : null,
           supplier_id: row.supplier_id || null,
           supplier_unit_cost: supplierUnitCost,
@@ -462,7 +475,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       for (const item of insertedItems) {
         if (item.supplier_id && item.supplier_total_cost > 0) {
           try {
-            const productLabelStr = item.product_type === "stor" ? "Stor" : item.product_type === "zebra" ? "Zebra" : item.product_type === "tul" ? "Tül" : item.product_type === "fon" ? "Fon" : item.product_type || "Ürün";
+            const productLabelStr = productLabel(item.product_type);
             const lineLabel = `${productLabelStr} (${item.room || "Alan"})`;
             await postSupplierDebt({
               companyId: ctx.company_id,
@@ -661,7 +674,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
                       <span className="text-slate-500">{productLabel(row.product_type)}</span>
                     </div>
                     <div className="flex items-center gap-4 text-xs text-slate-500">
-                      <span>{row.width_cm}x{row.height_cm} cm</span>
+                      <span>{row.width_cm}x{row.height_cm} cm • {Math.max(1, row.quantity ?? 1)} adet • Birim miktarı: {areaM2Of(row).toFixed(2)}</span>
                       <span className="font-black text-slate-800 dark:text-slate-200">{fmtTL(calcEstimate(row))}</span>
                     </div>
                   </div>

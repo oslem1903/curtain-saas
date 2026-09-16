@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Plus, TrendingDown, TrendingUp, Wallet, X, ChevronDown, Download, Printer, FileSpreadsheet } from "lucide-react";
+import { ArrowLeft, ExternalLink, Plus, TrendingDown, TrendingUp, Wallet, X, Printer, FileSpreadsheet } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
+import { paymentDescription } from "../utils/paymentLabels";
+import * as XLSX from "xlsx";
+import { todayLocalISO } from "../utils/date";
+import { printHtmlDocument } from "../utils/printDocument";
 
 const financeService = createFinanceService();
 
@@ -47,9 +51,8 @@ export default function SupplierDetail() {
     const [success, setSuccess] = useState("");
     const [showPaymentForm, setShowPaymentForm] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [showExportDropdown, setShowExportDropdown] = useState(false);
 
-    const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+    const [payDate, setPayDate] = useState(todayLocalISO());
     const [payAmount, setPayAmount] = useState("");
     const [payMethod, setPayMethod] = useState("nakit");
     const [payNote, setPayNote] = useState("");
@@ -270,7 +273,7 @@ export default function SupplierDetail() {
         const headers = ["Tarih", "Açıklama", "Evrak No", "Borç (+)", "Ödeme (-)", "Bakiye"];
         const rows = [...filteredRowsWithBalance].reverse().map(({ tx, balance: bal }) => [
             formatDate(tx.transaction_date),
-            tx.description || "",
+            paymentDescription(tx.description),
             tx.reference_no || "",
             // 'payment_reversal' borcu geri actigi icin 'debt' ile ayni sutunda (+) gosterilir;
             // "Aciklama" sutunundaki mevcut "Iptal: ..." metni (RPC tarafindan yazilir) ayrimi saglar.
@@ -279,18 +282,11 @@ export default function SupplierDetail() {
             bal.toFixed(2)
         ]);
 
-        const content = [headers, ...rows].map((row) => row.join(";")).join("\n");
-        const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `tedarikci_${(supplier?.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`);
-        // Bazı tarayıcılar (Chromium) DOM'a bağlı olmayan <a download> üzerinde
-        // programatik click'i indirmeye çevirmez — ekle, tıkla, kaldır.
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows.map(row => row.map((value, i) => i >= 3 ? Number(value) : value))]);
+        sheet["!cols"] = [{ wch: 14 }, { wch: 60 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheet, "Tedarikçi Cari");
+        XLSX.writeFile(workbook, `tedarikci_cari_${todayLocalISO()}.xlsx`);
     }
 
     function handleExportPDF() {
@@ -302,7 +298,7 @@ export default function SupplierDetail() {
                 ({ tx, balance: bal }) => `
                     <tr>
                         <td>${formatDate(tx.transaction_date)}</td>
-                        <td>${tx.description || ""}</td>
+                        <td>${paymentDescription(tx.description)}</td>
                         <td>${tx.reference_no || "—"}</td>
                         <td style="text-align: right; color: #dc2626;">${
                             tx.transaction_type === "debt"
@@ -319,10 +315,7 @@ export default function SupplierDetail() {
             )
             .join("");
 
-        const printWindow = window.open("", "_blank", "width=1200,height=800");
-        if (!printWindow) return;
-
-        printWindow.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>Tedarikçi Cari Ekstresi - ${supplier?.name}</title>
@@ -389,12 +382,8 @@ export default function SupplierDetail() {
                     </div>
                 </body>
             </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => {
-            printWindow.print();
-        }, 500);
+        `;
+        void printHtmlDocument(printHtml, { title: `Tedarikçi Cari Ekstresi - ${supplier?.name ?? ""}`, fileName: "tedarikci-cari-ekstresi" });
     }
 
     if (loading) return <div className="p-10 text-center text-sm text-slate-500">Yükleniyor...</div>;
@@ -523,50 +512,11 @@ export default function SupplierDetail() {
 
             {/* Cari Hareket Listesi */}
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 overflow-hidden">
-                <div className="border-b border-slate-100 p-4 dark:border-slate-800 flex items-center justify-between relative">
+                <div className="border-b border-slate-100 p-4 dark:border-slate-800 flex flex-wrap gap-3 items-center justify-between relative">
                     <h2 className="font-black text-slate-950 dark:text-white">Cari Hareketler</h2>
-                    <div>
-                        <button
-                            type="button"
-                            onClick={() => setShowExportDropdown((prev) => !prev)}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition"
-                        >
-                            <Download className="h-3.5 w-3.5" />
-                            Döküm Al
-                            <ChevronDown className="h-3 w-3" />
-                        </button>
-                        {showExportDropdown && (
-                            <>
-                                <div
-                                    className="fixed inset-0 z-10"
-                                    onClick={() => setShowExportDropdown(false)}
-                                />
-                                <div className="absolute right-0 mt-1 w-40 rounded-xl border border-slate-100 bg-white p-1 shadow-lg dark:border-slate-800 dark:bg-slate-900 z-20 animate-in fade-in duration-100">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowExportDropdown(false);
-                                            handleExportPDF();
-                                        }}
-                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-                                    >
-                                        <Printer className="h-3.5 w-3.5 text-slate-400" />
-                                        PDF İndir
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowExportDropdown(false);
-                                            handleExportExcel();
-                                        }}
-                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-                                    >
-                                        <FileSpreadsheet className="h-3.5 w-3.5 text-slate-400" />
-                                        Excel İndir
-                                    </button>
-                                </div>
-                            </>
-                        )}
+                    <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={handleExportPDF} disabled={!filteredRowsWithBalance.length} className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-bold disabled:opacity-40"><Printer className="h-4 w-4" />PDF / Yazdır</button>
+                        <button type="button" onClick={handleExportExcel} disabled={!filteredRowsWithBalance.length} className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-bold disabled:opacity-40"><FileSpreadsheet className="h-4 w-4" />Excel İndir</button>
                     </div>
                 </div>
                 {transactions.length === 0 ? (
@@ -593,7 +543,7 @@ export default function SupplierDetail() {
                                     ) : rows.map(({ tx, balance: bal }, i) => (
                                         <tr key={tx.id} className={`border-b border-slate-50 dark:border-slate-800 ${i % 2 === 0 ? "" : "bg-slate-50/50 dark:bg-slate-950/50"}`}>
                                             <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{formatDate(tx.transaction_date)}</td>
-                                            <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{tx.description || "—"}</td>
+                                            <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{paymentDescription(tx.description) || "—"}</td>
                                             <td className="px-4 py-3 text-slate-500">
                                                 {tx.reference_no || "—"}
                                                 {tx.order_id && (

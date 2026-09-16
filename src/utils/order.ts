@@ -15,6 +15,8 @@
 // Yeni ERP modülü eklendiğinde refactor gerekmez; yalnızca bu modül genişletilir.
 // ============================================================================
 
+import { parseLocalDateOnly, todayLocalISO } from "./date";
+
 // ---------------------------------------------------------------------------
 // 1) DURUM (STATUS) AKIŞI
 // ---------------------------------------------------------------------------
@@ -152,7 +154,9 @@ export const DELIVERY_DATE_LABEL = "Tahmini Teslim Tarihi";
 
 /** date input `min` değeri (YYYY-MM-DD): bugünden öncesi seçilemez. */
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  // YEREL tarih — toISOString() UTC verir ve TR'de gece 00:00-03:00 arası
+  // bir önceki günü döndürerek "bugünü" seçilemez hale getirirdi.
+  return todayLocalISO();
 }
 
 /** Teslim tarihi geçerli (dolu) mu? Sipariş oluşturma/çevirme bunu zorunlu kılar. */
@@ -183,11 +187,12 @@ export function daysRemaining(
   dueDate: string | null | undefined,
   from: Date = new Date(),
 ): number | null {
-  if (!dueDate) return null;
-  const due = new Date(dueDate).getTime();
-  if (Number.isNaN(due)) return null;
+  // Her iki taraf da YEREL gün başlangıcına indirgenir; böylece saat dilimi
+  // kayması (UTC+3) yüzünden bir gün eksik/fazla hesaplanmaz.
+  const due = parseLocalDateOnly(dueDate);
+  if (!due) return null;
   const start = new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime();
-  return Math.ceil((due - start) / 86_400_000);
+  return Math.round((due.getTime() - start) / 86_400_000);
 }
 
 /**

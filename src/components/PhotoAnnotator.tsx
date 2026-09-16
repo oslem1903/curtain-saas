@@ -1,3 +1,4 @@
+import { requestText } from "../utils/requestText";
 // ============================================================================
 // PhotoAnnotator — fotoğraf üzerine işaretleme (ok / daire / kare / serbest / yazı)
 // İşaretlenen görsel tek katmana düzleştirilip dataURL (JPEG) olarak döner.
@@ -84,11 +85,11 @@ export default function PhotoAnnotator({ src, onSave, onClose }: { src: string; 
     };
   }
 
-  function onPointerDown(e: React.PointerEvent) {
+  async function onPointerDown(e: React.PointerEvent) {
     if (!ready) return;
     const p = toCanvasCoords(e);
     if (tool === "text") {
-      const text = window.prompt("Etiket yazısı (örn. Motor, Kasa, Sağ):", "");
+      const text = await requestText("Etiket yazısı (örn. Motor, Kasa, Sağ):", "");
       if (text && text.trim()) setShapes((prev) => [...prev, { type: "text", x: p.x, y: p.y, text: text.trim(), color }]);
       return;
     }

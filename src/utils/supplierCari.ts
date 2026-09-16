@@ -18,6 +18,7 @@
 // KAPSAM DIŞIDIR — yalnızca borç oluşturma merkezileştirildi.
 // ============================================================================
 import { supabase } from "../supabaseClient";
+import { addDaysLocalISO } from "./date";
 
 export type PostSupplierDebtParams = {
   companyId: string;
@@ -52,9 +53,9 @@ export function computeSupplierDueDate(
   manualDueDate?: string | null,
 ): string | null {
   if (supplierDueDays != null && Number.isFinite(supplierDueDays)) {
-    const d = new Date();
-    d.setDate(d.getDate() + supplierDueDays);
-    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+    // YEREL tarih: toISOString() UTC verir; TR'de gece yarısından sonra vade
+    // bir gün eksik hesaplanırdı.
+    return addDaysLocalISO(supplierDueDays);
   }
   return manualDueDate && manualDueDate.trim() ? manualDueDate : null;
 }

@@ -36,13 +36,14 @@ import {
     FileText,
     FileSignature,
     ClipboardCheck,
-    HelpCircle,
     Printer,
     Download
 } from "lucide-react";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
 import { withoutDeleted } from "../utils/softDelete";
+import { todayLocalISO } from "../utils/date";
+import { printHtmlDocument } from "../utils/printDocument";
 
 type Customer = {
     id: string;
@@ -86,9 +87,7 @@ const PAYMENT_METHODS: { value: string; label: string }[] = [
 
 /** Bugünün tarihini yerel saat dilimine göre yyyy-mm-dd formatında döner (date input için). */
 function todayStr() {
-    const d = new Date();
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 10);
+    return todayLocalISO();
 }
 
 type CustomerLedgerEntry = {
@@ -219,8 +218,8 @@ function parseCrmNotes(noteField: string | null): CrmNote[] {
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
         try {
             return JSON.parse(trimmed) as CrmNote[];
-        } catch (e) {
-            // Fallback
+        } catch {
+            // Gecersiz JSON: not alani duz metin olarak ele alinir.
         }
     }
     return [{
@@ -302,7 +301,7 @@ function getCustomerBadges(
     appts: any[],
     orders: any[]
 ) {
-    const badges = [];
+    const badges: Array<{ label: string; cls: string }> = [];
     const netBalance = ledger.balance - ledger.advance;
 
     // VIP check
@@ -383,7 +382,6 @@ export default function Customers() {
         collectIntentKeyRef.current = null;
     }, [collectCustomer?.id, collectAmount, collectDate, collectMethod, collectNote]);
     const [collectError, setCollectError] = useState("");
-    const [toast, setToast] = useState("");
 
     // Cari ekstre modal state
     const [statementCustomer, setStatementCustomer] = useState<Customer | null>(null);
@@ -713,7 +711,7 @@ export default function Customers() {
         link.href = url;
         link.setAttribute(
             "download",
-            `musteri_${(statementCustomer.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`,
+            `musteri_${(statementCustomer.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${todayLocalISO()}.csv`,
         );
         document.body.appendChild(link);
         link.click();
@@ -740,9 +738,7 @@ export default function Customers() {
             )
             .join("");
 
-        const printWindow = window.open("", "_blank", "width=1200,height=800");
-        if (!printWindow) return;
-        printWindow.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>Müşteri Cari Ekstresi - ${statementCustomer.name || ""}</title>
@@ -801,10 +797,8 @@ export default function Customers() {
                     <div class="footer">Bu döküm sistem tarafından otomatik oluşturulmuştur. © PerdePRO</div>
                 </body>
             </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => printWindow.print(), 400);
+        `;
+        void printHtmlDocument(printHtml, { title: "Müşteri Ekstresi", fileName: "musteri-ekstresi" });
     }
 
     async function submitCollect() {
@@ -1227,12 +1221,6 @@ export default function Customers() {
 
     return (
         <div className="space-y-6 pb-24 lg:pb-6 font-sans">
-            {toast ? (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
-                    {toast}
-                </div>
-            ) : null}
-
             {/* Header section */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div className="flex items-center gap-4">

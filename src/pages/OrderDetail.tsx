@@ -3,7 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "../supabaseClient";
-import { normalizeRole, type RoleState } from "../auth/roles";
+import { type RoleState } from "../auth/roles";
+import { useRole } from "../context/RoleContext";
+import { createReadScope } from "../utils/readScope";
 import { logAction } from "../utils/audit";
 import { notifyPaymentReceived } from "../services/notificationManager";
 import { createFinanceService } from "../services/finance";
@@ -21,9 +23,11 @@ import {
     CheckCircle2,
     ChevronDown,
 } from "lucide-react";
+import SecureImage from "../components/SecureImage";
+import SecureLink from "../components/SecureLink";
 
 
-type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "dikey_tul" | "dikey_stor" | "diger";
+type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "dikey_tul" | "dikey_stor" | "rustik" | "dekoratif_ray" | "kruvaze" | "katlamali_mekanizma" | "ip_perde" | "aksesuar" | "diger";
 
 type OrderRow = {
     id: string;
@@ -215,6 +219,12 @@ function productLabel(t: ProductType | string | null | undefined) {
         case "dikey_tul": return "Dikey Tül";
         case "dikey_stor": return "Dikey Stor";
         case "picasso": return "Picasso";
+        case "rustik": return "Rustik";
+        case "dekoratif_ray": return "Dekoratif Ray";
+        case "kruvaze": return "Kruvaze Perde";
+        case "katlamali_mekanizma": return "Katlamalı Mekanizma";
+        case "ip_perde": return "İp Perde";
+        case "aksesuar": return "Aksesuar";
         default: return "Diğer";
     }
 }
@@ -272,9 +282,16 @@ function computeLineItem(params: {
     let line_total = effectiveArea * unit * qty;
 
     // Ürün tipine özgü kurallar (NewOrder ile birebir) ----------------------
-    if (params.product_type === "tul" || params.product_type === "fon") {
+    if (["rustik", "dekoratif_ray", "katlamali_mekanizma"].includes(params.product_type || "")) {
+        effectiveArea = Math.ceil(w / 25) * 25 / 100;
+        line_total = effectiveArea * unit * qty;
+    } else if (["ip_perde", "aksesuar"].includes(params.product_type || "")) {
+        effectiveArea = 1;
+        line_total = unit * qty;
+    } else if (params.product_type === "tul" || params.product_type === "fon" || params.product_type === "kruvaze") {
         // Tül/Fon: en × pile + 15 cm dikim payı → kumaş metresi (yükseklik hariç).
-        const pile = params.pile === "3" ? 3 : 2;
+        // "S" (S pile) 1'e 3 perde gibi hesaplanır.
+        const pile = params.pile === "3" || params.pile === "S" ? 3 : 2;
         effectiveArea = (w * pile + 15) / 100;
         line_total = effectiveArea * unit * qty;
     } else if (params.product_type === "jalousie" || params.product_type === "picasso") {
@@ -292,7 +309,7 @@ function computeLineItem(params: {
 /** Ürün kategorisini ProductType'a normalize eder. */
 function normalizeCategory(c: string | null | undefined): ProductType {
     const v = String(c ?? "").toLowerCase().trim();
-    const valid = ["plicell", "stor", "zebra", "tul", "fon", "jalousie", "picasso", "dikey_tul", "dikey_stor", "diger"];
+    const valid = ["plicell", "stor", "zebra", "tul", "fon", "jalousie", "picasso", "dikey_tul", "dikey_stor", "rustik", "dekoratif_ray", "kruvaze", "katlamali_mekanizma", "ip_perde", "aksesuar", "diger"];
     return (valid.includes(v) ? v : "diger") as ProductType;
 }
 
@@ -313,7 +330,9 @@ export default function OrderDetail() {
     const [items, setItems] = useState<OrderItemRow[]>([]);
     const [itemPhotos, setItemPhotos] = useState<Record<string, CatalogCodePhoto[]>>({});
     const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
-    const [role, setRole] = useState<RoleState>("unknown");
+    const { effectiveRole: role } = useRole();
+    const [loadError, setLoadError] = useState("");
+    const readScopeRef = useRef<ReturnType<typeof createReadScope> | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const idempotencyKeyRef = useRef<string | null>(null);
@@ -385,120 +404,112 @@ export default function OrderDetail() {
     const [pWaste, setPWaste] = useState(0);
     // Tül/fon pile ve jaluzi mekanizma/kontrol: fiyatı etkiler; düzenlemede kalemin
     // kayıtlı değerleri korunur ki sadece not/renk değişince tutar sapmasın.
-    const [pPile, setPPile] = useState<"2" | "3">("2");
+    const [pPile, setPPile] = useState<"2" | "3" | "S">("2");
     const [pMechanism, setPMechanism] = useState<"reducer" | "standard">("standard");
     const [pControlType, setPControlType] = useState<"corded" | "tape">("corded");
 
     async function loadData() {
-        if (!id) return;
+        readScopeRef.current?.cancel();
+        if (!id) {
+            setLoadError("Sipariş kimliği bulunamadı. Siparişler listesinden yeniden açın.");
+            setLoading(false);
+            return;
+        }
+        const scope = createReadScope();
+        readScopeRef.current = scope;
         setLoading(true);
+        setLoadError("");
+        setOrder(null);
+        setStaffList([]);
+        setItemPhotos({});
         try {
-            const { data: o } = await supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("id", id).single();
+            const { data: o, error: orderError } = await scope.read(supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("id", id).single());
+            if (orderError) throw orderError;
+            if (!o) throw new Error("Sipariş bulunamadı veya görüntüleme yetkiniz yok.");
             // eslint-disable-next-line prefer-const
-            let { data: i, error: itemsErr } = await supabase
+            let { data: i, error: itemsErr } = await scope.read(supabase
                 .from("order_items")
                 .select("*, suppliers(id, name)")
                 .eq("order_id", id)
-                .order("created_at");
+                .order("created_at"));
             if (itemsErr) {
                 // Fallback: bazı kolonlar yoksa temel alanlarla dene
-                const fb = await supabase
+                const fb = await scope.read(supabase
                     .from("order_items")
                     .select("id, product_type, width_cm, height_cm, qty, unit_price, line_total, room, note, supplier_id, supplier_unit_cost, supplier_total_cost, profit, area_m2, suppliers(id, name)")
                     .eq("order_id", id)
-                    .order("created_at");
+                    .order("created_at"));
+                if (fb.error) throw fb.error;
                 i = fb.data;
             }
 
             if (o?.company_id) {
-                const { data: supplierRows } = await supabase
+                const { data: supplierRows, error: supplierRowsError } = await scope.read(supabase
                     .from("suppliers")
                     .select("id, name")
                     .eq("company_id", o.company_id)
-                    .order("name", { ascending: true });
+                    .order("name", { ascending: true }));
+            if (supplierRowsError) throw supplierRowsError;
                 setSuppliers((supplierRows ?? []) as SupplierRow[]);
 
-                // Tedarikçi alış fiyat listesi (ürün/tedarikçi seçilince otomatik doldurma için).
-                // product_category kolonu bazı kurulumlarda yoktur — fallback ile yine de çekilir.
-                let priceRes: any = await supabase
+                const priceRes = await scope.read(supabase
                     .from("supplier_product_prices")
-                    .select("supplier_id,product_name,product_category,unit_cost")
-                    .eq("company_id", o.company_id);
-                if (priceRes.error) {
-                    priceRes = await supabase
-                        .from("supplier_product_prices")
-                        .select("supplier_id,product_name,unit_cost")
-                        .eq("company_id", o.company_id);
-                }
-                if (priceRes.error) {
-                    priceRes = await supabase
-                        .from("supplier_product_prices")
-                        .select("supplier_id,product_type,unit_price")
-                        .eq("company_id", o.company_id);
-                    if (!priceRes.error) {
-                        priceRes = { data: (priceRes.data ?? []).map((p: any) => ({ supplier_id: p.supplier_id, product_name: p.product_type ?? null, product_category: p.product_type ?? null, unit_cost: p.unit_price ?? 0 })), error: null };
-                    }
-                }
-                setSupplierPrices(priceRes.error ? [] : ((priceRes.data ?? []) as typeof supplierPrices));
+                    .select("*")
+                    .eq("company_id", o.company_id));
+                if (priceRes.error) throw priceRes.error;
+                setSupplierPrices((priceRes.data ?? []).map((p: any) => ({
+                    supplier_id: p.supplier_id,
+                    product_name: p.product_name ?? p.product_type ?? null,
+                    product_category: p.product_category ?? p.product_type ?? null,
+                    unit_cost: p.unit_cost ?? p.unit_price ?? 0,
+                })));
 
-                // Ürün kataloğu (ürün seçilince tedarikçi/alış fiyatı/hesap kuralları otomatik gelsin).
-                // Eksik kolona karşı kademeli fallback. NOT: bazı kurulumlarda products.cost_price
-                // kolonu YOKTUR (alış fiyatı supplier_product_prices'tan gelir) — bu yüzden
-                // cost_price'sız varyantlar da denenir, aksi hâlde katalog hiç yüklenmez.
-                const PRODUCT_SELECTS = [
-                    "id,name,category,unit_price,cost_price,min_area,rounding_rule,waste_rate,is_active",
-                    "id,name,category,unit_price,cost_price,min_area,rounding_rule,is_active",
-                    "id,name,category,unit_price,cost_price,is_active",
-                    "id,name,category,unit_price,min_area,rounding_rule,is_active",
-                    "id,name,category,unit_price,is_active",
-                    "id,name,category,unit_price",
-                ];
-                let prodRes: any = { data: null, error: { message: "init" } };
-                for (const sel of PRODUCT_SELECTS) {
-                    prodRes = await supabase
-                        .from("products")
-                        .select(sel)
-                        .eq("company_id", o.company_id)
-                        .order("name", { ascending: true });
-                    if (!prodRes.error) break;
-                }
-                const catalog = prodRes.error ? [] : ((prodRes.data ?? []) as any[]).filter((p) => p.is_active !== false);
-                setProductsCatalog(catalog as ProductCatalogRow[]);
+                const prodRes = await scope.read(supabase
+                    .from("products")
+                    .select("*")
+                    .eq("company_id", o.company_id)
+                    .order("name", { ascending: true }));
+                if (prodRes.error) throw prodRes.error;
+                setProductsCatalog((prodRes.data ?? []).filter((p: any) => p.is_active !== false) as ProductCatalogRow[]);
             } else {
                 setSuppliers([]);
                 setSupplierPrices([]);
                 setProductsCatalog([]);
             }
-            const { data: previews } = await supabase
+            const { data: previews } = await scope.read(supabase
                 .from("visual_previews")
                 .select("id, preview_image_url, original_photo_url, note, selected_catalog_variant_id, catalog_variant:catalog_variants(variant_code, color_name, price_per_m2, texture_image_url, series:catalog_series(product_type, series_code, model_name))")
                 .eq("order_id", id)
-                .order("created_at", { ascending: false });
-            const { data: paymentRows } = await supabase
+                .order("created_at", { ascending: false }));
+            const { data: paymentRows, error: paymentRowsError } = await scope.read(supabase
                 .from("payments")
                 .select("id,payment_date,amount,method,note,reverses_payment_id")
                 .eq("order_id", id)
-                .order("payment_date", { ascending: false });
-            const { data: planRow } = await supabase
+                .order("payment_date", { ascending: false }));
+            if (paymentRowsError) throw paymentRowsError;
+            const { data: planRow, error: planRowError } = await scope.read(supabase
                 .from("order_payment_plans")
                 .select("id,order_id,opening_total_amount,opening_paid_amount,opening_remaining_amount,status")
                 .eq("order_id", id)
                 .eq("status", "active")
-                .maybeSingle();
+                .maybeSingle());
+            if (planRowError) throw planRowError;
             let installmentRows: PaymentPlanInstallmentRow[] = [];
             if (planRow?.id) {
-                const { data: instData } = await supabase
+                const { data: instData, error: instDataError } = await scope.read(supabase
                     .from("order_installments")
                     .select("id,plan_id,order_id,installment_no,amount,due_date")
                     .eq("plan_id", planRow.id)
-                    .order("due_date", { ascending: true });
+                    .order("due_date", { ascending: true }));
+            if (instDataError) throw instDataError;
                 installmentRows = (instData ?? []) as PaymentPlanInstallmentRow[];
             }
-            const { data: jobRow } = await supabase
+            const { data: jobRow, error: jobRowError } = await scope.read(supabase
                 .from("installation_jobs")
                 .select("id,status,assigned_staff_id,is_internal_installation")
                 .eq("order_id", id)
-                .maybeSingle();
+                .maybeSingle());
+            if (jobRowError) throw jobRowError;
             
             setOrder(o);
             setItems(i ?? []);
@@ -507,11 +518,11 @@ export default function OrderDetail() {
             if (i && i.length > 0) {
                 const photosMap: Record<string, CatalogCodePhoto[]> = {};
                 for (const item of i) {
-                    const { data: photos } = await supabase
+                    const { data: photos } = await scope.read(supabase
                         .from("catalog_code_photos")
                         .select("id, image_url, note, catalog_code")
                         .eq("order_item_id", item.id)
-                        .order("created_at", { ascending: true });
+                        .order("created_at", { ascending: true }));
                     if (photos && photos.length > 0) {
                         photosMap[item.id] = photos as CatalogCodePhoto[];
                     }
@@ -531,31 +542,21 @@ export default function OrderDetail() {
             setInstallationJob((jobRow ?? null) as InstallationJobRow | null);
             setAssignedTo(jobRow?.assigned_staff_id || o?.assigned_staff_id || o?.assigned_to || "");
 
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                const { data: prof } = await supabase.from("profiles").select("role").eq("user_id", user.id).maybeSingle();
-                if (prof) {
-                    setRole(normalizeRole(prof.role));
-                }
-
-                const { data: companyMember } = await supabase
-                    .from("company_members")
-                    .select("company_id")
-                    .eq("user_id", user.id)
-                    .maybeSingle();
-
-                if (companyMember?.company_id) {
-                    const { data: members } = await supabase
+            // The order's tenant also owns its installers, including demo/support views.
+            if (o.company_id) {
+                    const { data: members, error: membersError } = await scope.read(supabase
                         .from("company_members")
                         .select("user_id")
-                        .eq("company_id", companyMember.company_id);
+                        .eq("company_id", o.company_id));
+            if (membersError) throw membersError;
 
-                    const { data: employees } = await supabase
+                    const { data: employees, error: employeesError } = await scope.read(supabase
                         .from("employees")
                         .select("id,user_id,full_name,target_role,is_active")
-                        .eq("company_id", companyMember.company_id)
+                        .eq("company_id", o.company_id)
                         .eq("is_active", true)
-                        .order("full_name");
+                        .order("full_name"));
+            if (employeesError) throw employeesError;
 
                     const userIds = (members ?? []).map((m) => m.user_id).filter(Boolean);
                     const employeeUserIds = (employees ?? []).map((employee: any) => employee.user_id).filter(Boolean);
@@ -563,11 +564,12 @@ export default function OrderDetail() {
                     if (allUserIds.length > 0 || (employees ?? []).length > 0) {
                         let profiles: any[] = [];
                         if (allUserIds.length > 0) {
-                            const profileRes = await supabase
+                            const profileRes = await scope.read(supabase
                                 .from("profiles")
                                 .select("user_id, full_name, role")
                                 .in("user_id", allUserIds)
-                                .order("full_name");
+                                .order("full_name"));
+                            if (profileRes.error) throw profileRes.error;
                             profiles = profileRes.data ?? [];
                         }
 
@@ -614,14 +616,21 @@ export default function OrderDetail() {
                             if (resolvedStaff) setAssignedTo(resolvedStaff.id);
                         }
                     }
-                }
             }
-        } catch (e) { console.error(e); }
-        finally { setLoading(false); }
+        } catch (e) {
+            if (readScopeRef.current === scope && !scope.cancelled) {
+                console.error("OrderDetail load failed", e);
+                setLoadError(e instanceof Error ? e.message : String((e as { message?: string })?.message || "Sipariş yüklenemedi."));
+            }
+        } finally {
+            scope.dispose();
+            if (readScopeRef.current === scope && !scope.cancelled) setLoading(false);
+        }
     }
 
     useEffect(() => {
-        loadData();
+        void loadData();
+        return () => readScopeRef.current?.cancel();
         // `loadData` is intentionally excluded to prevent unnecessary reruns.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
@@ -702,7 +711,7 @@ export default function OrderDetail() {
         const opts = item.product_options ?? {};
         setPModelName(opts.model_name ?? opts.product_name ?? "");
         setPColorName(opts.color_name ?? "");
-        setPPile(opts.pile === "3" ? "3" : "2");
+        setPPile(opts.pile === "S" ? "S" : opts.pile === "3" ? "3" : "2");
         setPMechanism(opts.mechanism === "reducer" ? "reducer" : "standard");
         setPControlType(opts.control_type === "tape" ? "tape" : "corded");
         // Mevcut satır düzenlenirken kayıtlı ölçü/tutar korunur (yeni hesap kuralı uygulanmaz)
@@ -1167,10 +1176,12 @@ export default function OrderDetail() {
             // (montaj işi henüz yoksa sorun değil — "Montaja Hazır" yapılırken montajcı taşınır)
             // is_internal_installation:false — daha önce "Firma Kendisi" seçilmişse, gerçek bir
             // montajcıya atama yapıldığında bu işareti temizler (bkz. handleAssignInternal).
-            await supabase.from("installation_jobs")
+            const { error: assignmentError } = await supabase.from("installation_jobs")
                 .update({ assigned_staff_id: orderAssignedStaffId, is_internal_installation: false })
-                .eq("order_id", id)
-                .then(() => {}, () => {});
+                .eq("order_id", id);
+            if (assignmentError) {
+                alert(`Sipariş ataması kaydedildi fakat montaj işi güncellenemedi: ${assignmentError.message}`);
+            }
 
             await loadData();
         } finally {
@@ -1441,9 +1452,20 @@ export default function OrderDetail() {
     }
 
     if (loading) return <div className="p-10 text-center font-bold">Yükleniyor...</div>;
+    if (loadError) return (
+        <div className="p-10 text-center" role="alert">
+            <p className="font-bold">Sipariş yüklenemedi</p>
+            <p className="mt-2">{loadError}</p>
+            <button type="button" className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-white" onClick={() => void loadData()}>Yeniden Dene</button>
+            <button type="button" className="ml-3 px-4 py-2" onClick={() => nav(-1)}>Geri Dön</button>
+        </div>
+    );
     if (!order) return <div className="p-10 ">Sipariş bulunamadı.</div>;
 
-    const salesTotal = items.reduce((s, x) => s + safeNumber(x.line_total), 0);
+    const itemSalesTotal = items.reduce((s, x) => s + safeNumber(x.line_total), 0);
+    // Eski/yarım taşınmış kayıtlarda order_items boş olsa bile orders.total_amount
+    // finansal başlıktaki kayıtlı toplamdır. Kullanıcıya yanlışlıkla ₺0 göstermeyelim.
+    const salesTotal = items.length > 0 ? itemSalesTotal : safeNumber(order.total_amount);
     const purchaseTotal = items.reduce((s, x) => s + safeNumber(x.supplier_total_cost), 0);
     const paid = Number(order.paid_amount ?? order.deposit_amount ?? 0);
     const remaining = Math.max(salesTotal - paid, 0);
@@ -1625,7 +1647,7 @@ export default function OrderDetail() {
                             <span className="px-3 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-[10px] font-black tracking-widest uppercase">
                                 {order.status === 'draft' ? 'TEKLİF / ÖLÇÜ' : 'SİPARİŞ'}
                             </span>
-                            <span className="text-xs text-slate-400 font-bold">#{order.id.slice(0,8)}</span>
+                            <span className="text-xs text-slate-400 font-bold">Sipariş No: #{order.id.slice(0,8).toUpperCase()}</span>
                         </div>
                         <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white uppercase tracking-tighter">
                             {order.customers?.name || "İsimsiz Müşteri"}
@@ -1763,12 +1785,12 @@ export default function OrderDetail() {
                             </div>
                             <button
                                 type="button"
-                                onClick={handleMarkInstallationReady}
-                                disabled={saving || Boolean(installationJob)}
+                                onClick={() => installationJob ? nav("/installations") : void handleMarkInstallationReady()}
+                                disabled={saving}
                                 className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 text-sm font-black text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                             >
                                 <PackageCheck className="h-5 w-5" />
-                                {installationJob ? "Montaj Takibinde" : "Montaja Hazır"}
+                                {installationJob ? "Montaj Takibine Git" : "Montaja Hazır"}
                             </button>
                         </div>
 
@@ -1795,7 +1817,7 @@ export default function OrderDetail() {
 
                 {showCompletionConfirm && installationJob && (
                     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-sm w-full p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                             <div className="flex justify-center mb-4">
                                 <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
                                     <CheckCircle2 className="h-8 w-8 text-emerald-600" />
@@ -2021,6 +2043,13 @@ export default function OrderDetail() {
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                                 <select value={pType} onChange={e => setPType(e.target.value as ProductType)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold">
                                     <option value="plicell">Plicell</option>
+                                    <option value="rustik">Rustik</option>
+                                    <option value="dekoratif_ray">Dekoratif Ray</option>
+                                    <option value="kruvaze">Kruvaze Perde</option>
+                                    <option value="katlamali_mekanizma">Katlamalı Mekanizma</option>
+                                    <option value="ip_perde">İp Perde</option>
+                                    <option value="aksesuar">Aksesuar</option>
+
                                     <option value="stor">Stor</option>
                                     <option value="zebra">Zebra</option>
                                     <option value="tul">Tül</option>
@@ -2051,6 +2080,22 @@ export default function OrderDetail() {
                                 <input placeholder="Renk / kod" value={pColorName} onChange={e => setPColorName(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                                 <input placeholder="Ürün notu" value={pNote} onChange={e => setPNote(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                             </div>
+                            {(pType === "tul" || pType === "fon" || pType === "kruvaze") && (
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">Pile Tipi</span>
+                                        <select
+                                            value={pPile}
+                                            onChange={e => setPPile(e.target.value as "2" | "3" | "S")}
+                                            className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold"
+                                        >
+                                            <option value="2">1'e 2</option>
+                                            <option value="3">1'e 3</option>
+                                            <option value="S">S pile (1'e 3 perde)</option>
+                                        </select>
+                                    </label>
+                                </div>
+                            )}
                             <div className="mt-3">
                                 <div className="flex items-center gap-3">
                                     <button
@@ -2137,7 +2182,7 @@ export default function OrderDetail() {
                                     {items.length === 0 ? (
                                         <tr>
                                             <td colSpan={itemTableColSpan} className="px-6 py-10 text-center text-sm font-bold text-slate-400">
-                                                Henüz ürün satırı eklenmedi.
+                                                Ürün satırı bulunamadı. Kayıtlı sipariş toplamı üst bölümde gösteriliyor.
                                             </td>
                                         </tr>
                                     ) : items.map(it => {
@@ -2245,15 +2290,15 @@ export default function OrderDetail() {
                                                             <p className="mb-2 text-xs font-bold text-slate-600 dark:text-slate-400">Fotoğraflar</p>
                                                             <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8">
                                                                 {rowPhotos.map(photo => (
-                                                                    <a
+                                                                    <SecureLink
                                                                         key={photo.id}
                                                                         href={photo.image_url}
                                                                         target="_blank"
                                                                         rel="noreferrer"
                                                                         className="aspect-square rounded-lg border border-slate-300 overflow-hidden hover:border-primary-500 dark:border-slate-600"
                                                                     >
-                                                                        <img src={photo.image_url} alt="Saha fotoğrafı" className="h-full w-full object-cover" />
-                                                                    </a>
+                                                                        <SecureImage src={photo.image_url} alt="Saha fotoğrafı" className="h-full w-full object-cover" />
+                                                                    </SecureLink>
                                                                 ))}
                                                             </div>
                                                         </div>
@@ -2285,7 +2330,7 @@ export default function OrderDetail() {
                                     return (
                                         <div key={preview.id} className="rounded-2xl border border-slate-100 dark:border-slate-800 overflow-hidden">
                                             {preview.preview_image_url ? (
-                                                <img src={preview.preview_image_url} alt="Önizleme Görseli" className="h-48 w-full object-cover" />
+                                                <SecureImage src={preview.preview_image_url} alt="Önizleme Görseli" className="h-48 w-full object-cover" />
                                             ) : null}
                                             <div className="p-4 text-sm">
                                                 <div className="font-black text-slate-900 dark:text-white">
@@ -2310,9 +2355,9 @@ export default function OrderDetail() {
                             </h2>
                             <div className="grid grid-cols-2 gap-3">
                                 {orderPhotoUrls.map((url) => (
-                                    <a key={url} href={url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-2xl border border-slate-100 dark:border-slate-800">
-                                        <img src={url} alt="Ölçü fotoğrafı" className="h-32 w-full object-cover" />
-                                    </a>
+                                    <SecureLink key={url} href={url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-2xl border border-slate-100 dark:border-slate-800">
+                                        <SecureImage src={url} alt="Ölçü fotoğrafı" className="h-32 w-full object-cover" />
+                                    </SecureLink>
                                 ))}
                             </div>
                         </div>

@@ -4,6 +4,7 @@ import type { User } from "@supabase/supabase-js";
 import { supabase, setAppReadOnlyMode } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { isTrialExpired } from "../utils/trialLicense";
+import { clearStorageUrlCache } from "../utils/storageUrl";
 
 type CompanyState = {
     id: string;
@@ -109,6 +110,37 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * Geçici ağ/sunucu hatalarında (zaman aşımı, 5xx, kopan bağlantı) sorguyu bir kez
+ * daha dener.
+ *
+ * Kök neden: profil ve firma üyeliği sorguları TEK denemeydi; mobilde ya da zayıf
+ * bağlantıda dönen geçici bir hata doğrudan `unauthorized` durumuna düşürüyordu ve
+ * kullanıcı, üyeliği gayet yerinde olduğu hâlde "Yetki bulunamadı" ekranında
+ * kalıyordu. Yeniden deneme YALNIZCA hata durumunda yapılır; "sonuç boş" (gerçekten
+ * üyelik yok) durumunda tekrar denenmez — güvenlik kararı fail-closed kalır.
+ */
+async function retryOnError<T extends { error: unknown }>(
+    run: () => PromiseLike<T>,
+    attempts = 2,
+    delayMs = 600,
+): Promise<T> {
+    let last: T | undefined;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+            const result = await run();
+            if (!result.error) return result;
+            last = result;
+        } catch (error) {
+            if (attempt === attempts - 1) throw error;
+        }
+        if (attempt < attempts - 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+    }
+    return last as T;
+}
+
 function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Promise<T> {
     return new Promise((resolve, reject) => {
         const timer = window.setTimeout(() => reject(new Error(`${label} zaman asimina ugradi.`)), ms);
@@ -155,14 +187,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
 
             if (!sessionUser) {
+                // Oturum yoksa imzali Storage adreslerini de birak (bir sonraki
+                // kullaniciya onceki firmanin adresleri sizmasin).
+                clearStorageUrlCache();
                 hasLoadedOnce.current = false;
                 setStatus("unauthenticated");
                 return;
             }
 
-            const { data: rpcProfile, error: rpcProfileError } = await withTimeout(
-                supabase.rpc("get_current_auth_context"),
-                "Yetki kontrolu",
+            const { data: rpcProfile, error: rpcProfileError } = await retryOnError(() =>
+                withTimeout(supabase.rpc("get_current_auth_context"), "Yetki kontrolu"),
             );
 
         let profile = Array.isArray(rpcProfile) ? rpcProfile[0] : rpcProfile;
@@ -249,15 +283,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-            const { data: member, error: memberError } = await withTimeout(
-                supabase
-                    .from("company_members")
-                    .select("company_id,role,is_active,companies(id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url)")
-                    .eq("user_id", sessionUser.id)
-                    .order("created_at", { ascending: true })
-                    .limit(1)
-                    .maybeSingle(),
-                "Firma uyeligi kontrolu",
+            const { data: member, error: memberError } = await retryOnError(() =>
+                withTimeout(
+                    supabase
+                        .from("company_members")
+                        .select("company_id,role,is_active,companies(id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url)")
+                        .eq("user_id", sessionUser.id)
+                        .order("created_at", { ascending: true })
+                        .limit(1)
+                        .maybeSingle(),
+                    "Firma uyeligi kontrolu",
+                ),
             );
 
         if (memberError || !member?.company_id) {
@@ -387,6 +423,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") return;
             // Yalnızca SIGNED_IN, SIGNED_OUT, USER_UPDATED eventlerinde yenile.
             if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+            if (event === "SIGNED_OUT" || event === "SIGNED_IN") clearStorageUrlCache();
             setIsPasswordRecovery(false);
             window.setTimeout(() => {
                 if (alive) void loadAuth();

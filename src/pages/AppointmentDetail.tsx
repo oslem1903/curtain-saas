@@ -22,6 +22,7 @@ import {
     Trash2,
     XCircle,
 } from "lucide-react";
+import { toLocalDateISO } from "../utils/date";
 
 type AppointmentRow = {
     id: string;
@@ -98,7 +99,7 @@ export default function AppointmentDetail() {
 
             if (appointment.start_at) {
                 const dt = new Date(appointment.start_at);
-                setEditDate(dt.toISOString().slice(0, 10));
+                setEditDate(toLocalDateISO(dt));
                 setEditTime(dt.toTimeString().slice(0, 5));
             }
 

@@ -1,3 +1,4 @@
+import { requestText } from "../utils/requestText";
 import { useEffect, useState } from "react";
 import { Plus, Package, AlertCircle, CheckCircle2 } from "lucide-react";
 import { format } from "date-fns";
@@ -99,7 +100,7 @@ export default function SuperAdminVersioning() {
     }
 
     async function rollbackRelease(releaseId: string) {
-        const reason = prompt("Geri alma nedeni:");
+        const reason = await requestText("Geri alma nedeni:");
         if (!reason) return;
 
         try {

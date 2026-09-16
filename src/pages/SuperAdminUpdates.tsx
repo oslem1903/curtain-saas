@@ -31,6 +31,8 @@ type AppUpdate = {
 export default function SuperAdminUpdates() {
     const [updates, setUpdates] = useState<AppUpdate[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+    const [saving, setSaving] = useState(false);
     const [showNewModal, setShowNewModal] = useState(false);
 
     const [form, setForm] = useState<Partial<AppUpdate>>({
@@ -52,6 +54,7 @@ export default function SuperAdminUpdates() {
 
     async function loadUpdates() {
         setLoading(true);
+        setError("");
         try {
             const { data, error } = await supabase
                 .from('app_updates')
@@ -59,8 +62,9 @@ export default function SuperAdminUpdates() {
                 .order('created_at', { ascending: false });
             if (error) throw error;
             setUpdates((data ?? []) as AppUpdate[]);
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
+            setError(e?.message || "Güncellemeler yüklenemedi. Supabase güncelleme tablolarını çalıştırın.");
         } finally {
             setLoading(false);
         }
@@ -69,6 +73,12 @@ export default function SuperAdminUpdates() {
 
 
     async function handleSave() {
+        if (!String(form.version || "").trim() || !String(form.title || "").trim()) {
+            setError("Versiyon ve başlık zorunludur.");
+            return;
+        }
+        setSaving(true);
+        setError("");
         try {
             const isUpdate = !!form.id;
             const payload = { ...form };
@@ -115,14 +125,17 @@ export default function SuperAdminUpdates() {
 
                 if (notifications.length > 0) {
                     const { error: notificationError } = await supabase.from('notifications').insert(notifications);
-                    if (notificationError) throw notificationError;
+                    if (notificationError) console.warn("Bildirimler oluşturulamadı", notificationError);
                 }
             }
 
             setShowNewModal(false);
             loadUpdates();
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
+            setError(e?.message || "Güncelleme kaydedilemedi.");
+        } finally {
+            setSaving(false);
         }
     }
 
@@ -166,6 +179,8 @@ export default function SuperAdminUpdates() {
             </div>
 
             <div className="grid grid-cols-1 gap-4">
+                {error ? <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
+                {!error && updates.length === 0 ? <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">Henüz güncelleme yayınlanmadı. Yeni Güncelleme ile ilk duyuruyu oluşturabilirsiniz.</div> : null}
                 {updates.map((up) => (
                     <div 
                         key={up.id}
@@ -220,7 +235,7 @@ export default function SuperAdminUpdates() {
             {/* Modal placeholder */}
             {showNewModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800">
+                    <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-between items-center">
                             <h2 className="text-xl font-black text-slate-900 dark:text-white">Yeni Güncelleme / Duyuru</h2>
                             <button onClick={() => setShowNewModal(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400"><Archive size={20}/></button>
@@ -256,7 +271,7 @@ export default function SuperAdminUpdates() {
                         </div>
                         <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t flex justify-end gap-3">
                             <button onClick={()=>setShowNewModal(false)} className="px-6 py-2 text-sm font-bold text-slate-500">İptal</button>
-                            <button onClick={handleSave} className="px-8 py-2 bg-blue-600 text-white rounded-xl font-bold">Kaydet ve Yayınla</button>
+                            <button onClick={handleSave} disabled={saving} className="px-8 py-2 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-60">{saving ? "Kaydediliyor..." : "Kaydet ve Yayınla"}</button>
                         </div>
                     </div>
                 </div>

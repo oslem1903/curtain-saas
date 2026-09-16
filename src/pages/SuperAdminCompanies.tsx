@@ -1,6 +1,7 @@
+import { requestText } from "../utils/requestText";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, CheckCircle2, Eye, LogIn, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, Users } from "lucide-react";
+import { Building2, CheckCircle2, Eye, LogIn, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, X } from "lucide-react";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 
@@ -61,6 +62,7 @@ type DeviceLimitRequest = {
 
 const planLabels: Record<string, string> = {
     starter: "Başlangıç",
+    solo: "Solo Perdeci",
     pro: "Profesyonel",
     enterprise: "Kurumsal",
 };
@@ -72,6 +74,7 @@ const moduleLabels: Record<string, string> = {
     suppliers: "Tedarikçi",
     installation: "Montaj",
     accounting: "Muhasebe",
+    collections: "Tahsilatlar",
     staff: "Personel",
     vehicles: "Araç Takibi",
     commissions: "Prim Sistemi",
@@ -85,7 +88,7 @@ const moduleLabels: Record<string, string> = {
     branches: "Şubeler",
 };
 
-const editableModules = ["admin", "measurements", "orders", "suppliers", "installation", "accounting", "staff", "vehicles", "commissions", "warehouse", "catalogs", "reports", "expenses", "profit", "customers", "appointments", "branches"];
+const editableModules = ["admin", "measurements", "orders", "suppliers", "installation", "accounting", "collections", "staff", "vehicles", "commissions", "warehouse", "catalogs", "reports", "expenses", "profit", "customers", "appointments", "branches"];
 
 // Firma bazli coklu-rol capability'si. super_admin BURADA ASLA yer almaz --
 // bu, o firmaya lisanslanan tenant rollerinin listesidir, gercek kimlik degil.
@@ -114,9 +117,6 @@ export default function SuperAdminCompanies() {
     const nav = useNavigate();
     const { effectiveRole, setViewingRoleAndUser } = useRole();
     const [pendingImpersonationRedirect, setPendingImpersonationRedirect] = useState(false);
-    // openDemo() (Demo İzle / İşlem Modu) için "Firma Olarak Giriş" ile AYNI sorunun aynı çözümü:
-    // effectiveRole gerçekten (RoleContext state'i) commit edilene kadar nav() ERTELENİR — bkz.
-    // aşağıdaki effect ve impersonation'ın onSuccess'indeki aynı desen/yorum.
     const [pendingDemoNav, setPendingDemoNav] = useState<{ role: "admin" | "accountant" | "installer"; target: string } | null>(null);
     const [companies, setCompanies] = useState<CompanyStats[]>([]);
     const [loading, setLoading] = useState(true);
@@ -128,14 +128,32 @@ export default function SuperAdminCompanies() {
     const [deviceLimitInputs, setDeviceLimitInputs] = useState<Record<string, string>>({});
     const [impersonationModal, setImpersonationModal] = useState<{ isOpen: boolean; companyId: string; companyName: string }>({ isOpen: false, companyId: "", companyName: "" });
 
+    // Modals
+    const [addModalOpen, setAddModalOpen] = useState(false);
+    const [newCompanyForm, setNewCompanyForm] = useState({
+        name: "",
+        package_code: "solo",
+        plan_status: "trial",
+        trial_days: 30,
+        max_devices: 3,
+        read_only: false,
+    });
+
+    const [editingCompany, setEditingCompany] = useState<CompanyStats | null>(null);
+    const [editCompanyForm, setEditCompanyForm] = useState({
+        name: "",
+        package_code: "solo",
+        plan_status: "trial",
+        trial_ends_at: "",
+        max_devices: 3,
+        read_only: false,
+        is_active: true,
+    });
+
     useEffect(() => {
         loadCompanies();
     }, []);
 
-    // Impersonation sonrası dashboard'a yönlendirme, effectiveRole'ün "admin" olarak
-    // gerçekten commit edildiği render'dan SONRA (React'in effect sırası garantisiyle)
-    // tetiklenir — setViewingRoleAndUser + nav'ın aynı senkron turda "muhtemelen" aynı
-    // batch'e girmesine güvenmek yerine, deterministik bir sıra sağlar.
     useEffect(() => {
         if (pendingImpersonationRedirect && effectiveRole === "admin") {
             setPendingImpersonationRedirect(false);
@@ -217,6 +235,130 @@ export default function SuperAdminCompanies() {
             await loadCompanies();
         } catch (e: any) {
             alert(e?.message || "Firma güncellenemedi.");
+        } finally {
+            setSavingId(null);
+        }
+    }
+
+    async function handleCreateCompany(e: React.FormEvent) {
+        e.preventDefault();
+        if (!newCompanyForm.name.trim()) {
+            alert("Lütfen müşteri / firma adını girin.");
+            return;
+        }
+
+        setSavingId("new");
+        try {
+            const trialEndsAt = new Date();
+            trialEndsAt.setDate(trialEndsAt.getDate() + Number(newCompanyForm.trial_days || 30));
+
+            const { error } = await supabase.from("companies").insert([{
+                name: newCompanyForm.name.trim(),
+                subscription_plan: newCompanyForm.package_code === "solo" ? "starter" : newCompanyForm.package_code,
+                package_code: newCompanyForm.package_code,
+                plan_status: newCompanyForm.plan_status,
+                is_active: newCompanyForm.plan_status !== "suspended",
+                read_only: newCompanyForm.read_only,
+                trial_ends_at: trialEndsAt.toISOString(),
+                max_devices: Number(newCompanyForm.max_devices || 3),
+                enabled_modules: modulesForPlan(newCompanyForm.package_code),
+                enabled_roles: ["admin"],
+            }]);
+
+            if (error) throw error;
+
+            alert(`"${newCompanyForm.name}" müşterisi başarıyla eklendi!`);
+            setAddModalOpen(false);
+            setNewCompanyForm({
+                name: "",
+                package_code: "solo",
+                plan_status: "trial",
+                trial_days: 30,
+                max_devices: 3,
+                read_only: false,
+            });
+            await loadCompanies();
+        } catch (e: any) {
+            alert(e?.message || "Firma eklenirken hata oluştu.");
+        } finally {
+            setSavingId(null);
+        }
+    }
+
+    function openEditModal(company: CompanyStats) {
+        setEditingCompany(company);
+        setEditCompanyForm({
+            name: company.name,
+            package_code: company.package_code || company.subscription_plan,
+            plan_status: company.plan_status,
+            trial_ends_at: company.trial_end ? company.trial_end.slice(0, 10) : "",
+            max_devices: company.max_devices,
+            read_only: company.read_only,
+            is_active: company.is_active,
+        });
+    }
+
+    async function handleSaveEditCompany(e: React.FormEvent) {
+        e.preventDefault();
+        if (!editingCompany) return;
+
+        const companyName = String(editCompanyForm.name ?? "").trim();
+        if (!companyName) {
+            alert("Müşteri / Firma adı boş bırakılamaz.");
+            return;
+        }
+        setSavingId(editingCompany.id);
+        try {
+            const patch: Record<string, any> = {
+                name: String(editCompanyForm.name ?? "").trim(),
+                package_code: editCompanyForm.package_code,
+                subscription_plan: editCompanyForm.package_code === "solo" ? "starter" : editCompanyForm.package_code,
+                plan_status: editCompanyForm.plan_status,
+                max_devices: Number(editCompanyForm.max_devices),
+                read_only: editCompanyForm.read_only,
+                is_active: editCompanyForm.is_active,
+            };
+
+            if (editCompanyForm.trial_ends_at) {
+                patch.trial_ends_at = new Date(editCompanyForm.trial_ends_at).toISOString();
+            }
+
+            const { error } = await supabase.from("companies").update(patch).eq("id", editingCompany.id);
+            if (error) throw error;
+
+            alert(`"${editCompanyForm.name}" firmasının bilgileri güncellendi.`);
+            setEditingCompany(null);
+            await loadCompanies();
+        } catch (e: any) {
+            alert(e?.message || "Firma güncellenirken hata oluştu.");
+        } finally {
+            setSavingId(null);
+        }
+    }
+
+    async function deleteCompany(company: CompanyStats) {
+        const confirmName = await requestText(
+            `"${company.name}" firmasını ve veritabanı kurallarına göre bağlı kayıtları KALICI OLARAK silmek üzeresiniz!\n\nBu işlem GERİ ALINAMAZ.\n\nSilmeyi onaylamak için firma adını ("${company.name}") yazın:`,
+        );
+
+        if (confirmName !== company.name) {
+            if (confirmName !== null) alert("Firma adı eşleşmedi, silme işlemi iptal edildi.");
+            return;
+        }
+
+        setSavingId(company.id);
+        try {
+
+            const { data: deletedId, error } = await supabase.rpc("super_admin_delete_company", {
+                p_company_id: company.id, p_confirm_name: confirmName,
+            });
+            if (!error && deletedId !== company.id) throw new Error("Firma silme sonucu doğrulanamadı.");
+            if (error) throw error;
+
+            alert(`"${company.name}" firma kaydı kalıcı olarak silindi. Dilerseniz daha sonra tekrar yeni bir müşteri olarak ekleyebilirsiniz.`);
+            await loadCompanies();
+        } catch (e: any) {
+            alert(e?.message || "Firma silinirken hata oluştu.");
         } finally {
             setSavingId(null);
         }
@@ -370,14 +512,6 @@ export default function SuperAdminCompanies() {
     }
 
     function openDemo(company: CompanyStats, role: "admin" | "accountant" | "installer", readOnly = true) {
-        // ESKİ HALİ (localStorage.setItem("demo_viewing_role", ...) + doğrudan nav()) hiçbir yerde
-        // okunmayan bir anahtara yazıyordu — effectiveRole (RoleContext state'i) "super_admin"de
-        // kalmaya devam ediyor, bu yüzden hedef sayfadaki RoleGate girişi reddedip
-        // /super-admin/companies'e geri yönlendiriyordu (2026-09-09 QA oturumunda network/route
-        // trace'iyle doğrulandı — Demo İzle/İşlem Modu SESSİZCE çalışmıyordu). Çözüm, aşağıdaki
-        // impersonation (Firma Olarak Giriş) onSuccess'inde ZATEN kullanılan AYNI desen:
-        // setViewingRoleAndUser ile React state'i gerçekten güncelle, nav()'ı effectiveRole bunu
-        // yansıtana kadar ERTELE (bkz. yukarıdaki pendingDemoNav effect'i).
         setDemoTenantContext(company.id, readOnly);
         setViewingRoleAndUser(role, null);
         const target = role === "accountant" ? "/accounting" : role === "installer" ? "/route/today" : "/dashboard";
@@ -395,121 +529,174 @@ export default function SuperAdminCompanies() {
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
                     <h1 className="text-3xl font-black text-slate-900 dark:text-white">Müşteri Firmalar</h1>
-                    <p className="mt-1 text-slate-500">Lisans, paket, deneme süresi ve read-only demo yönetimi.</p>
+                    <p className="mt-1 text-slate-500">Müşteri ekleme, düzenleme, lisans ve kalıcı silme yönetimi.</p>
                 </div>
 
-                <div className="relative w-full sm:w-72">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input
-                        type="text"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Firma ara..."
-                        className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 outline-none transition focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-800"
-                    />
+                <div className="flex flex-wrap items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => setAddModalOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-700 active:scale-95"
+                    >
+                        <Plus size={18} />
+                        Yeni Müşteri Ekle
+                    </button>
+
+                    <div className="relative w-full sm:w-64">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <input
+                            type="text"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Müşteri / Firma ara..."
+                            className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 outline-none transition focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-800"
+                        />
+                    </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4">
                 {filtered.map((company) => (
-                    <div key={company.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-                            <div className="flex min-w-0 items-start gap-4">
-                                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-xl font-black text-blue-600 dark:bg-blue-900/20 dark:text-blue-300">
+                    <div key={company.id} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                        {/* Card Header */}
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4 dark:border-slate-800">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-xl font-black text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
                                     {company.name.charAt(0).toLocaleUpperCase("tr-TR")}
                                 </div>
                                 <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <h3 className="truncate text-xl font-bold text-slate-900 dark:text-white">{company.name}</h3>
+                                        <h3 className="truncate text-xl font-black text-slate-900 dark:text-white">{company.name}</h3>
                                         <span className={cn(
-                                            "rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest",
-                                            company.plan_status === "active" ? "bg-emerald-100 text-emerald-700" :
-                                                company.plan_status === "trial" ? "bg-blue-100 text-blue-700" :
-                                                    company.plan_status === "expired" ? "bg-amber-100 text-amber-700" :
-                                                        "bg-red-100 text-red-700",
+                                            "rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest",
+                                            company.plan_status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" :
+                                                company.plan_status === "trial" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" :
+                                                    company.plan_status === "expired" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" :
+                                                        "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
                                         )}>
                                             {company.plan_status}
                                         </span>
-                                        {company.read_only ? <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-600">Read-only</span> : null}
+                                        {company.read_only ? <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-600 dark:bg-slate-800 dark:text-slate-300">Read-only</span> : null}
                                     </div>
-                                    <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-                                        <span className="flex items-center gap-1"><Building2 size={14} /> {planLabels[company.package_code] || planLabels[company.subscription_plan] || company.subscription_plan}</span>
-                                        <span className="flex items-center gap-1"><MonitorSmartphone size={14} /> {company.active_device_count}/{company.max_devices} cihaz</span>
-                                        <span className="flex items-center gap-1"><Users size={14} /> {company.user_count} kullanıcı</span>
-                                        <span>Destek: {company.open_tickets} açık</span>
-                                        <span>Son hata: {company.last_error_at ? format(new Date(company.last_error_at), "dd MMM", { locale: tr }) : "Yok"}</span>
-                                        <span>Deneme bitişi: {company.trial_end ? format(new Date(company.trial_end), "dd MMM yyyy", { locale: tr }) : "Süresiz"}</span>
+                                    <div className="mt-1 text-xs font-bold text-slate-500">
+                                        Paket: {planLabels[company.package_code] || planLabels[company.subscription_plan] || company.subscription_plan}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
-                                <select
-                                    value={company.plan_status}
+                            {/* Top Direct Action Buttons */}
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => openEditModal(company)}
+                                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition"
+                                >
+                                    <PencilLine size={15} />
+                                    Düzenle
+                                </button>
+                                <button
+                                    type="button"
                                     disabled={savingId === company.id}
-                                    onChange={(e) => updateCompany(company.id, {
-                                        plan_status: e.target.value,
-                                        is_active: e.target.value !== "suspended",
-                                        read_only: e.target.value === "expired",
-                                    })}
-                                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold dark:border-slate-700 dark:bg-slate-800"
+                                    onClick={() => deleteCompany(company)}
+                                    className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-600 hover:bg-red-100 disabled:opacity-50 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 transition"
                                 >
-                                    <option value="trial">Trial</option>
-                                    <option value="active">Active</option>
-                                    <option value="expired">Expired</option>
-                                    <option value="suspended">Suspended</option>
-                                </select>
-                                <select
-                                    value={company.package_code || company.subscription_plan}
-                                    disabled={savingId === company.id}
-                                    onChange={(e) => updatePlan(company, e.target.value)}
-                                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold dark:border-slate-700 dark:bg-slate-800"
-                                >
-                                    <option value="starter">Başlangıç</option>
-                                    <option value="solo">Solo Perdeci</option>
-                                    <option value="pro">Profesyonel</option>
-                                    <option value="enterprise">Kurumsal</option>
-                                </select>
-                                <button
-                                    type="button"
-                                    onClick={() => updateCompany(company.id, { read_only: !company.read_only })}
-                                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
-                                >
-                                    {company.read_only ? "Yazmayı Aç" : "Read-only"}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => toggleDevicePanel(company)}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
-                                >
-                                    <MonitorSmartphone size={16} />
-                                    Cihazlar
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => openDemo(company, "admin", true)}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white hover:bg-blue-700"
-                                >
-                                    <Eye size={16} />
-                                    Demo İzle
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => openDemo(company, "admin", false)}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
-                                >
-                                    <PencilLine size={16} />
-                                    İşlem Modu
+                                    <Trash2 size={15} />
+                                    Kalıcı Sil
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setImpersonationModal({ isOpen: true, companyId: company.id, companyName: company.name })}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700"
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700 shadow-sm transition"
                                 >
-                                    <LogIn size={16} />
+                                    <LogIn size={15} />
                                     Firma Olarak Giriş
                                 </button>
                             </div>
+                        </div>
+
+                        {/* Metric Badge Cards */}
+                        <div className="grid grid-cols-2 gap-3 py-4 sm:grid-cols-5 text-xs">
+                            <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                                <span className="text-slate-400 font-bold block mb-0.5">Cihaz</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.active_device_count} / {company.max_devices}</span>
+                            </div>
+                            <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                                <span className="text-slate-400 font-bold block mb-0.5">Kullanıcı</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.user_count} kişi</span>
+                            </div>
+                            <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                                <span className="text-slate-400 font-bold block mb-0.5">Açık Destek</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.open_tickets} adet</span>
+                            </div>
+                            <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                                <span className="text-slate-400 font-bold block mb-0.5">Son Hata</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.last_error_at ? format(new Date(company.last_error_at), "dd MMM", { locale: tr }) : "Yok"}</span>
+                            </div>
+                            <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40 col-span-2 sm:col-span-1">
+                                <span className="text-slate-400 font-bold block mb-0.5">Deneme Bitiş</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.trial_end ? format(new Date(company.trial_end), "dd MMM yyyy", { locale: tr }) : "Süresiz"}</span>
+                            </div>
+                        </div>
+
+                        {/* Secondary Controls Bar */}
+                        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                            <select
+                                value={company.plan_status}
+                                disabled={savingId === company.id}
+                                onChange={(e) => updateCompany(company.id, {
+                                    plan_status: e.target.value,
+                                    is_active: e.target.value !== "suspended",
+                                    read_only: e.target.value === "expired",
+                                })}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold dark:border-slate-700 dark:bg-slate-800"
+                            >
+                                <option value="trial">Trial</option>
+                                <option value="active">Active</option>
+                                <option value="expired">Expired</option>
+                                <option value="suspended">Suspended</option>
+                            </select>
+                            <select
+                                value={company.package_code || company.subscription_plan}
+                                disabled={savingId === company.id}
+                                onChange={(e) => updatePlan(company, e.target.value)}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold dark:border-slate-700 dark:bg-slate-800"
+                            >
+                                <option value="starter">Başlangıç</option>
+                                <option value="solo">Solo Perdeci</option>
+                                <option value="pro">Profesyonel</option>
+                                <option value="enterprise">Kurumsal</option>
+                            </select>
+                            <button
+                                type="button"
+                                onClick={() => updateCompany(company.id, { read_only: !company.read_only })}
+                                className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                            >
+                                {company.read_only ? "Yazmayı Aç" : "Read-only"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => toggleDevicePanel(company)}
+                                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                            >
+                                <MonitorSmartphone size={15} />
+                                Cihazlar
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => openDemo(company, "admin", true)}
+                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white hover:bg-blue-700"
+                            >
+                                <Eye size={15} />
+                                Demo İzle
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => openDemo(company, "admin", false)}
+                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+                            >
+                                <PencilLine size={15} />
+                                İşlem Modu
+                            </button>
                         </div>
                         <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
                             <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">Firma Modülleri</div>
@@ -705,6 +892,294 @@ export default function SuperAdminCompanies() {
                 ))}
             </div>
 
+            {/* Yeni Müşteri Ekle Modal */}
+            {addModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-4 dark:border-slate-800">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+                                    <Building2 size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-black text-slate-900 dark:text-white">Yeni Müşteri / Firma Ekle</h3>
+                                    <p className="text-xs text-slate-500">Sisteme yeni bir müşteri tanımı yapın.</p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setAddModalOpen(false)}
+                                className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleCreateCompany} className="mt-5 space-y-4">
+                            <div>
+                                <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                    Müşteri / Firma Adı *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={newCompanyForm.name}
+                                    onChange={(e) => setNewCompanyForm({ ...newCompanyForm, name: e.target.value })}
+                                    placeholder="Örn: Yılmaz Perde Dokuma Ltd."
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Paket
+                                    </label>
+                                    <select
+                                        value={newCompanyForm.package_code}
+                                        onChange={(e) => setNewCompanyForm({ ...newCompanyForm, package_code: e.target.value })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    >
+                                        <option value="solo">Solo Perdeci</option>
+                                        <option value="starter">Başlangıç</option>
+                                        <option value="pro">Profesyonel</option>
+                                        <option value="enterprise">Kurumsal</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Durum
+                                    </label>
+                                    <select
+                                        value={newCompanyForm.plan_status}
+                                        onChange={(e) => setNewCompanyForm({ ...newCompanyForm, plan_status: e.target.value })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    >
+                                        <option value="trial">Deneme (Trial)</option>
+                                        <option value="active">Aktif (Active)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Deneme Süresi (Gün)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={365}
+                                        value={newCompanyForm.trial_days}
+                                        onChange={(e) => setNewCompanyForm({ ...newCompanyForm, trial_days: Number(e.target.value) })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Cihaz Limiti
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={50}
+                                        value={newCompanyForm.max_devices}
+                                        onChange={(e) => setNewCompanyForm({ ...newCompanyForm, max_devices: Number(e.target.value) })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-2">
+                                <input
+                                    type="checkbox"
+                                    id="add_read_only"
+                                    checked={newCompanyForm.read_only}
+                                    onChange={(e) => setNewCompanyForm({ ...newCompanyForm, read_only: e.target.checked })}
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                />
+                                <label htmlFor="add_read_only" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                                    Salt Okunur (Yazma Korumalı / Read-Only Demo)
+                                </label>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setAddModalOpen(false)}
+                                    className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={savingId === "new"}
+                                    className="rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
+                                >
+                                    {savingId === "new" ? "Kaydediliyor..." : "Müşteriyi Oluştur"}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Müşteri Düzenle Modal */}
+            {editingCompany && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-4 dark:border-slate-800">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                                    <PencilLine size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-black text-slate-900 dark:text-white">Müşteri Bilgilerini Düzenle</h3>
+                                    <p className="text-xs text-slate-500">{editingCompany.name}</p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setEditingCompany(null)}
+                                className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveEditCompany} className="mt-5 space-y-4">
+                            <div>
+                                <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                    Müşteri / Firma Adı *
+                                </label>
+                                <input
+                                    id="edit_company_name"
+                                    name="company_name"
+                                    type="text"
+                                    required
+                                    autoComplete="organization"
+                                    autoFocus
+                                    value={editCompanyForm.name ?? ""}
+                                    onInput={(e) => {
+                                        const value = e.currentTarget.value;
+                                        setEditCompanyForm((prev) => ({ ...prev, name: value }));
+                                    }}
+                                    onChange={(e) => {
+                                        const value = e.currentTarget.value;
+                                        setEditCompanyForm((prev) => ({ ...prev, name: value }));
+                                    }}
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Paket
+                                    </label>
+                                    <select
+                                        value={editCompanyForm.package_code}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, package_code: e.target.value })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    >
+                                        <option value="solo">Solo Perdeci</option>
+                                        <option value="starter">Başlangıç</option>
+                                        <option value="pro">Profesyonel</option>
+                                        <option value="enterprise">Kurumsal</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Durum
+                                    </label>
+                                    <select
+                                        value={editCompanyForm.plan_status}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, plan_status: e.target.value })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    >
+                                        <option value="trial">Trial (Deneme)</option>
+                                        <option value="active">Active (Aktif)</option>
+                                        <option value="expired">Expired (Süresi Doldu)</option>
+                                        <option value="suspended">Suspended (Askıda)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Deneme / Lisans Bitiş Tarihi
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={editCompanyForm.trial_ends_at}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, trial_ends_at: e.target.value })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Cihaz Limiti
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={50}
+                                        value={editCompanyForm.max_devices}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, max_devices: Number(e.target.value) })}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-2 pt-2">
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="edit_read_only"
+                                        checked={editCompanyForm.read_only}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, read_only: e.target.checked })}
+                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <label htmlFor="edit_read_only" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                                        Salt Okunur (Read-Only Demo Modu)
+                                    </label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="edit_is_active"
+                                        checked={editCompanyForm.is_active}
+                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, is_active: e.target.checked })}
+                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <label htmlFor="edit_is_active" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                                        Firma Hesabı Aktif
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setEditingCompany(null)}
+                                    className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={savingId === editingCompany.id}
+                                    className="rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
+                                >
+                                    {savingId === editingCompany.id ? "Kaydediliyor..." : "Değişiklikleri Kaydet"}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
             {/* Impersonation Modal */}
             <ImpersonationModal
                 isOpen={impersonationModal.isOpen}
@@ -712,13 +1187,6 @@ export default function SuperAdminCompanies() {
                 companyId={impersonationModal.companyId}
                 companyName={impersonationModal.companyName}
                 onSuccess={() => {
-                    // impersonation_* state (banner, "Süper Admin'e Dön") ImpersonationModal
-                    // tarafından zaten yazıldı — dokunulmuyor. getEffectiveTenantContext()'in
-                    // fiilen okuduğu demo_company_id'yi aynı firma için set ediyoruz. Ayrıca
-                    // RoleGate'in effectiveRole'ü (RoleContext'in React state'i) super_admin'de
-                    // kalmaya devam ettiği için /dashboard'a girişi reddedip geri yönlendirebiliyordu —
-                    // nav() burada DOĞRUDAN çağrılmıyor; effectiveRole gerçekten "admin" olarak
-                    // commit edildiğinde aşağıdaki effect deterministik şekilde yönlendirir.
                     const readOnly = localStorage.getItem("impersonation_read_only") !== "false";
                     setDemoTenantContext(impersonationModal.companyId, readOnly);
                     setViewingRoleAndUser("admin", null);

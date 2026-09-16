@@ -72,13 +72,16 @@ export default function DeploymentWizard({ onClose }: DeploymentWizardProps) {
         try {
             const { data, error: fetchError } = await supabase
                 .from("companies")
-                .select("id, name, is_test_company, subscription_plan")
+                .select("id, name, subscription_plan")
                 .eq("is_active", true)
                 .order("name");
 
             if (fetchError) throw fetchError;
 
-            const allCompanies = data || [];
+            // Eski production şemalarında is_test_company kolonu bulunmayabilir.
+            // Temel firma listesi yine de yüklenebilmeli; bu durumda firmalar
+            // üretim firması kabul edilir.
+            const allCompanies = (data || []).map((c: any) => ({ ...c, is_test_company: Boolean(c.is_test_company) })) as CompanyInfo[];
 
             // Separate test and production companies
             const test = allCompanies.filter((c) => c.is_test_company);
@@ -132,9 +135,9 @@ export default function DeploymentWizard({ onClose }: DeploymentWizardProps) {
             case "release_notes":
                 return releaseNotes.trim().length > 0;
             case "test_companies":
-                return selectedTestCompanies.length > 0;
+                return true;
             case "early_adopters":
-                return selectedEarlyAdopters.length > 0 && selectedEarlyAdopters.length <= 5;
+                return selectedEarlyAdopters.length <= 5;
             case "error_threshold":
                 return errorThreshold > 0 && errorThreshold <= 100;
             case "rollback_settings":

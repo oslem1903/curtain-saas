@@ -554,7 +554,9 @@ export default function NewAppointment() {
                             message: `${title} — ${displayCustomerName || "Müşteri"}, ${dateLabel}`,
                             type: "info",
                         }]);
-                    } catch { }
+                    } catch {
+                        // Bildirim olusturulamadi; randevu kaydi yine de gecerlidir.
+                    }
                 }
             }
 

@@ -42,7 +42,7 @@ const REASON_CONTENT: Record<string, { title: string; text: string; icon: typeof
 };
 
 export default function Locked() {
-    const { lockReason, company, refreshAuth, status, user } = useAuth();
+    const { lockReason, company, refreshAuth, status } = useAuth();
     const [checking, setChecking] = useState(false);
     const [requesting, setRequesting] = useState(false);
     const [checkMessage, setCheckMessage] = useState("");

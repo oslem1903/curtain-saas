@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { Download, FileSpreadsheet, ImagePlus, Layers, Save, Trash2, Upload, ArrowLeft, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import SecureImage from "../components/SecureImage";
 
 type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "dikey_tul" | "dikey_stor" | "cam_balkon" | "diger";
 
@@ -780,7 +781,7 @@ export default function CatalogManagement() {
                             <div className="mt-1 font-semibold">{variantFile ? variantFile.name : variantForm.variant_image_url ? "Yeni gorsel sec veya mevcutla devam et" : "Varyant gorseli/dokusu"}</div>
                             <input type="file" accept="image/*" className="hidden" onChange={(e) => setVariantFile(e.target.files?.[0] ?? null)} />
                         </label>
-                        {variantForm.variant_image_url ? <img src={variantForm.variant_image_url} alt="" className="mt-3 h-24 w-full rounded-xl border border-slate-200 object-cover dark:border-slate-800" /> : null}
+                        {variantForm.variant_image_url ? <SecureImage src={variantForm.variant_image_url} alt="" className="mt-3 h-24 w-full rounded-xl border border-slate-200 object-cover dark:border-slate-800" /> : null}
                         <label className="mt-3 inline-flex items-center gap-2 text-sm font-medium">
                             <input type="checkbox" checked={variantForm.is_active} onChange={(e) => setVariantForm((p) => ({ ...p, is_active: e.target.checked }))} />
                             Aktif
@@ -822,7 +823,7 @@ export default function CatalogManagement() {
                                             {rowVariants.length === 0 ? <div className="col-span-full rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-800/50">Bu kod/model için renk/varyant yok.</div> : rowVariants.map((variant) => (
                                                 <div key={variant.id} className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
                                                     <div className="h-28 bg-slate-100 dark:bg-slate-800">
-                                                        {variantImage(variant) ? <img src={variantImage(variant)} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImagePlus className="h-7 w-7 text-slate-400" /></div>}
+                                                        {variantImage(variant) ? <SecureImage src={variantImage(variant)} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImagePlus className="h-7 w-7 text-slate-400" /></div>}
                                                     </div>
                                                     <div className="p-3 text-sm">
                                                         <div className="font-black">{variant.variant_code}</div>

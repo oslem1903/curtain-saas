@@ -16,6 +16,8 @@
 // dokunulmaz, yalnizca sonuclari (payments satirlari) okunur.
 // ============================================================================
 
+import { diffDaysLocal, toLocalDateISO } from "./date";
+
 export type PlanStatus = "active" | "cancelled";
 
 export type OrderPaymentPlan = {
@@ -64,7 +66,10 @@ export type PlanComputation = {
 };
 
 export function todayDateOnly(d: Date = new Date()): string {
-  return d.toISOString().slice(0, 10);
+  // YEREL tarih. toISOString() UTC dondurur; TR'de (UTC+3) gece 00:00-03:00
+  // arasi bir onceki gunu verir ve taksitler yanlis kovaya (geciken/bugun)
+  // duserdi.
+  return toLocalDateISO(d);
 }
 
 /** customer_record_collection/customer_cancel_collection ile ayni, production'da
@@ -77,9 +82,7 @@ export function computeLiveNetPaid(payments: LedgerPayment[]): number {
 }
 
 export function daysBetween(fromStr: string, toStr: string): number {
-  const from = new Date(`${fromStr}T00:00:00`);
-  const to = new Date(`${toStr}T00:00:00`);
-  return Math.round((to.getTime() - from.getTime()) / 86400000);
+  return diffDaysLocal(fromStr, toStr);
 }
 
 /** Tek bir siparisin plani + taksitlerini, canli ledger'a gore hesaplar. */
@@ -175,12 +178,7 @@ export function buildInstallmentPlanFromDraft(
 export type DateBucketKey = "overdue" | "today" | "week" | "month" | "future";
 export type CollectionRowStatus = "overdue" | "today" | "upcoming" | "partial" | "undetermined";
 
-function toDateOnlyStrLocal(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
+const toDateOnlyStrLocal = toLocalDateISO;
 
 /** Bulunulan haftanin (Pazartesi-Pazar) son gunu — Pazar. */
 function endOfWeekSundayStr(todayStr: string): string {

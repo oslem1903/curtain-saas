@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source("./");
 
 @theme {
   --color-primary-50: #f0f9ff;
@@ -25,6 +25,9 @@
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  /* Android/iOS yatay cevirince metni kendiliginden buyutmesin */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -34,7 +37,10 @@ body {
   display: flex;
   place-items: start; /* changed from center to be more app-like */
   min-width: 320px;
+  /* 100vh mobil tarayicilarda adres cubugunu saymaz -> sayfa altta kesilir.
+     dvh gercek gorunur yuksekligi kullanir; destegi olmayanlar icin vh fallback. */
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
 }
 
@@ -157,8 +163,21 @@ main {
     max-width: 100% !important;
   }
 
+  /* Yatay kaydirilabilir seritler (sekme/cip barlari, genis tablo kapsayicilari)
+     mobilde KAYDIRILABILIR kalmali. Daha once burada `overflow-x: visible`
+     zorlanıyordu; html/body `overflow-x: clip` oldugu icin ekrandan tasan
+     sekmeler kirpiliyor ve parmakla ulasilamiyordu (orn. Tahsilatlar ekranindaki
+     Geciken/Bugun/Bu Hafta... sekmeleri). Kapsayici %100 genislikle sinirlandirilip
+     kendi ekseninde kaydirilir. */
   .overflow-x-auto {
-    overflow-x: visible !important;
+    max-width: 100%;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .overflow-x-auto::-webkit-scrollbar {
+    display: none;
   }
 
   table {
@@ -199,9 +218,41 @@ main {
     display: none;
   }
 
+  /* Mobilde thead gizlendigi icin hucre degerleri baslıksiz kalir.
+     <td data-label="Tutar"> yazilan hucrelerde baslik satir icinde gosterilir. */
+  table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: rgb(100 116 139);
+    margin-bottom: 0.15rem;
+  }
+
+  .dark table td[data-label]::before {
+    color: rgb(148 163 184);
+  }
+
+  /* Dokunma hedefi: mobilde satir ici aksiyonlar parmakla rahat secilebilsin */
+  table td button,
+  table td a {
+    min-height: 2.25rem;
+  }
+
   .dark table tr {
     border-color: rgb(30 41 59);
     background: rgb(15 23 42);
+  }
+}
+
+/* iOS'ta input'a odaklaninca sayfayi zorla buyutmesini engelle */
+@supports (-webkit-touch-callout: none) {
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]) {
+    font-size: max(16px, 1em);
   }
 }
 

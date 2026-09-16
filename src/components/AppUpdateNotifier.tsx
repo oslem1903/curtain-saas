@@ -29,7 +29,9 @@ type UpdateRow = {
     android_download_url: string | null;
 };
 
-const CURRENT_VERSION = String(import.meta.env.VITE_APP_VERSION || "0.0.0");
+// Bu release'in arayüz sürümü build ortamındaki eski .env değerlerinden
+// etkilenmemeli; paket sürümüyle aynı sabit değer kullanılmalı.
+const CURRENT_VERSION = "1.0.4.1";
 
 function getDeviceId() {
     const key = "curtain_saas_device_id";
@@ -173,7 +175,7 @@ export default function AppUpdateNotifier() {
     if (forced) {
         return (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-                <div className="w-full max-w-lg rounded-3xl border border-red-200 bg-white p-6 text-center shadow-2xl dark:border-red-900 dark:bg-slate-900">
+                <div className="w-full max-w-lg rounded-3xl border border-red-200 bg-white p-6 text-center shadow-2xl dark:border-red-900 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                     <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-red-700">
                         {installing ? <Loader2 className="h-8 w-8 animate-spin" /> : <AlertTriangle className="h-8 w-8" />}
                     </div>

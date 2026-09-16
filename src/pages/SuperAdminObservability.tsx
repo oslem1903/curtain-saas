@@ -25,6 +25,8 @@ type ObservabilityData = {
 
 type RecentUser = {
   user_id: string;
+  email?: string | null;
+  full_name?: string | null;
   company_id: string | null;
   last_activity_at: string;
   activity_type: string;
@@ -62,13 +64,33 @@ export default function SuperAdminObservability() {
         .order("created_at", { ascending: false })
         .limit(10);
       if (recentErr) throw recentErr;
+
+      const userIds = Array.from(new Set((recentData || []).map((r: any) => r.user_id).filter(Boolean)));
+      const profileMap = new Map<string, { email: string | null; full_name: string | null }>();
+
+      if (userIds.length > 0) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("user_id, email, full_name")
+          .in("user_id", userIds);
+
+        (profileData || []).forEach((p: any) => {
+          profileMap.set(p.user_id, { email: p.email, full_name: p.full_name });
+        });
+      }
+
       setRecentUsers(
-        (recentData || []).map((r: any) => ({
-          user_id: r.user_id,
-          company_id: r.company_id,
-          last_activity_at: r.created_at,
-          activity_type: r.activity_type,
-        }))
+        (recentData || []).map((r: any) => {
+          const profile = profileMap.get(r.user_id);
+          return {
+            user_id: r.user_id,
+            email: profile?.email || null,
+            full_name: profile?.full_name || null,
+            company_id: r.company_id,
+            last_activity_at: r.created_at,
+            activity_type: r.activity_type,
+          };
+        })
       );
 
       // Get trials ending soon
@@ -181,7 +203,7 @@ export default function SuperAdminObservability() {
               value={data.active_users_now}
               icon={<Zap className="w-6 h-6" />}
               color="orange"
-              badge={`${Math.round((data.active_users_now / Math.max(1, data.total_users)) * 100)}%`}
+              badge={`${Number.isFinite(Number(data.active_users_now)) && Number(data.total_users) > 0 ? Math.round((Number(data.active_users_now) / Number(data.total_users)) * 100) : 0}%`}
             />
             {/* Errors 24h */}
             <KPICard
@@ -313,16 +335,25 @@ export default function SuperAdminObservability() {
               <table className="w-full text-sm">
                 <thead className="text-xs font-bold text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-700">
                   <tr>
-                    <th className="px-4 py-2 text-left">User ID</th>
+                    <th className="px-4 py-2 text-left">Kullanıcı / E-posta</th>
                     <th className="px-4 py-2 text-left">Aktivite Türü</th>
                     <th className="px-4 py-2 text-left">Zaman</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                  {recentUsers.map((u) => (
-                    <tr key={u.user_id}>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
-                        {u.user_id.slice(0, 8)}...
+                  {recentUsers.map((u, idx) => (
+                    <tr key={u.user_id + idx}>
+                      <td className="px-4 py-3 text-xs text-slate-700 dark:text-slate-200 font-bold">
+                        {u.email ? (
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-900 dark:text-white">{u.email}</span>
+                            {u.full_name && <span className="text-[11px] font-normal text-slate-400">{u.full_name}</span>}
+                          </div>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-400 font-medium">
+                            Tanımsız Kullanıcı <span className="text-[11px] text-slate-400 font-mono">({u.user_id.slice(0, 8)}...)</span>
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs font-bold">

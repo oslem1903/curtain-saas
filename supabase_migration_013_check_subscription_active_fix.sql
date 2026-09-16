@@ -117,13 +117,13 @@
 
 BEGIN;
 
+-- DUZELTME (15.09.2026, migration 011'de bulunan ayni hatanin tekrarini
+-- onlemek icin): pg_get_function_identity_arguments(oid) PARAMETRE ADI
+-- DONDURMEZ, yalnizca tip listesini ("uuid") dondurur — "company_uuid uuid"
+-- ile ASLA eslesmezdi. to_regprocedure ile guvenli OID cozumlemesine gecildi.
 DO $preflight$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = 'check_subscription_active'
-      AND pg_get_function_identity_arguments(p.oid) = 'company_uuid uuid'
-  ) THEN
+  IF to_regprocedure('public.check_subscription_active(uuid)') IS NULL THEN
     RAISE EXCEPTION 'PREFLIGHT BASARISIZ: check_subscription_active(uuid) beklenen imzada bulunamadi — migration DURDURULDU.';
   END IF;
   RAISE NOTICE 'PREFLIGHT PASS.';

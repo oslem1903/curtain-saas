@@ -5,7 +5,7 @@
 // böylece kullanıcı sadece "sipariş görünmüyor" yazsa bile
 // süper admin arkadaki hatayı görebilir.
 //
-// Hiçbir yere otomatik göndermez — yalnızca bellekte tutar.
+// Bellekte tutar; abone olan remoteErrorReporting sınırlı hata raporu gönderebilir.
 // ============================================================
 
 export interface CapturedError {
@@ -19,6 +19,11 @@ export interface CapturedError {
 const MAX_ENTRIES = 30;
 const buffer: CapturedError[] = [];
 let installed = false;
+const listeners = new Set<(entry: CapturedError) => void>();
+export function subscribeCapturedErrors(listener: (entry: CapturedError) => void): () => void {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+}
 
 function trim(value: unknown, max = 600): string {
     let str: string;
@@ -28,7 +33,7 @@ function trim(value: unknown, max = 600): string {
         str = value;
     } else {
         try {
-            str = JSON.stringify(value);
+            str = JSON.stringify(value) ?? String(value);
         } catch {
             str = String(value);
         }
@@ -39,6 +44,7 @@ function trim(value: unknown, max = 600): string {
 function push(entry: CapturedError) {
     buffer.push(entry);
     if (buffer.length > MAX_ENTRIES) buffer.shift();
+    for (const listener of listeners) { try { listener(entry); } catch { /* isolated */ } }
 }
 
 function currentRoute(): string {

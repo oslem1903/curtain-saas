@@ -6,6 +6,7 @@ import {
     Calendar, DollarSign, ShieldCheck, X, Edit2, Trash2, ArrowLeft, RefreshCw, Copy
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { todayLocalISO } from "../utils/date";
 type Employee = {
     id: string;
     full_name: string;
@@ -53,14 +54,14 @@ export default function StaffManagement() {
         email: "",
         phone: "",
         salary_amount: 0,
-        hire_date: new Date().toISOString().split('T')[0]
+        hire_date: todayLocalISO()
     });
     
     const [payForm, setPayForm] = useState({
         type: 'salary',
         amount: 0,
         description: "",
-        date: new Date().toISOString().split('T')[0]
+        date: todayLocalISO()
     });
 
     const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -146,7 +147,7 @@ export default function StaffManagement() {
             }
             setShowAddModal(false);
             setEditingId(null);
-            setEmpForm({ full_name: "", email: "", phone: "", salary_amount: 0, hire_date: new Date().toISOString().split('T')[0] });
+            setEmpForm({ full_name: "", email: "", phone: "", salary_amount: 0, hire_date: todayLocalISO() });
         } catch (e: any) {
             alert(e.message);
         }
@@ -194,7 +195,7 @@ export default function StaffManagement() {
 
             alert("Ödeme başarıyla kaydedildi ✓");
             setShowPayModal(false);
-            setPayForm({ type: 'salary', amount: 0, description: "", date: new Date().toISOString().split('T')[0] });
+            setPayForm({ type: 'salary', amount: 0, description: "", date: todayLocalISO() });
             await loadData();
         } catch (e: any) {
             alert(e.message);
@@ -331,7 +332,7 @@ export default function StaffManagement() {
                         <RefreshCw className={`w-6 h-6 text-slate-600 dark:text-slate-400 ${loading ? "animate-spin" : ""}`} />
                     </button>
                     <button
-                        onClick={() => { setEditingId(null); setEmpForm({ full_name: "", email: "", phone: "", salary_amount: 0, hire_date: new Date().toISOString().split('T')[0] }); setShowAddModal(true); }}
+                        onClick={() => { setEditingId(null); setEmpForm({ full_name: "", email: "", phone: "", salary_amount: 0, hire_date: todayLocalISO() }); setShowAddModal(true); }}
                         className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all transform active:scale-95 w-full sm:w-auto"
                     >
                         <Plus className="w-5 h-5" />
@@ -566,7 +567,7 @@ export default function StaffManagement() {
             {/* Modal: Yeni Personel */}
             {showAddModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg shadow-2xl animate-in zoom-in duration-300 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="p-8">
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-2xl font-bold">{editingId ? "Personel Kartını Düzenle" : "Yeni Personel Kartı"}</h3>
@@ -637,7 +638,7 @@ export default function StaffManagement() {
             {/* Modal: Maaş/Avans Ödemesi */}
             {showPayModal && selectedEmp && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-md shadow-2xl animate-in zoom-in duration-300 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="p-8">
                             <div className="flex justify-between items-center mb-6">
                                 <div>
@@ -736,7 +737,7 @@ export default function StaffManagement() {
             {/* Modal: Yetki Atama (Role) */}
             {showRoleModal && selectedEmp && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in duration-300 border border-slate-200 dark:border-slate-800">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl animate-in zoom-in duration-300 border border-slate-200 dark:border-slate-800 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="p-8">
                             <div className="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-slate-900/10">
                                 <UserCog className="w-8 h-8" />

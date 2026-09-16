@@ -11,7 +11,7 @@ import FieldInfoSection from "../components/FieldInfoSection";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
 
 // ---- TYPES & CONSTANTS ----
-export type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "diger";
+export type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "plicell" | "rustik" | "dekoratif_ray" | "kruvaze" | "katlamali_mekanizma" | "ip_perde" | "aksesuar" | "diger";
 
 export type Photo = { id: string; url: string; note?: string };
 export type ProductRow = { id: string; name: string | null; category: string | null; unit_price: number | null; cost_price?: number | null; is_active: boolean | null; };
@@ -32,7 +32,7 @@ export type MeasurementItem = {
   colorName: string;
   qty: number;
   unitPrice: number;
-  pile: "2" | "3";
+  pile: "2" | "3" | "S";
   note: string;
   photos: Photo[];
   fieldNotes?: string;
@@ -44,23 +44,40 @@ export type MeasurementItem = {
   kornisTipi?: string;
 };
 
-export const PRODUCT_OPTIONS: Array<{ value: ProductType; label: string; defaultPrice: number }> = [
+const PRODUCT_OPTIONS: Array<{ value: ProductType; label: string; defaultPrice: number }> = [
   { value: "stor", label: "Stor", defaultPrice: 650 },
   { value: "zebra", label: "Zebra", defaultPrice: 850 },
   { value: "tul", label: "Tül", defaultPrice: 420 },
   { value: "fon", label: "Fon", defaultPrice: 520 },
   { value: "jalousie", label: "Jaluzi", defaultPrice: 950 },
   { value: "picasso", label: "Picasso", defaultPrice: 950 },
+  { value: "plicell", label: "Plise / Plicell", defaultPrice: 0 },
+  { value: "rustik", label: "Rustik", defaultPrice: 0 },
+  { value: "dekoratif_ray", label: "Dekoratif Ray", defaultPrice: 0 },
+  { value: "kruvaze", label: "Kruvaze Perde", defaultPrice: 0 },
+  { value: "katlamali_mekanizma", label: "Katlamalı Mekanizma", defaultPrice: 0 },
+  { value: "ip_perde", label: "İp Perde", defaultPrice: 0 },
+  { value: "aksesuar", label: "Aksesuar", defaultPrice: 0 },
   { value: "diger", label: "Diğer", defaultPrice: 500 },
 ];
 
-export function ceil10(value: number) { return Math.ceil(Math.max(0, value) / 10) * 10; }
-export function formatMoney(value: number) { return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(value); }
-export function productLabel(type: ProductType) { return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün"; }
+function isLinear(type: ProductType) { return ["rustik", "dekoratif_ray", "katlamali_mekanizma"].includes(type); }
+function isManual(type: ProductType) { return ["ip_perde", "aksesuar"].includes(type); }
+function pricingUnit(type: ProductType) { return isManual(type) ? "adet" : isLinear(type) || ["tul", "fon", "kruvaze"].includes(type) ? "m" : "m²"; }
 
-export function calculate(productType: ProductType, widthCm: number, heightCm: number, qty: number, unitPrice: number, pile: "2" | "3") {
-  if (productType === "tul" || productType === "fon") {
-    const pileMultiplier = pile === "3" ? 3 : 2;
+function ceil10(value: number) { return Math.ceil(Math.max(0, value) / 10) * 10; }
+function formatMoney(value: number) { return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(value); }
+function productLabel(type: ProductType) { return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün"; }
+
+function calculate(productType: ProductType, widthCm: number, heightCm: number, qty: number, unitPrice: number, pile: "2" | "3" | "S") {
+  if (isManual(productType) || isLinear(productType)) {
+    const roundedWidth = isLinear(productType) ? Math.ceil(Math.max(0, widthCm) / 25) * 25 : 0;
+    const areaM2 = isManual(productType) ? 1 : roundedWidth / 100;
+    return { roundedWidth, roundedHeight: 0, areaM2,
+      total: areaM2 * Math.max(1, qty) * Math.max(0, unitPrice), fabricWidthCm: null as number | null };
+  }
+  if (productType === "tul" || productType === "fon" || productType === "kruvaze") {
+    const pileMultiplier = pile === "2" ? 2 : 3;
     const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 15;
     const areaM2 = fabricWidthCm / 100;
     const total = areaM2 * Math.max(1, qty) * Math.max(0, unitPrice);
@@ -75,12 +92,13 @@ export function calculate(productType: ProductType, widthCm: number, heightCm: n
   return { roundedWidth, roundedHeight, areaM2, total, fabricWidthCm: null as number | null };
 }
 
-export function normalizeProductType(value: string | null | undefined): ProductType {
+function normalizeProductType(value: string | null | undefined): ProductType {
   const normalized = String(value ?? "").trim().toLocaleLowerCase("tr-TR");
+  if (normalized === "plise" || normalized === "pilise") return "plicell";
   if (normalized === "tül") return "tul";
   if (normalized === "jaluzi") return "jalousie";
   if (normalized === "diğer" || normalized === "diger") return "diger";
-  if (["stor", "zebra", "tul", "fon", "jalousie", "picasso"].includes(normalized)) return normalized as ProductType;
+  if (PRODUCT_OPTIONS.some(option => option.value === normalized)) return normalized as ProductType;
   return "diger";
 }
 
@@ -139,7 +157,7 @@ function makeNewItem(): MeasurementItem {
     id: crypto.randomUUID(),
     roomName: "", widthCm: 100, heightCm: 200, productType: "stor",
     selectedProductName: "", supplierId: "", supplierCost: 0,
-    modelName: "", colorName: "", qty: 1, unitPrice: 650, pile: "2",
+    modelName: "", colorName: "", qty: 1, unitPrice: 0, pile: "2",
     note: "", photos: [],
   };
 }
@@ -272,7 +290,7 @@ export default function MeasurementEntry() {
             typeof p === 'string' ? { id: p, url: p } : p
           );
 
-          let cleanNote = noteStr
+          const cleanNote = noteStr
             .replace(/\[Grup: .*\]/g, "")
             .replace(/Kumaş Grubu: .*/g, "")
             .replace(/Mekanizma: .*/g, "")
@@ -280,6 +298,7 @@ export default function MeasurementEntry() {
             .replace(/Kasa Tipi: .*/g, "")
             .replace(/Kasa Rengi: .*/g, "")
             .replace(/Korniş Tipi: .*/g, "")
+            .replace(/Pile: [23S]/g, "")
             .replace(/\[Photos: .*\]/g, "")
             .trim();
 
@@ -296,7 +315,7 @@ export default function MeasurementEntry() {
             colorName: row.color_name || "",
             qty: row.quantity || 1,
             unitPrice: row.unit_price || 0,
-            pile: "2",
+            pile: /Pile: S/.test(noteStr) ? "S" : /Pile: 3/.test(noteStr) ? "3" : "2",
             kumasGrubu: kumasMatch ? kumasMatch[1].trim() : undefined,
             mekanizma: mekMatch ? mekMatch[1].trim() : undefined,
             zincirYonu: zincirMatch ? zincirMatch[1].trim() : undefined,
@@ -311,7 +330,9 @@ export default function MeasurementEntry() {
         setItems(loadedItems);
         // Expand all loaded items
         setExpandedItems(new Set(loadedItems.map(i => i.id)));
-      } catch (e) { }
+      } catch {
+        // Kalem listesi yuklenemedi: ekran bos kalir, kullanici tekrar deneyebilir.
+      }
     }
     loadGroup();
     return () => { alive = false; };
@@ -323,7 +344,11 @@ export default function MeasurementEntry() {
     async function loadCatalogData() {
       try {
         const ctx = await getEffectiveTenantContext();
-        const pRes = await supabase.from("products").select("id,name,category,unit_price,cost_price,is_active").eq("company_id", ctx.company_id);
+        // products with fallback (some DBs don't have cost_price — see Products.tsx/NewOrder.tsx)
+        let pRes: { data: unknown[] | null; error: { message?: string } | null } = await supabase.from("products").select("id,name,category,unit_price,cost_price,is_active").eq("company_id", ctx.company_id);
+        if (pRes.error && /cost_price/i.test(String(pRes.error.message || ""))) {
+          pRes = await supabase.from("products").select("id,name,category,unit_price,is_active").eq("company_id", ctx.company_id);
+        }
         if (alive && pRes.data) setProducts(pRes.data as ProductRow[]);
 
         const sRes = await supabase.from("suppliers").select("id,name").eq("company_id", ctx.company_id);
@@ -343,7 +368,9 @@ export default function MeasurementEntry() {
 
         const cRes = await supabase.from("customers").select("id,name,phone,address").eq("company_id", ctx.company_id).order("name").limit(500);
         if (alive && cRes.data) setCustomers(cRes.data as CustomerRow[]);
-      } catch (e) { }
+      } catch {
+        // Katalog/musteri listesi opsiyoneldir; hata olusursa form bos listeyle calisir.
+      }
     }
     void loadCatalogData();
     return () => { alive = false; };
@@ -392,7 +419,8 @@ export default function MeasurementEntry() {
   function toggleExpand(id: string) {
     setExpandedItems(prev => {
       const s = new Set(prev);
-      s.has(id) ? s.delete(id) : s.add(id);
+      if (s.has(id)) s.delete(id);
+      else s.add(id);
       return s;
     });
   }
@@ -417,7 +445,7 @@ export default function MeasurementEntry() {
         const res = calculate(it.productType, it.widthCm, it.heightCm, it.qty, it.unitPrice, it.pile);
         const itemCost = res.areaM2 * Math.max(1, it.qty) * Math.max(0, it.supplierCost);
 
-        let dynamicProps = "";
+        let dynamicProps = ["tul", "fon", "kruvaze"].includes(it.productType) ? `\nPile: ${it.pile}` : "";
         if (it.kumasGrubu) dynamicProps += `\nKumaş Grubu: ${it.kumasGrubu}`;
         if (it.mekanizma) dynamicProps += `\nMekanizma: ${it.mekanizma}`;
         if (it.zincirYonu) dynamicProps += `\nZincir Yönü: ${it.zincirYonu}`;
@@ -633,12 +661,14 @@ export default function MeasurementEntry() {
                         <label><span className={labelCls}>Ürün Tipi</span>
                           <select value={item.productType} onChange={e => {
                             const pt = e.target.value as ProductType;
-                            const defaultPrice = PRODUCT_OPTIONS.find(o => o.value === pt)?.defaultPrice ?? 500;
+                            const defaultPrice = 0;
                             const autoSupplierCost = item.supplierId
                               ? findSupplierCost(item.supplierId, pt, item.modelName, supplierPrices, products)
                               : item.supplierCost;
                             updateItem(item.id, {
                               productType: pt,
+                              kumasGrubu: "", mekanizma: "", zincirYonu: "", kasaTipi: "", kasaRengi: "", kornisTipi: "",
+                              colorName: "", modelName: "",
                               unitPrice: defaultPrice,
                               supplierCost: autoSupplierCost > 0 ? autoSupplierCost : item.supplierCost,
                             });
@@ -674,33 +704,40 @@ export default function MeasurementEntry() {
                         </label>
 
                         {/* Dimensions */}
-                        <label><span className={labelCls}>En (cm)</span>
-                          <input type="number" value={item.widthCm} onChange={e => updateItem(item.id, { widthCm: Number(e.target.value) })} className={inputCls} />
-                        </label>
-                        <label><span className={labelCls}>Boy (cm)</span>
-                          <input type="number" value={item.heightCm} onChange={e => updateItem(item.id, { heightCm: Number(e.target.value) })} className={inputCls} />
-                        </label>
+                        {!isManual(item.productType) && <label><span className={labelCls}>{isLinear(item.productType) ? "Uzunluk (cm)" : "En (cm)"}</span>
+                          <input type="number" value={item.widthCm > 0 ? item.widthCm : ""} onChange={e => updateItem(item.id, { widthCm: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />
+                        </label>}
+                        {!isManual(item.productType) && !isLinear(item.productType) && <label><span className={labelCls}>Boy (cm)</span>
+                          <input type="number" value={item.heightCm > 0 ? item.heightCm : ""} onChange={e => updateItem(item.id, { heightCm: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />
+                        </label>}
                         <label><span className={labelCls}>Adet</span>
-                          <input type="number" min={1} value={item.qty} onChange={e => updateItem(item.id, { qty: Math.max(1, Number(e.target.value)) })} className={inputCls} />
+                          <input type="number" min={1} value={item.qty > 0 ? item.qty : ""} onChange={e => updateItem(item.id, { qty: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} onBlur={() => { if (item.qty < 1) updateItem(item.id, { qty: 1 }); }} className={inputCls} />
                         </label>
 
                         {/* Pricing */}
-                        <label><span className={labelCls}>Satış Fiyatı (₺/m²)</span>
-                          <input type="number" value={item.unitPrice} onChange={e => updateItem(item.id, { unitPrice: Number(e.target.value) })} className={inputCls} />
+                        <label><span className={labelCls}>Satış Fiyatı (₺/{pricingUnit(item.productType)})</span>
+                          <input type="number" value={item.unitPrice > 0 ? item.unitPrice : ""} onChange={e => updateItem(item.id, { unitPrice: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />
                         </label>
-                        <label><span className={labelCls}>Alış Maliyeti (₺/m²)</span>
-                          <input type="number" value={item.supplierCost} onChange={e => updateItem(item.id, { supplierCost: Number(e.target.value) })} className={`${inputCls} ${item.supplierCost <= 0 ? "border-orange-300 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/20" : ""}`} />
+                        <label><span className={labelCls}>Alış Maliyeti (₺/{pricingUnit(item.productType)})</span>
+                          <input type="number" value={item.supplierCost > 0 ? item.supplierCost : ""} onChange={e => updateItem(item.id, { supplierCost: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={`${inputCls} ${item.supplierCost <= 0 ? "border-orange-300 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/20" : ""}`} />
                           {item.supplierCost <= 0 && <span className="mt-1 text-[10px] font-bold text-orange-600">⚠️ Alış fiyatı girilmedi</span>}
                         </label>
 
+                        {!isManual(item.productType) && <>
                         {/* Model / Renk */}
                         <label><span className={labelCls}>Model Adı</span>
                           <input value={item.modelName} onChange={e => updateItem(item.id, { modelName: e.target.value })} placeholder="Model adı" className={inputCls} />
                         </label>
                         <label><span className={labelCls}>Renk</span>
-                          <input value={item.colorName} onChange={e => updateItem(item.id, { colorName: e.target.value })} placeholder="Renk adı" className={inputCls} />
+                          {["rustik", "dekoratif_ray"].includes(item.productType) ? (
+                            <select value={item.colorName} onChange={e => updateItem(item.id, { colorName: e.target.value })} className={inputCls}>
+                              <option value="">Seçin</option>
+                              {["Beyaz", "Krem", "Meşe", "Ceviz", "Antrasit", "Siyah", "Gri"].map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : <input value={item.colorName} onChange={e => updateItem(item.id, { colorName: e.target.value })} placeholder="Renk adı" className={inputCls} />}
                         </label>
 
+                        </>}
                         {/* ----- Dynamic Product Fields ----- */}
 
                         {/* STOR: Kumaş Grubu, Mekanizma, Zincir Yönü, Kasa Tipi */}
@@ -759,40 +796,60 @@ export default function MeasurementEntry() {
                         )}
 
                         {/* TÜL: Pile Tipi, Kumaş Türü */}
-                        {item.productType === "tul" && (
+                        {(item.productType === "tul" || item.productType === "kruvaze") && (
                           <>
                             <label><span className={labelCls}>Pile Tipi</span>
-                              <select value={item.pile} onChange={e => updateItem(item.id, { pile: e.target.value as "2" | "3" })} className={inputCls}>
+                            <select value={item.pile} onChange={e => updateItem(item.id, { pile: e.target.value as "2" | "3" | "S" })} className={inputCls}>
                                 <option value="2">1'e 2</option>
                                 <option value="3">1'e 3</option>
+                                <option value="S">S pile (1'e 3 perde)</option>
                               </select>
                             </label>
                             <label><span className={labelCls}>Kumaş Grubu</span><input value={item.kumasGrubu || ""} onChange={e => updateItem(item.id, { kumasGrubu: e.target.value })} className={inputCls} placeholder="Kumaş türü" /></label>
                           </>
                         )}
 
-                        {/* FON: Pile Tipi, Kumaş Türü, Korniş Tipi */}
+                        {/* FON: Pile Tipi, Kumaş Türü */}
                         {item.productType === "fon" && (
                           <>
                             <label><span className={labelCls}>Pile Tipi</span>
-                              <select value={item.pile} onChange={e => updateItem(item.id, { pile: e.target.value as "2" | "3" })} className={inputCls}>
+                            <select value={item.pile} onChange={e => updateItem(item.id, { pile: e.target.value as "2" | "3" | "S" })} className={inputCls}>
                                 <option value="2">1'e 2</option>
                                 <option value="3">1'e 3</option>
+                                <option value="S">S pile (1'e 3 perde)</option>
                               </select>
                             </label>
                             <label><span className={labelCls}>Kumaş Grubu</span><input value={item.kumasGrubu || ""} onChange={e => updateItem(item.id, { kumasGrubu: e.target.value })} className={inputCls} placeholder="Kumaş türü" /></label>
-                            <label><span className={labelCls}>Korniş Tipi</span>
-                              <select value={item.kornisTipi || ""} onChange={e => updateItem(item.id, { kornisTipi: e.target.value })} className={inputCls}>
-                                <option value="">Seçin</option>
-                                <option value="Raylar">Raylar</option>
-                                <option value="Rustik">Rustik</option>
-                                <option value="Metal Boru">Metal Boru</option>
-                                <option value="Ahşap Boru">Ahşap Boru</option>
-                              </select>
-                            </label>
+
                           </>
                         )}
 
+                        {item.productType === "jalousie" && <label><span className={labelCls}>Jaluzi Seçeneği</span>
+                          <select value={item.mekanizma || ""} onChange={e => updateItem(item.id, { mekanizma: e.target.value })} className={inputCls}>
+                            <option value="">Seçin</option>
+                            <option value="Redüktörlü Kurdelalı">Redüktörlü Kurdelalı</option>
+                            <option value="İpli">İpli</option>
+                          </select>
+                        </label>}
+
+
+                        {item.productType === "plicell" && <label><span className={labelCls}>Kasa Rengi</span>
+                          <select value={item.kasaRengi || ""} onChange={e => updateItem(item.id, { kasaRengi: e.target.value })} className={inputCls}>
+                            <option value="">Seçin</option>
+                            {["Krem", "Beyaz", "Kahve", "Bronz", "Antrasit", "Gri"].map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </label>}
+                        {item.productType === "kruvaze" && <label><span className={labelCls}>Mekanizma</span>
+                          <select value={item.mekanizma || ""} onChange={e => updateItem(item.id, { mekanizma: e.target.value })} className={inputCls}>
+                            <option value="">Seçin</option>
+                            {["Mekanizmalı", "Mekanizmasız", "Kordon toplamalı"].map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </label>}
+                        {item.productType === "katlamali_mekanizma" && <label><span className={labelCls}>Yön</span>
+                          <select value={item.zincirYonu || ""} onChange={e => updateItem(item.id, { zincirYonu: e.target.value })} className={inputCls}>
+                            <option value="">Seçin</option><option>Sağ</option><option>Sol</option>
+                          </select>
+                        </label>}
                         {/* Not */}
                         <label className="sm:col-span-2 lg:col-span-3"><span className={labelCls}>Not</span>
                           <textarea value={item.note} onChange={e => updateItem(item.id, { note: e.target.value })} rows={2} className={inputCls} placeholder="Ek notlar..." />
@@ -800,7 +857,7 @@ export default function MeasurementEntry() {
                       </div>
 
                       {/* Saha Bilgileri - Field Info Section */}
-                      <div className="mt-4">
+                      {!isManual(item.productType) && <div className="mt-4">
                         <FieldInfoSection
                           itemId={item.id}
                           companyId={company?.id || ""}
@@ -813,12 +870,13 @@ export default function MeasurementEntry() {
                           onModelChange={(modelName) => updateItem(item.id, { modelName })}
                           onFieldNotesChange={(fieldNotes) => updateItem(item.id, { fieldNotes })}
                         />
-                      </div>
+                      </div>}
 
                       {/* Item line total */}
                       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-100 px-4 py-3 dark:bg-slate-700/50">
                         <div className="text-xs text-slate-500">
-                          Alan: {calc.areaM2.toFixed(2)} m²
+                          Birim miktarı: {calc.areaM2.toFixed(2)} {pricingUnit(item.productType)}
+                          {isLinear(item.productType) ? ` • Yuvarlanan uzunluk: ${calc.roundedWidth} cm` : ""}
                           {calc.fabricWidthCm ? ` • Kumaş eni: ${calc.fabricWidthCm} cm` : ""}
                           {item.productType === "stor" || item.productType === "zebra" || item.productType === "jalousie" || item.productType === "picasso"
                             ? ` • Yuvarlanan: ${calc.roundedWidth}x${calc.roundedHeight} cm` : ""}
@@ -872,7 +930,7 @@ export default function MeasurementEntry() {
       )}
 
       {/* STICKY BOTTOM ACTIONS */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/90 p-4 backdrop-blur-lg dark:border-slate-800 dark:bg-slate-900/90 md:pl-64">
+      <div className="fixed bottom-[calc(64px+env(safe-area-inset-bottom))] left-0 right-0 z-50 border-t border-slate-200 bg-white/95 p-3 backdrop-blur-lg dark:border-slate-800 dark:bg-slate-900/95 md:bottom-0 md:pl-64 md:p-4">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <div className="text-xs text-slate-400">
             {items.length > 0 && <span>{items.length} ürün • <b className="text-slate-700 dark:text-slate-200">{formatMoney(totalSale)}</b></span>}

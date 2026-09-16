@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
+import { todayLocalISO } from "../utils/date";
+import { paymentLabel } from "../utils/paymentLabels";
 
 const financeService = createFinanceService();
 
@@ -56,7 +58,7 @@ function getDueDateStatus(dueDate: string | null | undefined, rowType: "debt" | 
     if (runningBalance <= 0) return "no-debt";
     if (!dueDate) return "no-due";
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayLocalISO();
     const due = dueDate.slice(0, 10);
 
     if (due < today) return "overdue";
@@ -78,7 +80,7 @@ function renderDueDateBadge(status: DueDateStatus, dueDate?: string | null): Rea
     if (status === "no-debt") return null;
 
     if (status === "overdue" && dueDate) {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = todayLocalISO();
         const due = dueDate.slice(0, 10);
         const daysAgo = Math.floor((new Date(today).getTime() - new Date(due).getTime()) / (1000 * 60 * 60 * 24));
         return (
@@ -97,7 +99,7 @@ function renderDueDateBadge(status: DueDateStatus, dueDate?: string | null): Rea
     }
 
     if (status === "upcoming" && dueDate) {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = todayLocalISO();
         const due = dueDate.slice(0, 10);
         const daysLeft = Math.floor((new Date(due).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
         return (
@@ -293,7 +295,7 @@ export default function SupplierLedger() {
                 .replace(/ü/g, "u").replace(/Ü/g, "U")
                 .replace(/[^a-zA-Z0-9_-]/g, "_");
 
-            const today = new Date().toISOString().slice(0, 10);
+            const today = todayLocalISO();
             const filename = `Tedarikci_Cari_${safeName}_${today}.xlsx`;
 
             XLSX.writeFile(wb, filename);
@@ -465,7 +467,7 @@ export default function SupplierLedger() {
             row_type: "payment",
             date: r.transaction_date,
             description: r.payment_method
-                ? `${r.payment_method}${r.description ? ` - ${r.description}` : ""}`
+                ? `${paymentLabel(r.payment_method)}${r.description ? ` - ${r.description}` : ""}`
                 : r.description || "Ödeme",
             debt: 0,
             payment: Number(r.amount ?? 0),
@@ -805,7 +807,7 @@ export default function SupplierLedger() {
 
             {showQuickPaymentModal && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
+                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">
                                 Hızlı Tedarikçi Ödemesi
@@ -874,7 +876,7 @@ export default function SupplierLedger() {
 
             {showQuickExpenseModal && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4">
+                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">
                                 Hızlı Tedarikçi Borcu / Gideri

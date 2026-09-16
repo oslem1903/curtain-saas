@@ -4,7 +4,13 @@ import { ArrowRight, Loader2, Lock, Mail, ShieldCheck, UserPlus } from "lucide-r
 
 import { supabase } from "../supabaseClient";
 
-const MOBILE_BUILD_MARKER = "Mobil fix 2026-05-11-2";
+function loginErrorMessage(message: string): string {
+    if (/invalid login credentials/i.test(message)) return "E-posta veya şifre hatalı.";
+    if (/email not confirmed/i.test(message)) return "Giriş yapmak için e-posta adresinizi doğrulayın.";
+    if (/rate limit|too many requests/i.test(message)) return "Çok fazla deneme yapıldı. Biraz sonra tekrar deneyin.";
+    if (/fetch|network/i.test(message)) return "Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin.";
+    return message;
+}
 
 function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -95,7 +101,7 @@ export default function Login() {
 
         if (error) {
             setLoading(false);
-            return setInfo(error.message);
+            return setInfo(loginErrorMessage(error.message));
         }
 
         localStorage.setItem("remember_login", rememberMe ? "true" : "false");
@@ -123,16 +129,21 @@ export default function Login() {
 
         setLoading(true);
 
-        const redirectTo = `${window.location.origin}${window.location.pathname}#/reset-password`;
-
-        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-            redirectTo,
-        });
-
-        setLoading(false);
-
-        if (error) setInfo(error.message);
-        else setInfo("Şifre sıfırlama maili gönderildi. Gelen kutusu ve spam klasorunu kontrol edin.");
+        try {
+            const configuredRedirect = import.meta.env.VITE_PASSWORD_RESET_REDIRECT_URL;
+            const native = window.location.protocol === "file:" || Boolean((window as any).Capacitor?.isNativePlatform?.());
+            if (native && !configuredRedirect) {
+                throw new Error("Bu sürümde şifre sıfırlama bağlantısı ayarlanmamış. Destek ekibiyle iletişime geçin.");
+            }
+            const redirectTo = configuredRedirect || `${window.location.origin}${window.location.pathname}#/reset-password`;
+            const { error } = await withTimeout(supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo }), "Şifre sıfırlama", 15000);
+            if (error) throw error;
+            setInfo("Şifre sıfırlama e-postası gönderildi. Gelen kutusu ve spam klasörünü kontrol edin.");
+        } catch (error) {
+            setInfo(loginErrorMessage(error instanceof Error ? error.message : "Şifre sıfırlama isteği tamamlanamadı."));
+        } finally {
+            setLoading(false);
+        }
     }
 
     if (checkingSession) {
@@ -141,7 +152,6 @@ export default function Login() {
                 <div className="flex items-center gap-3 text-slate-500 dark:text-slate-300 font-semibold">
                     <Loader2 className="w-5 h-5 animate-spin" />
                     Oturum kontrol ediliyor...
-                    <span className="sr-only">{MOBILE_BUILD_MARKER}</span>
                 </div>
             </div>
         );
@@ -246,7 +256,6 @@ export default function Login() {
                         </button>
                     </div>
                 </div>
-                <div className="px-7 pb-4 text-[11px] text-slate-400">{MOBILE_BUILD_MARKER}</div>
             </div>
         </div>
     );

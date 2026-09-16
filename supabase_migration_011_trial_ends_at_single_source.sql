@@ -157,6 +157,25 @@ BEGIN;
 -- fonksiyonlarin beklenen imza/owner/security/language/search_path ile
 -- BIREBIR eslestigini dogrular. Sapma varsa RAISE EXCEPTION ile bu
 -- transaction'daki HICBIR degisiklik uygulanmaz.
+--
+-- DUZELTME 1 (15.09.2026, calistirilmadan once incelemede bulundu):
+-- pg_get_function_identity_arguments(oid) PARAMETRE ADI DONDURMEZ — yalnizca
+-- tip listesini dondurur ("text, text, text" / "uuid"). Onceki taslak bunu
+-- parametre adlariyla karsilastiriyordu ve HICBIR ZAMAN eslesmiyordu.
+--
+-- DUZELTME 2 (15.09.2026, DUZELTME 1 SONRASI TEKRAR HATA VERDI): sadece tip
+-- listesiyle ("text, text, text") karsilastirmaya gecildikten SONRA bile
+-- register_device_and_touch_login preflight'ta bulunamadi — salt-okunur
+-- inceleme SELECT'i ise fonksiyonun production'da beklenen imza/owner/
+-- security/language/search_path ile GERCEKTEN var oldugunu dogruladi. Yani
+-- sorun fonksiyonda degil, STRING KARSILASTIRMA YONTEMININ KENDISINDEYDI
+-- (bosluk/formatlama gibi kirilgan bir fark). Bu yuzden yontem TAMAMEN
+-- degistirildi: string esitligi yerine, Postgres'in KENDI fonksiyon
+-- cozumleme mekanizmasini kullanan to_regprocedure('sema.ad(tip,tip,...)')
+-- ile OID araniyor. Bulunamazsa NULL doner (::regprocedure cast'inin
+-- aksine hata FIRLATMAZ), boylece kendi RAISE EXCEPTION mesajimizi
+-- verebiliyoruz. Bu, dosyanin storage-izolasyon betiginde zaten kullanilan
+-- ayni guvenli desendir.
 -- ============================================================================
 
 DO $preflight$
@@ -172,16 +191,10 @@ DECLARE
   v_icw_lang text;
   v_icw_search_path text;
 BEGIN
-  SELECT p.oid INTO v_rdl_oid
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public'
-    AND p.proname = 'register_device_and_touch_login'
-    AND p.prokind = 'f'
-    AND pg_get_function_identity_arguments(p.oid) = 'p_device_id text, p_user_agent text, p_device_name text';
+  v_rdl_oid := to_regprocedure('public.register_device_and_touch_login(text,text,text)');
 
   IF v_rdl_oid IS NULL THEN
-    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: register_device_and_touch_login(text,text,text) beklenen imzada bulunamadi — migration DURDURULDU, hicbir degisiklik uygulanmadi.';
+    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: public.register_device_and_touch_login(text,text,text) to_regprocedure ile bulunamadi (NULL dondu) — migration DURDURULDU, hicbir degisiklik uygulanmadi.';
   END IF;
 
   SELECT r.rolname, p.prosecdef, l.lanname,
@@ -200,16 +213,10 @@ BEGIN
       v_rdl_owner, v_rdl_secdef, v_rdl_lang, v_rdl_search_path;
   END IF;
 
-  SELECT p.oid INTO v_icw_oid
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public'
-    AND p.proname = 'is_company_writable'
-    AND p.prokind = 'f'
-    AND pg_get_function_identity_arguments(p.oid) = 'p_company_id uuid';
+  v_icw_oid := to_regprocedure('public.is_company_writable(uuid)');
 
   IF v_icw_oid IS NULL THEN
-    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: is_company_writable(uuid) beklenen imzada bulunamadi — migration DURDURULDU, hicbir degisiklik uygulanmadi.';
+    RAISE EXCEPTION 'PREFLIGHT BASARISIZ: public.is_company_writable(uuid) to_regprocedure ile bulunamadi (NULL dondu) — migration DURDURULDU, hicbir degisiklik uygulanmadi.';
   END IF;
 
   SELECT r.rolname, p.prosecdef, l.lanname,
@@ -228,7 +235,7 @@ BEGIN
       v_icw_owner, v_icw_secdef, v_icw_lang, v_icw_search_path;
   END IF;
 
-  RAISE NOTICE 'PREFLIGHT PASS: her iki fonksiyon da beklenen imza/owner/security/language/search_path ile bulundu.';
+  RAISE NOTICE 'PREFLIGHT PASS: her iki fonksiyon da beklenen imza/owner/security/language/search_path ile bulundu (to_regprocedure ile OID cozumlendi).';
 END;
 $preflight$;
 
@@ -458,20 +465,18 @@ GRANT EXECUTE ON FUNCTION public.is_company_writable(uuid) TO PUBLIC;
 
 DO $postcheck$
 DECLARE
+  v_rdl_oid oid;
+  v_icw_oid oid;
   v_rdl_def text;
   v_icw_def text;
 BEGIN
-  SELECT pg_get_functiondef(p.oid) INTO v_rdl_def
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public'
-    AND p.proname = 'register_device_and_touch_login'
-    AND p.prokind = 'f'
-    AND pg_get_function_identity_arguments(p.oid) = 'p_device_id text, p_user_agent text, p_device_name text';
+  v_rdl_oid := to_regprocedure('public.register_device_and_touch_login(text,text,text)');
 
-  IF v_rdl_def IS NULL THEN
-    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: register_device_and_touch_login degistirme sonrasi beklenen imzada bulunamadi — COMMIT ENGELLENDI.';
+  IF v_rdl_oid IS NULL THEN
+    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: public.register_device_and_touch_login(text,text,text) degistirme sonrasi to_regprocedure ile bulunamadi — COMMIT ENGELLENDI.';
   END IF;
+
+  SELECT pg_get_functiondef(v_rdl_oid) INTO v_rdl_def;
 
   IF v_rdl_def ~ '\.trial_end([^s]|$)' THEN
     RAISE EXCEPTION 'DOGRULAMA BASARISIZ: register_device_and_touch_login hala trial_end kolonuna nitelikli referans veriyor — COMMIT ENGELLENDI, tum degisiklikler geri alinacak.';
@@ -481,17 +486,13 @@ BEGIN
     RAISE EXCEPTION 'DOGRULAMA BASARISIZ: register_device_and_touch_login hala eski fail-open (interval ''1 day'') desenini iceriyor — COMMIT ENGELLENDI, tum degisiklikler geri alinacak.';
   END IF;
 
-  SELECT pg_get_functiondef(p.oid) INTO v_icw_def
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public'
-    AND p.proname = 'is_company_writable'
-    AND p.prokind = 'f'
-    AND pg_get_function_identity_arguments(p.oid) = 'p_company_id uuid';
+  v_icw_oid := to_regprocedure('public.is_company_writable(uuid)');
 
-  IF v_icw_def IS NULL THEN
-    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: is_company_writable degistirme sonrasi beklenen imzada bulunamadi — COMMIT ENGELLENDI.';
+  IF v_icw_oid IS NULL THEN
+    RAISE EXCEPTION 'DOGRULAMA BASARISIZ: public.is_company_writable(uuid) degistirme sonrasi to_regprocedure ile bulunamadi — COMMIT ENGELLENDI.';
   END IF;
+
+  SELECT pg_get_functiondef(v_icw_oid) INTO v_icw_def;
 
   IF v_icw_def ~ '\.trial_end([^s]|$)' THEN
     RAISE EXCEPTION 'DOGRULAMA BASARISIZ: is_company_writable hala trial_end kolonuna nitelikli referans veriyor — COMMIT ENGELLENDI, tum degisiklikler geri alinacak.';

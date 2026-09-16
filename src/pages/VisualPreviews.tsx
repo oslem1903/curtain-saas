@@ -15,6 +15,8 @@ import {
 
 import { useAuth } from "../context/AuthContext";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import SecureImage from "../components/SecureImage";
+import { resolveStorageSrc } from "../utils/storageUrl";
 
 type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie";
 
@@ -474,6 +476,23 @@ export default function VisualPreviews() {
   const selectedTextureUrl = variantTexture(selectedVariant);
   const effectiveTextureUrl = selectedTextureUrl || capturedTextureUrl;
   const hasExactTexture = Boolean(effectiveTextureUrl);
+
+  // Doku gorseli Storage'da tutuluyor olabilir; canvas'a cizilmeden once kisa omurlu
+  // imzali adrese cevrilir (bkz. utils/storageUrl.ts).
+  const [resolvedTextureUrl, setResolvedTextureUrl] = useState("");
+  useEffect(() => {
+    let alive = true;
+    if (!effectiveTextureUrl) {
+      setResolvedTextureUrl("");
+      return;
+    }
+    void resolveStorageSrc(effectiveTextureUrl).then((url) => {
+      if (alive) setResolvedTextureUrl(url);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [effectiveTextureUrl]);
   const exactTextureSource = selectedTextureUrl ? "catalog" : capturedTextureUrl ? "captured" : "";
 
   useEffect(() => {
@@ -861,7 +880,7 @@ export default function VisualPreviews() {
                     >
                       <div className="relative h-24 bg-slate-100 dark:bg-slate-800">
                         {variantTexture(variant) ? (
-                          <img src={variantTexture(variant)} alt="" className="h-full w-full object-cover" />
+                          <SecureImage src={variantTexture(variant)} alt="" className="h-full w-full object-cover" />
                         ) : (
                           <div className="h-full w-full" style={{ background: `linear-gradient(135deg, ${swatch}, #ffffff66)` }} />
                         )}
@@ -893,7 +912,7 @@ export default function VisualPreviews() {
               <span className="text-xs font-black text-slate-700 dark:text-slate-200">Kartela/doku fotoğrafı</span>
               <span className="mt-1 flex min-h-20 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-primary-200 bg-white/70 p-3 dark:border-primary-800 dark:bg-slate-900/50">
                 {effectiveTextureUrl ? (
-                  <img src={effectiveTextureUrl} alt="" className="h-14 w-14 rounded-lg object-cover" />
+                  <SecureImage src={effectiveTextureUrl} alt="" className="h-14 w-14 rounded-lg object-cover" />
                 ) : (
                   <Upload className="h-7 w-7 shrink-0 text-primary-500" />
                 )}
@@ -995,6 +1014,8 @@ export default function VisualPreviews() {
                 onPointerCancel={() => setDragPoint(null)}
                 onPointerLeave={() => setDragPoint(null)}
               >
+                {/* photoUrl yerel bir blob: adresidir (URL.createObjectURL) — imzalanmaz.
+                    ref canvas cizimi icin ZORUNLU oldugundan duz <img> kalir. */}
                 <img
                   ref={photoRef}
                   src={photoUrl}
@@ -1002,7 +1023,7 @@ export default function VisualPreviews() {
                   className={`block max-h-[70vh] max-w-full rounded-xl object-contain ${previewRequested ? "opacity-0" : "opacity-100"}`}
                   onLoad={() => drawPreview()}
                 />
-                {effectiveTextureUrl ? <img ref={textureRef} src={effectiveTextureUrl} alt="" className="hidden" crossOrigin="anonymous" onLoad={() => drawPreview()} onError={() => setErr("Kartela gorseli yuklenemedi. Kartela fotografini yeniden cekip yukleyin.")} /> : null}
+                {resolvedTextureUrl ? <img ref={textureRef} src={resolvedTextureUrl} alt="" className="hidden" crossOrigin="anonymous" onLoad={() => drawPreview()} onError={() => setErr("Kartela gorseli yuklenemedi. Kartela fotografini yeniden cekip yukleyin.")} /> : null}
                 <canvas ref={canvasRef} className={previewRequested ? "pointer-events-none absolute inset-0 h-full w-full rounded-xl object-contain" : "hidden"} />
                 <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                   <polygon points={areaPoints.map((point) => `${point.x},${point.y}`).join(" ")} fill={areaEditing ? "rgba(14,165,233,0.14)" : "rgba(255,255,255,0.08)"} stroke={areaEditing ? "rgba(14,165,233,0.95)" : "rgba(255,255,255,0.7)"} strokeWidth="0.7" vectorEffect="non-scaling-stroke" />

@@ -12,6 +12,7 @@ import { Tag, QrCode, Camera, ImagePlus, Mic, Square as StopSquare, Trash2, Penc
 import type { FieldInfo } from "../utils/fieldInfo";
 import { uploadFieldFile, dataUrlToBlob } from "../utils/fieldInfo";
 import PhotoAnnotator from "./PhotoAnnotator";
+import SecureImage from "./SecureImage";
 
 type AnnotateTarget = { kind: "swatch" } | { kind: "room"; index: number };
 
@@ -239,7 +240,7 @@ export default function FieldInfoEditor({ value, onChange, getCompanyId }: {
           <span className="text-xs font-black uppercase tracking-wide text-slate-500">Kartela Fotoğrafı</span>
           {value.swatch_photo_url ? (
             <div className="mt-2 flex items-start gap-3">
-              <img src={value.swatch_photo_url} alt="Kartela" className="h-24 w-24 rounded-xl object-cover ring-1 ring-amber-300" />
+              <SecureImage src={value.swatch_photo_url} alt="Kartela" className="h-24 w-24 rounded-xl object-cover ring-1 ring-amber-300" />
               <div className="flex flex-col gap-1.5">
                 <button type="button" onClick={() => openAnnotate({ kind: "swatch" })} className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 hover:underline"><PencilLine className="h-3.5 w-3.5" /> İşaretle</button>
                 <button type="button" onClick={addSwatchPhoto} className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:underline"><Camera className="h-3.5 w-3.5" /> Değiştir</button>
@@ -258,7 +259,7 @@ export default function FieldInfoEditor({ value, onChange, getCompanyId }: {
             <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
               {value.room_photos.map((url, i) => (
                 <div key={url + i} className="group relative aspect-square">
-                  <img src={url} alt={`Mekan ${i + 1}`} className="h-full w-full rounded-lg object-cover ring-1 ring-amber-300" />
+                  <SecureImage src={url} alt={`Mekan ${i + 1}`} className="h-full w-full rounded-lg object-cover ring-1 ring-amber-300" />
                   <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[9px] font-bold text-white">{i + 1}</span>
                   <div className="absolute inset-x-0 bottom-0 flex justify-center gap-1 rounded-b-lg bg-black/55 p-0.5 opacity-0 transition group-hover:opacity-100">
                     <button type="button" onClick={() => moveRoomPhoto(i, -1)} title="Sola al" className="text-white"><ChevronUp className="h-3.5 w-3.5 -rotate-90" /></button>

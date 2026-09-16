@@ -7,6 +7,9 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import FieldInfoGallery from "../components/FieldInfoGallery";
 import { parseFieldInfo, hasFieldInfo, type FieldInfo } from "../utils/fieldInfo";
 import { normalizeOrderStatus, ORDER_STATUS } from "../utils/order";
+import { toLocalDateISO, todayLocalISO } from "../utils/date";
+import SecureImage from "../components/SecureImage";
+import SecureLink from "../components/SecureLink";
 
 type InstallationStatus = "waiting" | "planned" | "assigned" | "onway" | "installing" | "issue" | "completed";
 
@@ -373,10 +376,10 @@ export default function InstallationTracking() {
   // durumu artık sekmelerle ayrıştırılır; mevcut filtreler aynen korunur.
   const baseFilteredRows = useMemo(() => {
     const needle = q.trim().toLocaleLowerCase("tr-TR");
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayLocalISO();
     const weekEnd = new Date();
     weekEnd.setDate(weekEnd.getDate() + 7);
-    const weekEndText = weekEnd.toISOString().slice(0, 10);
+    const weekEndText = toLocalDateISO(weekEnd);
 
     return rows.filter((row) => {
       const haystack = [row.order_id, row.customer_name, row.phone, row.address, row.product_type, row.room, row.width, row.height, row.notes, row.status].join(" ").toLocaleLowerCase("tr-TR");
@@ -468,7 +471,7 @@ export default function InstallationTracking() {
 
   function openDateModal(row: JobRow) {
     setModalRow(row);
-    setModalDate(row.scheduled_date || new Date().toISOString().slice(0, 10));
+    setModalDate(row.scheduled_date || todayLocalISO());
     setModalTime(row.scheduled_time ? String(row.scheduled_time).slice(0, 5) : "10:00");
     setModalType("date");
   }
@@ -565,7 +568,7 @@ export default function InstallationTracking() {
       {/* Modaller */}
       {modalType === "date" && modalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-black">Montaj Tarihi Ata</h2>
               <button onClick={closeModal}><X className="h-5 w-5" /></button>
@@ -590,7 +593,7 @@ export default function InstallationTracking() {
 
       {modalType === "installer" && modalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-black">Montajcı Ata</h2>
               <button onClick={closeModal}><X className="h-5 w-5" /></button>
@@ -619,7 +622,7 @@ export default function InstallationTracking() {
 
       {modalType === "status" && modalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-black">Durum Güncelle</h2>
               <button onClick={closeModal}><X className="h-5 w-5" /></button>
@@ -806,9 +809,9 @@ export default function InstallationTracking() {
                               {item.photos.length > 0 && (
                                 <div className="mt-2 flex gap-2">
                                   {item.photos.slice(0, 3).map((photo, idx) => (
-                                    <a key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-8 w-8 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
-                                      <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
-                                    </a>
+                                    <SecureLink key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-8 w-8 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                      <SecureImage src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                    </SecureLink>
                                   ))}
                                   {item.photos.length > 3 && (
                                     <div className="h-8 w-8 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-xs font-bold text-slate-500">+{item.photos.length - 3}</div>
@@ -869,9 +872,9 @@ export default function InstallationTracking() {
                           {item.photos.length > 0 && (
                             <div className="mt-2 flex gap-2">
                               {item.photos.slice(0, 4).map((photo, idx) => (
-                                <a key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-10 w-10 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
-                                  <img src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
-                                </a>
+                                <SecureLink key={idx} href={photo.url} target="_blank" rel="noreferrer" className="h-10 w-10 rounded border border-slate-300 dark:border-slate-600 overflow-hidden">
+                                  <SecureImage src={photo.url} alt="Fotoğraf" className="h-full w-full object-cover" />
+                                </SecureLink>
                               ))}
                               {item.photos.length > 4 && (
                                 <div className="h-10 w-10 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center text-xs font-bold text-slate-500">+{item.photos.length - 4}</div>

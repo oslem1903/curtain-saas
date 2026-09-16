@@ -18,6 +18,7 @@ export function useActivityTracking() {
 
   useEffect(() => {
     let mounted = true;
+    let removeActivityListeners: (() => void) | undefined;
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
     async function recordLogin() {
@@ -34,7 +35,8 @@ export function useActivityTracking() {
 
         // Call record_login RPC (handles user_activity insert + profiles update)
         try {
-          await supabase.rpc('record_login');
+          const { error } = await supabase.rpc('record_login');
+          if (error) return;
           // Only set key if RPC succeeded
           sessionStorage.setItem(loginStorageKey, '1');
         } catch {
@@ -79,6 +81,8 @@ export function useActivityTracking() {
         // Record login (sessionStorage prevents duplicate in same tab)
         await recordLogin();
 
+        if (!mounted) return;
+
         // Set up heartbeat (every 5 minutes)
         heartbeatTimer = setInterval(recordHeartbeat, 5 * 60 * 1000);
 
@@ -93,7 +97,7 @@ export function useActivityTracking() {
         window.addEventListener('keydown', handleActivity, { once: true });
         window.addEventListener('scroll', handleActivity, { once: true });
 
-        return () => {
+        removeActivityListeners = () => {
           window.removeEventListener('mousemove', handleActivity);
           window.removeEventListener('keydown', handleActivity);
           window.removeEventListener('scroll', handleActivity);
@@ -107,6 +111,7 @@ export function useActivityTracking() {
 
     return () => {
       mounted = false;
+      removeActivityListeners?.();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
     };
   }, []);

@@ -30,7 +30,7 @@ import { EmptyState } from "../components/EmptyState";
 // ============================================================================
 
 type BucketKey = DateBucketKey | "undetermined";
-type TabKey = BucketKey | "collected";
+type TabKey = BucketKey | "collected" | "all";
 
 type RowStatus = CollectionRowStatus;
 
@@ -100,6 +100,7 @@ const STATUS_META: Record<RowStatus, { label: string; className: string }> = {
 };
 
 const TABS: { key: TabKey; label: string; icon: typeof AlertTriangle }[] = [
+  { key: "all", label: "Tüm Açık Alacaklar", icon: Wallet },
   { key: "overdue", label: "Geciken", icon: AlertTriangle },
   { key: "today", label: "Bugün", icon: Clock },
   { key: "week", label: "Bu Hafta", icon: CalendarDays },
@@ -115,7 +116,7 @@ export default function Collections() {
   const [err, setErr] = useState("");
   const [openRows, setOpenRows] = useState<OpenRow[]>([]);
   const [collectedRows, setCollectedRows] = useState<CollectedRow[]>([]);
-  const [activeTab, setActiveTab] = useState<TabKey>("overdue");
+  const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [search, setSearch] = useState("");
 
   useEffect(() => { void loadData(); }, []);
@@ -337,7 +338,7 @@ export default function Collections() {
     };
   }, [rowsByBucket, openRows, collectedRows]);
 
-  const activeOpenRows = activeTab === "collected" ? [] : rowsByBucket[activeTab].filter((r) => matchesSearch(r.customerName, r.customerPhone, r.orderShort));
+  const activeOpenRows = activeTab === "collected" ? [] : (activeTab === "all" ? openRows : rowsByBucket[activeTab]).filter((r) => matchesSearch(r.customerName, r.customerPhone, r.orderShort));
   const activeCollectedRows = activeTab === "collected" ? collectedRows.filter((r) => matchesSearch(r.customerName, r.customerPhone, r.orderShort)) : [];
 
   if (loading) return <div className="p-10 text-center font-bold">Yükleniyor...</div>;
@@ -399,7 +400,7 @@ export default function Collections() {
       <div className="flex gap-2 overflow-x-auto pb-1">
         {TABS.map((tab) => {
           const isCollected = tab.key === "collected";
-          const meta = isCollected ? totals.collected : totals[tab.key as BucketKey];
+          const meta = isCollected ? totals.collected : tab.key === "all" ? { count: openRows.length, amount: totals.totalOpen } : totals[tab.key as BucketKey];
           const Icon = tab.icon;
           return (
             <button

@@ -3,10 +3,13 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { initializeNativeRuntime } from './utils/nativeRuntime'
+import { installRemoteErrorReporting } from './utils/remoteErrorReporting'
 import { installConsoleCapture } from './utils/consoleCapture'
 
 // Global hata/console yakalayıcıyı mümkün olan en erken kur
 installConsoleCapture()
+const stopRemoteReporting = installRemoteErrorReporting()
+if (import.meta.hot) import.meta.hot.dispose(stopRemoteReporting)
 
 async function clearNativeWebCache() {
   const isNative = Boolean((window as any).Capacitor?.isNativePlatform?.());

@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { shareOrDownloadTextFile } from "../utils/nativeShare";
 import { logAction } from "../utils/audit";
+import { todayLocalISO } from "../utils/date";
+import { PAYMENT_METHOD_OPTIONS, paymentLabel } from "../utils/paymentLabels";
 
 type IncomeRow = {
     id: string;
@@ -228,7 +230,7 @@ export function IncomePage() {
                 <SummaryCard title="Toplam Gelir" value={formatTL(total)} tone="green" />
                 <SummaryCard title="Kayıt Sayısı" value={String(rows.length)} tone="blue" />
                 <button
-                    onClick={() => csvDownload("gelirler.csv", ["Tarih", "Tutar", "Yöntem", "Açıklama"], rows.map((r) => [formatDate(r.income_date), Number(r.amount ?? 0).toFixed(2), r.payment_method || "", r.description || ""]))}
+                    onClick={() => csvDownload("gelirler.csv", ["Tarih", "Tutar", "Yöntem", "Açıklama"], rows.map((r) => [formatDate(r.income_date), Number(r.amount ?? 0).toFixed(2), paymentLabel(r.payment_method), r.description || ""]))}
                     className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 p-4 font-bold hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
                 >
                     <Download className="h-5 w-5" />
@@ -238,13 +240,18 @@ export function IncomePage() {
             <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 md:grid-cols-[160px,1fr,180px,auto]">
                 <input value={amount} onChange={(e) => setAmount(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800" placeholder="Tutar" type="number" />
                 <input value={description} onChange={(e) => setDescription(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800" placeholder="Açıklama" />
-                <input value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800" placeholder="Nakit / Kart / EFT" />
+                <select value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800">
+                    <option value="">Ödeme yöntemi</option>
+                    {PAYMENT_METHOD_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                </select>
                 <button onClick={addIncome} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-black text-white">
                     <Plus className="h-4 w-4" />
                     Gelir Ekle
                 </button>
             </div>
-            <LedgerList loading={loading} rows={rows.map((r) => ({ id: r.id, date: r.income_date, title: r.description || "Gelir", meta: r.payment_method || r.source || "-", amount: Number(r.amount ?? 0), positive: true }))} />
+            <LedgerList loading={loading} rows={rows.map((r) => ({ id: r.id, date: r.income_date, title: r.description || "Gelir", meta: paymentLabel(r.payment_method) || r.source || "-", amount: Number(r.amount ?? 0), positive: true }))} />
         </div>
     );
 }
@@ -254,7 +261,7 @@ export function ExpensesPage() {
     const [rows, setRows] = useState<ExpenseRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [amount, setAmount] = useState("");
-    const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [expenseDate, setExpenseDate] = useState(() => todayLocalISO());
     const [dueDate, setDueDate] = useState("");
     const [documentNo, setDocumentNo] = useState("");
     const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
@@ -336,7 +343,7 @@ export function ExpensesPage() {
             }).catch(err => console.error("Audit log failed:", err));
 
             setAmount("");
-            setExpenseDate(new Date().toISOString().slice(0, 10));
+            setExpenseDate(todayLocalISO());
             setDueDate("");
             setDocumentNo("");
             setCategory(EXPENSE_CATEGORIES[0]);
@@ -379,7 +386,12 @@ export function ExpensesPage() {
                     ))}
                 </select>
                 <input value={vendor} onChange={(e) => setVendor(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800" placeholder="Firma / kişi" />
-                <input value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800" placeholder="Yöntem" />
+                <select value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800">
+                    <option value="">Ödeme yöntemi</option>
+                    {PAYMENT_METHOD_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                </select>
                 <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-xl border border-slate-200 bg-transparent px-3 py-3 dark:border-slate-800">
                     <option value="paid">Paid / Ödendi</option>
                     <option value="unpaid">Unpaid / Ödenmedi</option>
@@ -422,7 +434,7 @@ export function ExpensesPage() {
                     </label>
                 </div>
             </div>
-            <LedgerList loading={loading} rows={rows.map((r) => ({ id: r.id, date: r.expense_date, title: r.category || r.vendor || "Gider", meta: `${r.note ? `${r.note} / ` : ""}${r.payment_method || "-"} / ${r.status || "paid"}`, amount: Number(r.amount ?? 0), positive: false }))} />
+            <LedgerList loading={loading} rows={rows.map((r) => ({ id: r.id, date: r.expense_date, title: r.category || r.vendor || "Gider", meta: `${r.note ? `${r.note} / ` : ""}${paymentLabel(r.payment_method) || "-"} / ${r.status || "paid"}`, amount: Number(r.amount ?? 0), positive: false }))} />
         </div>
     );
 }

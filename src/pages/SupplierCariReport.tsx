@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, ArrowUpDown, Calendar, FileText, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { toLocalDateISO } from "../utils/date";
 
 // ─── Types ───────────────────────────────────────────────────
 type SupplierRow = { id: string; name: string };
@@ -197,8 +198,8 @@ export default function SupplierCariReport() {
         const now = new Date();
         const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const last  = new Date(now.getFullYear(), now.getMonth(), 0);
-        setDateFrom(first.toISOString().slice(0, 10));
-        setDateTo(last.toISOString().slice(0, 10));
+        setDateFrom(toLocalDateISO(first));
+        setDateTo(toLocalDateISO(last));
     }
     function setThisYear() {
         const y = new Date().getFullYear();

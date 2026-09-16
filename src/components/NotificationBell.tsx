@@ -16,6 +16,7 @@ import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { cn } from "../utils/cn";
 import { buildDashboardDueRows, todayDateOnly } from "../utils/installments";
+import { toLocalDateISO } from "../utils/date";
 
 type Notification = {
     id: string;
@@ -88,7 +89,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
             const { start, end } = todayRange();
             const now = new Date();
             const soon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-            const today = start.toISOString().slice(0, 10);
+            const today = toLocalDateISO(start);
             const items: OperationalNotification[] = [];
 
             const apptRes = await supabase
@@ -363,7 +364,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
                         className="fixed inset-0 z-40" 
                         onClick={() => setIsOpen(false)}
                     />
-                    <div className="absolute right-2 mt-3 w-screen sm:w-80 md:w-96 max-w-sm bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-200 dark:border-slate-800 shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200">
+                    <div className="fixed right-2 top-[4.5rem] w-[min(24rem,calc(100vw-1rem))] max-h-[calc(100dvh-5.5rem)] bg-white dark:bg-slate-900 rounded-[1.25rem] border border-slate-200 dark:border-slate-800 shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200">
                         <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-between items-center">
                             <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                                 Bildirimler

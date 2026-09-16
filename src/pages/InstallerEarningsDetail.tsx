@@ -5,6 +5,8 @@ import {
     AlertCircle, Loader2, Calendar, Package, Printer
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { todayLocalISO } from "../utils/date";
+import { printHtmlDocument } from "../utils/printDocument";
 
 type InstallerSummary = {
     total_earnings: number;
@@ -264,7 +266,7 @@ export default function InstallerEarningsDetail() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.setAttribute("download", `montajci_${(installer?.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.setAttribute("download", `montajci_${(installer?.name || "isimsiz").toLowerCase().replace(/\s+/g, "_")}_cari_ekstre_${todayLocalISO()}.csv`);
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -292,9 +294,7 @@ export default function InstallerEarningsDetail() {
             })
             .join("");
 
-        const printWindow = window.open("", "_blank", "width=1200,height=800");
-        if (!printWindow) return;
-        printWindow.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>Montajcı Cari Ekstresi - ${installer?.name || ""}</title>
@@ -360,10 +360,8 @@ export default function InstallerEarningsDetail() {
                     <div class="footer">Bu döküm sistem tarafından otomatik oluşturulmuştur. © PerdePRO</div>
                 </body>
             </html>
-        `);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => printWindow.print(), 500);
+        `;
+        void printHtmlDocument(printHtml, { title: "Montajcı Hakediş Detayı", fileName: "montajci-hakedis" });
     }
 
     if (loading) {

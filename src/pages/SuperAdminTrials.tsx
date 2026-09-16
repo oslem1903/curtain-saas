@@ -1,7 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, Calculator, Clock, Copy, KeyRound, Loader2, Mail, RefreshCw, ShieldCheck, UserCog, UserPlus, Wrench } from "lucide-react";
+import { Building2, Calculator, Clock, Copy, KeyRound, Loader2, Mail, RefreshCw, ShieldCheck, Trash2, UserCog, UserPlus, Wrench } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { requestText } from "../utils/requestText";
 import { useRole } from "../context/RoleContext";
 import { CORE_MODULES, ENTERPRISE_MODULES, PRO_MODULES, SOLO_MODULES } from "../context/AuthContext";
 import { type RoleState } from "../auth/roles";
@@ -145,6 +146,7 @@ export default function SuperAdminTrials() {
     const [extendingId, setExtendingId] = useState<string | null>(null);
     const [modulePanelId, setModulePanelId] = useState<string | null>(null);
     const [moduleSavingId, setModuleSavingId] = useState<string | null>(null);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
 
     const canSubmit = useMemo(() => {
         return email.trim().includes("@") && companyName.trim().length >= 2 && days > 0 && days <= 365;
@@ -197,7 +199,6 @@ export default function SuperAdminTrials() {
                     .from("user_invites")
                     .select("id,company_id,email,role,invite_code,expires_at,used_at,created_at")
                     .in("company_id", companyIds)
-                    .is("used_at", null)
                     .order("created_at", { ascending: false });
 
                 if (inviteErr && !/(invite_code|schema cache)/i.test(inviteErr.message || "")) throw inviteErr;
@@ -364,6 +365,30 @@ export default function SuperAdminTrials() {
             }
         } finally {
             setExtendingId(null);
+        }
+    }
+
+    async function handleDeleteTrial(account: CustomerAccount) {
+        const name = (account.name || "").trim();
+        const confirmation = await requestText("Kalıcı silme", `${name} firmasını ve bağlı tüm kayıtları kalıcı olarak silmek için firma adını aynen yazın.`);
+        if (confirmation === null) return;
+        if (confirmation.trim() !== name) {
+            setListErr("Firma adı doğrulanmadı; silme iptal edildi.");
+            return;
+        }
+        setDeletingId(account.id);
+        setListErr("");
+        try {
+            const { error } = await supabase.rpc("super_admin_delete_company", {
+                p_company_id: account.id,
+                p_confirm_name: confirmation.trim(),
+            });
+            if (error) throw error;
+            await loadAccounts();
+        } catch (e: any) {
+            setListErr(String(e?.message || "Deneme hesabı silinemedi."));
+        } finally {
+            setDeletingId(null);
         }
     }
 
@@ -630,7 +655,7 @@ export default function SuperAdminTrials() {
                             {accounts.map((account) => {
                                 const state = trialState(account);
                                 return (
-                                    <div key={account.id} className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                                    <div key={account.id} className="grid grid-cols-1 gap-4 p-5 lg:items-start">
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-2">
                                                 <Building2 className="w-5 h-5 text-indigo-600 shrink-0" />
@@ -645,8 +670,8 @@ export default function SuperAdminTrials() {
                                             </div>
                                         </div>
 
-                                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 shrink-0">
-                                            <div className="flex items-center gap-3">
+                                        <div className="flex flex-col gap-3 min-w-0">
+                                            <div className="flex flex-wrap items-center gap-3">
                                                 <div className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">
                                                     <Clock className="w-4 h-4 text-slate-400" />
                                                     {daysLeft(account.trial_ends_at)} gün
@@ -657,7 +682,7 @@ export default function SuperAdminTrials() {
                                             </div>
 
                                             {account.subscription_plan !== "lifetime" ? (
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex flex-wrap items-center gap-2">
                                                     <input
                                                         type="number"
                                                         min={1}
@@ -689,6 +714,15 @@ export default function SuperAdminTrials() {
                                                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-700 hover:bg-indigo-100"
                                             >
                                                 Modül Tanımla
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteTrial(account)}
+                                                disabled={deletingId === account.id}
+                                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                            >
+                                                {deletingId === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                                                Kalıcı Sil
                                             </button>
                                         </div>
                                         {modulePanelId === account.id ? (
@@ -738,9 +772,9 @@ export default function SuperAdminTrials() {
                                             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/50 dark:bg-amber-900/10 lg:col-span-2">
                                                 <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                                                     <div>
-                                                        <div className="text-sm font-black text-amber-950 dark:text-amber-100">Açık davet kodları</div>
+                                                        <div className="text-sm font-black text-amber-950 dark:text-amber-100">Davet kodları</div>
                                                         <div className="text-xs font-semibold text-amber-700 dark:text-amber-200">
-                                                            Kullanıcı kodu kaybederse buradan tekrar kopyalayabilirsiniz.
+                                                            Kullanıcı kodu kaybederse, kullanılmış veya süresi geçmiş olsa bile geçmişten bulabilirsiniz.
                                                         </div>
                                                     </div>
                                                 </div>
@@ -761,6 +795,7 @@ export default function SuperAdminTrials() {
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => copyPendingInviteCode(invite.invite_code)}
+                                                                    title="Kodu tekrar kopyala"
                                                                     className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700"
                                                                 >
                                                                     <Copy className="h-4 w-4" />

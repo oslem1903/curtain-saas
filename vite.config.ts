@@ -1,10 +1,16 @@
-﻿import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode, command }) => {
+  const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
+  if (command === 'build' && (!(env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URI) || !env.VITE_SUPABASE_ANON_KEY)) {
+    throw new Error('Supabase bağlantı ayarları eksik: VITE_SUPABASE_URL ve VITE_SUPABASE_ANON_KEY gerekli.');
+  }
+  return {
+  define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(env.VITE_APP_VERSION || '1.0.4.1') },
   plugins: [
     react(),
     tailwindcss(),
@@ -19,8 +25,8 @@ export default defineConfig({
       },
       includeAssets: ['favicon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'Curtain Saas',
-        short_name: 'Curtain Saas',
+        name: 'PerdePRO',
+        short_name: 'PerdePRO',
         description: 'Perde ve jaluzi firmalari icin yonetim sistemi',
         theme_color: '#4f46e5',
         icons: [
@@ -45,6 +51,20 @@ export default defineConfig({
     })
   ],
   base: './',
+  build: {
+    // Agir kutuphaneler ayri parcalara alinir: ana paket kucuk kalir, Excel/PDF
+    // ve grafik kodu yalnizca o ozellik kullanildiginda indirilir.
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-supabase': ['@supabase/supabase-js'],
+          'vendor-xlsx': ['xlsx', 'exceljs'],
+        },
+      },
+    },
+  },
 
+  };
 })
-

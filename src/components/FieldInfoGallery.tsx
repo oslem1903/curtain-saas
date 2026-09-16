@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Volume2, Maximize2, X, ChevronLeft, ChevronRight, Tag } from "lucide-react";
 import type { FieldInfo } from "../utils/fieldInfo";
 import { hasFieldInfo } from "../utils/fieldInfo";
+import SecureImage from "./SecureImage";
 
 export default function FieldInfoGallery({ info, compact = false }: { info: FieldInfo; compact?: boolean }) {
   const [lightbox, setLightbox] = useState<number | null>(null);
@@ -31,7 +32,7 @@ export default function FieldInfoGallery({ info, compact = false }: { info: Fiel
         <div className="flex flex-wrap gap-2">
           {photos.map((p, i) => (
             <button key={p.url + i} type="button" onClick={() => setLightbox(i)} title={`${p.label} — büyütmek için tıkla`} className="group relative">
-              <img src={p.url} alt={p.label} loading="lazy" className={`${thumbSize} rounded-lg object-cover ring-1 ring-amber-300`} />
+              <SecureImage src={p.url} alt={p.label} loading="lazy" className={`${thumbSize} rounded-lg object-cover ring-1 ring-amber-300`} />
               <span className="absolute inset-0 hidden items-center justify-center rounded-lg bg-black/30 group-hover:flex">
                 <Maximize2 className="h-4 w-4 text-white" />
               </span>
@@ -64,7 +65,7 @@ export default function FieldInfoGallery({ info, compact = false }: { info: Fiel
             {photos.length > 1 ? (
               <button type="button" onClick={() => setLightbox((lightbox - 1 + photos.length) % photos.length)} className="shrink-0 rounded-full bg-white/10 p-2 text-white"><ChevronLeft className="h-6 w-6" /></button>
             ) : null}
-            <img src={photos[lightbox].url} alt={photos[lightbox].label} className="mx-2 max-h-full max-w-full rounded-lg object-contain" />
+            <SecureImage src={photos[lightbox].url} alt={photos[lightbox].label} className="mx-2 max-h-full max-w-full rounded-lg object-contain" />
             {photos.length > 1 ? (
               <button type="button" onClick={() => setLightbox((lightbox + 1) % photos.length)} className="shrink-0 rounded-full bg-white/10 p-2 text-white"><ChevronRight className="h-6 w-6" /></button>
             ) : null}

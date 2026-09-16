@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { Upload, X, Check, Loader2 } from "lucide-react";
+import SecureImage from "./SecureImage";
 
 type CompanySettingsState = {
     id: string;
@@ -266,7 +267,7 @@ export function CompanySettingsCard() {
                         <div className="relative group">
                             <div className="w-32 h-32 rounded-2xl bg-slate-50 dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden transition-all group-hover:border-primary-400">
                                 {settings.logo_url ? (
-                                    <img
+                                    <SecureImage
                                         src={settings.logo_url}
                                         alt="Company Logo"
                                         className="w-full h-full object-contain p-2"

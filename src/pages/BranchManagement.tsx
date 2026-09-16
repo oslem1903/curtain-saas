@@ -192,7 +192,7 @@ export default function BranchManagement() {
             {/* Modal */}
             {showAddModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+                    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg shadow-2xl animate-in zoom-in duration-300 max-h-[calc(100dvh-2rem)] overflow-y-auto">
                         <div className="p-8">
                             <h3 className="text-2xl font-bold mb-6">Yeni Şube Ekle</h3>
                             <div className="space-y-4">

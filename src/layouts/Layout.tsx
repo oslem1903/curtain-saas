@@ -45,6 +45,7 @@ import { useImpersonation } from "../context/ImpersonationContext";
 import SupportModal from "../components/SupportModal";
 import NotificationBell from "../components/NotificationBell";
 import AppUpdateNotifier from "../components/AppUpdateNotifier";
+import SecureImage from "../components/SecureImage";
 
 function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -346,7 +347,7 @@ export const Layout = () => {
       .catch(() => setCurrentUserData(null));
   }, [realRole]);
 
-  const [companyName, setCompanyName] = useState("Curtain Saas");
+  const [companyName, setCompanyName] = useState("PerdePRO");
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [isExpiredTrial, setIsExpiredTrial] = useState(false);
   const [trialInfo, setTrialInfo] = useState<TrialInfo | null>(null);
@@ -742,15 +743,26 @@ export const Layout = () => {
       >
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {role !== "super_admin" && companyLogo ? (
-              <img src={companyLogo} alt={companyName} className="w-8 h-8 rounded-lg object-contain bg-white shrink-0 shadow-sm" />
+            {role === "super_admin" ? (
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-black text-sm shrink-0 shadow-md">
+                P
+              </div>
+            ) : companyLogo ? (
+              <SecureImage
+                src={companyLogo}
+                alt={companyName}
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+                className="w-8 h-8 rounded-lg object-contain bg-white shrink-0 shadow-sm"
+              />
             ) : (
               <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center text-white font-bold shrink-0 shadow-md">
-                {(role === "super_admin" ? "Curtain Saas" : companyName).charAt(0).toUpperCase()}
+                {companyName.charAt(0).toUpperCase()}
               </div>
             )}
-            <span className="text-xl font-bold bg-gradient-to-r from-primary-700 to-primary-500 bg-clip-text text-transparent dark:from-primary-400 dark:to-primary-200 truncate">
-              {role === "super_admin" ? "Curtain Saas" : companyName}
+            <span className="text-xl font-black tracking-tight text-slate-900 dark:text-white truncate">
+              {role === "super_admin" ? "PerdePRO" : companyName}
             </span>
           </div>
           <button
@@ -784,7 +796,8 @@ export const Layout = () => {
             <>
               {hasModule("admin") && <NavItem to="/dashboard" icon={LayoutDashboard} label="Gösterge Paneli" onClick={closeMobileMenu} />}
               {hasModule("customers") && <NavItem to="/customers" icon={Users} label="Müşteriler" onClick={closeMobileMenu} />}
-              {hasModule("measurements") && <NavItem to="/measurements/new" icon={Ruler} label="Ölçü & Teklifler" onClick={closeMobileMenu} />}
+              {/* Liste ekranı açılır; yeni ölçü formuna liste içindeki butondan gidilir. */}
+              {hasModule("measurements") && <NavItem to="/quotes" icon={Ruler} label="Ölçü & Teklifler" onClick={closeMobileMenu} />}
               {hasModule("orders") && <NavItem to="/orders" icon={ShoppingCart} label="Siparişler" onClick={closeMobileMenu} />}
               {hasModule("measurements") && <NavItem to="/appointments/new" icon={Calendar} label="Randevular" onClick={closeMobileMenu} />}
               {hasModule("suppliers") && <NavItem to="/suppliers" icon={Truck} label="Tedarikçiler" onClick={closeMobileMenu} />}
@@ -933,8 +946,8 @@ export const Layout = () => {
           </button>
 
 	          <div className="min-w-0 flex-1 font-bold text-slate-900 dark:text-white text-sm sm:text-lg uppercase tracking-tight flex items-center gap-2">
-	            {role !== "super_admin" && companyLogo && <img src={companyLogo} alt="" className="w-5 h-5 sm:w-6 sm:h-6 object-contain hidden sm:block" />}
-	            <span className="min-w-0 max-w-[42vw] truncate sm:max-w-none">{role === "super_admin" ? "Curtain Saas" : companyName}</span>
+	            {role !== "super_admin" && companyLogo && <SecureImage src={companyLogo} alt="" className="w-5 h-5 sm:w-6 sm:h-6 object-contain hidden sm:block" />}
+	            <span className="min-w-0 max-w-[42vw] truncate sm:max-w-none">{role === "super_admin" ? "PerdePRO" : companyName}</span>
 	            {/* Simulation Badge if active */}
 	            {isSimulating && (
 	                <span className="hidden sm:inline-flex shrink-0 text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full whitespace-nowrap">
@@ -960,6 +973,16 @@ export const Layout = () => {
                   <option key={r} value={r}>{roleDropdownLabels[r] || r}</option>
                 ))}
               </select>
+            )}
+            {realRole === "super_admin" && isActingAsTenant && (
+              <button
+                type="button"
+                onClick={() => switchDemoRole("super_admin")}
+                className="inline-flex items-center rounded-full bg-amber-500 px-3 py-1.5 text-[11px] font-black text-white shadow hover:bg-amber-600"
+                title="Süper Admin ekranına dön"
+              >
+                Süper Admin'e Dön
+              </button>
             )}
             {/* Notification Bell (Global) */}
             {currentUserData && <NotificationBell userId={currentUserData.userId} />}

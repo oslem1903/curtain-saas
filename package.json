@@ -1,7 +1,7 @@
 {
-  "name": "curtain-saas",
+  "name": "perdepro",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.4",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -16,27 +16,46 @@
     "cap:build": "npm run build && npx cap sync",
     "cap:open-android": "npx cap open android",
     "cap:open-ios": "npx cap open ios",
-    "cap:sync-ios": "npm run build && npx cap sync ios"
+    "cap:sync-ios": "npm run build && npx cap sync ios",
+    "test:calc": "tsx scripts/check-calculations.ts",
+    "qa:print": "node scripts/qa-print-check.mjs",
+    "qa:tabstrip": "node scripts/qa-tabstrip-check.mjs",
+    "qa:browser": "node scripts/qa-browser-check.mjs",
+    "qa": "npm run lint && npm run build && npm run test:calc && npm run qa:print",
+    "check:link": "node scripts/check-supabase-link.mjs",
+    "db:push": "node scripts/check-supabase-link.mjs && npx --yes supabase db push",
+    "db:migrate": "node scripts/check-supabase-link.mjs && npx --yes supabase migration up"
   },
   "build": {
     "appId": "com.curtainsaas.app",
-    "productName": "Perde Yönetim SaaS",
+    "productName": "PerdePRO",
+    "asar": true,
     "directories": {
       "output": "release"
     },
     "win": {
       "target": "nsis",
-      "icon": "public/pwa-512x512.png"
+      "icon": "public/pwa-512x512.png",
+      "forceCodeSigning": false,
+      "verifyUpdateCodeSignature": false,
+      "artifactName": "PerdePRO-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PerdePRO",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
       "public/**/*"
-    ]
+    ],
+    "copyright": "PerdePRO"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
@@ -88,10 +107,12 @@
     "globals": "^16.5.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
+    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "vite-plugin-pwa": "^1.2.0",
     "wait-on": "^9.0.5"
-  }
+  },
+  "description": "PerdePRO perde işletmesi yönetim uygulaması"
 }

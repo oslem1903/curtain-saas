@@ -71,7 +71,7 @@ export default function PaymentSetupSection({
       ) : (
         <div className="space-y-2">
           {rows.map((row, idx) => (
-            <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+            <div key={idx} className="grid min-w-0 grid-cols-1 gap-2 [&>input]:min-w-0 [&>input]:w-full">
               <input
                 type="number"
                 min={0}

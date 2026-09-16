@@ -1,3 +1,4 @@
+import { requestText } from "../utils/requestText";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   Send,
   Smartphone,
   TestTube2,
+  Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
@@ -195,6 +197,31 @@ export default function SuperAdminMobileManagement({ section = "overview" }: Pro
       setNotice(e?.message || "Mobil yönetim verileri yüklenemedi.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteCompany(company: CompanyRow) {
+    const confirmName = await requestText(
+      `"${company.name}" firmasını ve veritabanı kurallarına göre bağlı kayıtları KALICI OLARAK silmek üzeresiniz!\n\nSilmeyi onaylamak için firma adını ("${company.name}") yazın:`,
+    );
+
+    if (confirmName !== company.name) {
+      if (confirmName !== null) alert("Firma adı eşleşmedi, silme işlemi iptal edildi.");
+      return;
+    }
+
+    try {
+
+      const { data: deletedId, error } = await supabase.rpc("super_admin_delete_company", {
+                p_company_id: company.id, p_confirm_name: confirmName,
+            });
+            if (!error && deletedId !== company.id) throw new Error("Firma silme sonucu doğrulanamadı.");
+      if (error) throw error;
+
+      alert(`"${company.name}" firması kalıcı olarak silindi.`);
+      await loadData();
+    } catch (e: any) {
+      alert(e?.message || "Firma silinirken hata oluştu.");
     }
   }
 
@@ -433,7 +460,7 @@ export default function SuperAdminMobileManagement({ section = "overview" }: Pro
             {readRows.length === 0 ? (
               <div className="p-5 text-sm font-semibold text-slate-500">Henüz firma kaydı yok.</div>
             ) : readRows.map((row) => (
-              <div key={row.company.id} className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-[1fr_auto_auto_auto_auto] sm:items-center">
+              <div key={row.company.id} className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-[1fr_auto_auto_auto_auto_auto] sm:items-center">
                 <div>
                   <div className="font-black text-slate-900 dark:text-white">{row.company.name || "İsimsiz Firma"}</div>
                   <div className="text-xs text-slate-500">Son aktif: {formatTime(row.lastSeen)}</div>
@@ -443,6 +470,16 @@ export default function SuperAdminMobileManagement({ section = "overview" }: Pro
                 <div className="text-sm text-slate-500">{row.active} aktif</div>
                 <div className={`rounded-full px-3 py-1 text-xs font-black ${row.status === "Kritik" ? "bg-red-50 text-red-700" : row.status === "Güncel" ? "bg-emerald-50 text-emerald-700" : row.status === "Cihaz yok" ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700"}`}>
                   {row.status}
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    title="Firmayı ve tüm verileri sil"
+                    onClick={() => deleteCompany(row.company)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               </div>
             ))}

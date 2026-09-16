@@ -4,6 +4,8 @@ import { ArrowLeft, Eye, Plus, Printer, Save, Send, ShoppingCart, Trash2 } from 
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { logAction } from "../utils/audit";
 import { notifyInvoiceCreated } from "../services/notificationManager";
+import { toLocalDateISO, todayLocalISO } from "../utils/date";
+import { printHtmlDocument } from "../utils/printDocument";
 
 type InvoiceItem = {
     id?: string;
@@ -83,7 +85,7 @@ export default function InvoiceDetail() {
 
     const [type, setType] = useState("sales");
     const [no, setNo] = useState("");
-    const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+    const [date, setDate] = useState(todayLocalISO());
     const [customerId, setCustomerId] = useState("");
     const [supplierId, setSupplierId] = useState("");
     const [orderId, setOrderId] = useState("");
@@ -170,12 +172,12 @@ export default function InvoiceDetail() {
             if (data) {
                 setType(data.invoice_type || "sales");
                 setNo(data.invoice_no || "");
-                setDate(new Date(data.date).toISOString().split("T")[0]);
+                setDate(toLocalDateISO(new Date(data.date)));
                 setCustomerId(data.customer_id || "");
                 setSupplierId(data.supplier_id || "");
                 setOrderId(data.order_id || "");
                 setStatus(data.status || "draft");
-                setDueDate(data.due_date ? new Date(data.due_date).toISOString().split("T")[0] : "");
+                setDueDate(data.due_date ? toLocalDateISO(new Date(data.due_date)) : "");
                 setPaidAmount(Number(data.paid_amount || 0));
                 setPaymentMethod(data.payment_method || "");
                 setNotes(data.notes || "");
@@ -317,9 +319,7 @@ export default function InvoiceDetail() {
             )
             .join("");
 
-        const win = window.open("", "_blank", "width=900,height=1100");
-        if (!win) return;
-        win.document.write(`
+        const printHtml = `
             <html>
                 <head>
                     <title>${no || "Fatura"}</title>
@@ -362,9 +362,8 @@ export default function InvoiceDetail() {
                     </div>
                 </body>
             </html>
-        `);
-        win.document.close();
-        win.focus();
+        `;
+        void printHtmlDocument(printHtml, { title: "Fatura", fileName: "fatura" });
     }
 
     function handleWhatsAppShare() {

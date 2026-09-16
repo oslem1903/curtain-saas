@@ -48,3 +48,18 @@ dist-ssr
 .tmp/
 .claude/
 supabase/.temp/
+
+# Android release signing — NEVER commit (private key + password)
+android/keystore.properties
+*.jks
+*.keystore
+
+# Local backups / delivery packages / scratch QA files — not source
+backup-before-*/
+delivery/
+Claude outputs/
+_qa_*.bat
+_qa_out.txt
+.__wtest
+SHA256SUMS.txt
+android/app/build.gradle.bom-yedek

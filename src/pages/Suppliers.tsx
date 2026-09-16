@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
     Plus, Truck, Mail, MapPin, Wallet, DollarSign,
     TrendingUp, X, Edit3, AlertCircle, Search, Package
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { PAYMENT_METHOD_OPTIONS, paymentLabel, paymentDescription } from "../utils/paymentLabels";
 import { withoutDeleted } from "../utils/softDelete";
+import { saveSupplierPrice, resolveSupplierPriceNameColumn } from "../utils/supplierPriceCompatibility";
+import { saveProductWithCostCompatibility } from "../utils/productSchemaCompatibility";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
 import { EmptyState } from "../components/EmptyState";
+import { todayLocalISO } from "../utils/date";
 
 type Supplier = {
     id: string;
@@ -96,10 +101,10 @@ function StatCard({ label, value, icon, color, onClick }: StatCardProps) {
             onClick={onClick}
             className={`rounded-2xl border p-6 text-left transition-all hover:shadow-lg bg-gradient-to-br ${colorClasses[color]} cursor-pointer`}
         >
-            <div className="flex items-start justify-between">
-                <div>
+            <div className="flex flex-col-reverse items-start gap-3">
+                <div className="min-w-0 w-full">
                     <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">{label}</p>
-                    <p className="text-3xl font-black text-slate-900 dark:text-white mt-2">{value}</p>
+                    <p className="text-xl font-black text-slate-900 dark:text-white mt-2 whitespace-nowrap overflow-x-auto">{value}</p>
                 </div>
                 <div className={`p-3 rounded-xl bg-white/50 dark:bg-slate-900/30 ${iconColors[color]}`}>
                     {icon}
@@ -154,8 +159,8 @@ export const Suppliers = () => {
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentAmount, setPaymentAmount] = useState("");
-    const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
-    const [paymentMethod, setPaymentMethod] = useState("cash");
+    const [paymentDate, setPaymentDate] = useState(todayLocalISO());
+    const [paymentMethod, setPaymentMethod] = useState("nakit");
     const [paymentNote, setPaymentNote] = useState("");
     const [paymentSaving, setPaymentSaving] = useState(false);
 
@@ -167,7 +172,7 @@ export const Suppliers = () => {
 
             const { data, error, count } = await withoutDeleted(supabase
                 .from("suppliers")
-                .select("id, name, phone, email, address, created_at", { count: 'exact' })
+                .select("id, company_id, name, phone, email, address, created_at", { count: 'exact' })
                 .eq("company_id", ctx.company_id))
                 .order("name")
                 .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
@@ -240,7 +245,9 @@ export const Suppliers = () => {
                     };
                 })
             );
-        } catch { }
+        } catch {
+            // Bakiye ozeti opsiyoneldir; hata durumunda liste bakiyesiz gosterilir.
+        }
     }
 
     async function createSupplier() {
@@ -281,10 +288,14 @@ export const Suppliers = () => {
         }
     }
 
-    async function openSupplierDetail(supplier: Supplier) {
+    async function openSupplierDetail(supplier: Supplier, tab: typeof detailTab = "general") {
         setSelectedSupplier(supplier);
         setEditMode(false);
-        setDetailTab("general");
+        setDetailTab(tab);
+        setPrices([]);
+        setTransactions([]);
+        setShowProductForm(false);
+        setEditingProductId(null);
         setEditName(supplier.name);
         setEditPhone(supplier.phone || "");
         setEditEmail(supplier.email || "");
@@ -370,7 +381,9 @@ export const Suppliers = () => {
                 description: row.description || "",
                 created_at: row.created_at
             })));
-        } catch { }
+        } catch {
+            // Hareket gecmisi opsiyoneldir; hata durumunda bos liste gosterilir.
+        }
     }
 
     async function updateSupplier() {
@@ -488,7 +501,7 @@ export const Suppliers = () => {
                     supplier_id: selectedSupplier.id,
                     transaction_type: "payment",
                     amount,
-                    description: paymentNote || `${paymentMethod} ile ödeme`,
+                    description: paymentNote || `${paymentLabel(paymentMethod)} ile ödeme`,
                     transaction_date: new Date(paymentDate).toISOString(),
                     payment_method: paymentMethod,
                     reference_no: null,
@@ -501,7 +514,7 @@ export const Suppliers = () => {
             setSuccess("Ödeme kaydedildi!");
             setPaymentAmount("");
             setPaymentNote("");
-            setPaymentMethod("cash");
+            setPaymentMethod("nakit");
             setShowPaymentModal(false);
             await loadSuppliers();
             if (selectedSupplier) {
@@ -515,6 +528,11 @@ export const Suppliers = () => {
             setPaymentSaving(false);
         }
     }
+
+/** RLS yazma izni yoksa PostgREST 0 satir dondurur; kullaniciya anlasilir mesaj. */
+const RLS_WRITE_HINT =
+    "Kayit veritabanina yazilamadi. Bu tedarikci fiyat listesine yazma yetkiniz olmayabilir " +
+    "(yalnizca sahip/yonetici/muhasebe rolleri yazabilir) ya da firma salt-okunur durumda.";
 
     async function handleSaveProduct() {
         if (!selectedSupplier) return;
@@ -535,15 +553,21 @@ export const Suppliers = () => {
             };
             
             // Upsert products table manually to avoid unique constraint issues
-            let prodRes: any = await supabase.from("products").select("id").eq("company_id", ctx.company_id).eq("name", prodPayload.name).single();
-            if (prodRes.data?.id) {
-                await supabase.from("products").update(prodPayload).eq("id", prodRes.data.id);
+            const original = prices.find(p => p.id === editingProductId);
+            let lookup = supabase.from("products").select("id").eq("company_id", ctx.company_id);
+            lookup = original?.product_id ? lookup.eq("id", original.product_id) : lookup.eq("name", original?.product_name || prodPayload.name);
+            const prodRes = await lookup.limit(1);
+            if (prodRes.error) throw prodRes.error;
+            const existingProduct = (prodRes.data as Array<{ id: string }> | null)?.[0];
+            if (existingProduct?.id) {
+                const productId = existingProduct.id;
+                const updated = await saveProductWithCostCompatibility(prodPayload, payload =>
+                    supabase.from("products").update(payload).eq("company_id", ctx.company_id).eq("id", productId));
+                if (updated.error) throw updated.error;
             } else {
-                let insRes: any = await supabase.from("products").insert([prodPayload]).select("id").single();
-                if (insRes.error && /cost_price/i.test(String(insRes.error.message))) {
-                    const fb = { ...prodPayload } as any; delete fb.cost_price;
-                    await supabase.from("products").insert([fb]);
-                }
+                const insRes = await saveProductWithCostCompatibility(prodPayload, payload =>
+                    supabase.from("products").insert([payload]).select("id").single());
+                if (insRes.error) throw insRes.error;
             }
             
             const pricePayload = {
@@ -555,39 +579,43 @@ export const Suppliers = () => {
                 currency: "TRY"
             };
             
-            // Check existence manually to prevent duplicates
-            let existingPriceRes = await supabase.from("supplier_product_prices")
+            // Ürün adı kolonu şemaya göre product_name ya da product_type olabilir
+            const nameCol = await resolveSupplierPriceNameColumn(column =>
+                supabase.from("supplier_product_prices").select(`id, ${column}`).limit(1));
+
+            // Ayni urunun mukerrer kaydini onlemek icin once var mi diye bak.
+            // .single()/.maybeSingle() KULLANILMAZ: ayni isimde birden fazla eski
+            // kayit varsa PostgREST "multiple (or no) rows returned" hatasi verirdi.
+            const existingPriceRes = await supabase.from("supplier_product_prices")
                 .select("id")
                 .eq("company_id", ctx.company_id)
                 .eq("supplier_id", selectedSupplier.id)
-                .eq("product_name", prodPayload.name)
-                .single();
+                .eq(nameCol, prodPayload.name)
+                .limit(1);
 
             let isUpdate = false;
-            let targetId = editingProductId || existingPriceRes.data?.id;
+            const targetId = editingProductId || existingPriceRes.data?.[0]?.id;
 
             if (targetId) {
                 // Update
                 isUpdate = true;
-                let pRes: any = await supabase.from("supplier_product_prices")
-                    .update({ unit_cost: prodPayload.cost_price, product_category: prodPayload.category })
-                    .eq("id", targetId);
-                if (pRes.error && /(product_category)/i.test(String(pRes.error.message))) {
-                     pRes = await supabase.from("supplier_product_prices")
-                        .update({ unit_price: prodPayload.cost_price })
-                        .eq("id", targetId);
-                }
+                const pRes = await saveSupplierPrice({ product_name: prodPayload.name, unit_cost: prodPayload.cost_price, product_category: prodPayload.category }, payload =>
+                    supabase.from("supplier_product_prices").update(payload)
+                        .eq("company_id", ctx.company_id).eq("supplier_id", selectedSupplier.id)
+                        .eq("id", targetId).select("*"));
                 if (pRes.error) throw pRes.error;
+                const savedRow = (pRes.data as any[] | null)?.[0];
+                // 0 satir donduyse kayit RLS tarafindan engellenmistir (PostgREST
+                // bunu kriptik "multiple (or no) rows returned" olarak bildirirdi).
+                if (!savedRow) throw new Error(RLS_WRITE_HINT);
+                const savedName = savedRow.product_name ?? savedRow.product_type;
+                if (savedName !== prodPayload.name) throw new Error("Ürün adı kayıttan doğrulanamadı. Lütfen yeniden deneyin.");
             } else {
                 // Insert
-                let pRes: any = await supabase.from("supplier_product_prices")
-                    .insert([pricePayload]);
-                    
-                if (pRes.error && /(product_id|product_category|currency)/i.test(String(pRes.error.message))) {
-                    const fb = { company_id: ctx.company_id, supplier_id: selectedSupplier.id, product_type: prodPayload.category, unit_price: prodPayload.cost_price };
-                    pRes = await supabase.from("supplier_product_prices").insert([fb]);
-                }
+                const pRes = await saveSupplierPrice(pricePayload, payload =>
+                    supabase.from("supplier_product_prices").insert([payload]).select("*"));
                 if (pRes.error) throw pRes.error;
+                if (!(pRes.data as any[] | null)?.[0]) throw new Error(RLS_WRITE_HINT);
             }
             
             setSuccess(isUpdate ? (editingProductId ? "Ürün güncellendi!" : "Bu ürün zaten kayıtlıydı, fiyatı güncellendi!") : "Ürün ve fiyat kaydedildi!");
@@ -638,7 +666,9 @@ export const Suppliers = () => {
             if (deletingProduct.id) {
                 query = query.eq("id", deletingProduct.id);
             } else {
-                query = query.eq("product_name", deletingProduct.product_name);
+                const nameCol = await resolveSupplierPriceNameColumn(column =>
+                    supabase.from("supplier_product_prices").select(`id, ${column}`).limit(1));
+                query = query.eq(nameCol, deletingProduct.product_name);
             }
             
             const { error } = await query;
@@ -741,7 +771,7 @@ export const Suppliers = () => {
                             color="orange"
                         />
                         <StatCard
-                            label="Borçlu Tedarikçi"
+                            label="Borçlu Olduğumuz Tedarikçiler"
                             value={dashboardStats.overdueCount}
                             icon={<AlertCircle className="w-6 h-6" />}
                             color="red"
@@ -796,7 +826,7 @@ export const Suppliers = () => {
                     )
                 ) : (
                     <div className="flex flex-col">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                             {filteredSuppliers.map((supplier) => {
                             const bal = balances.find(b => b.supplierId === supplier.id);
                             const firstLetter = getFirstLetter(supplier.name);
@@ -804,10 +834,10 @@ export const Suppliers = () => {
                             return (
                                 <div
                                     key={supplier.id}
-                                    className="rounded-3xl border border-slate-150 dark:border-slate-700/50 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-xl hover:border-primary-200 dark:hover:border-primary-900/50 transition-all duration-300 overflow-hidden backdrop-blur-sm"
+                                    className="rounded-3xl border border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-900/50 shadow-sm hover:shadow-xl hover:border-primary-200 dark:hover:border-primary-900/50 transition-all duration-300 overflow-hidden backdrop-blur-sm"
                                 >
                                     {/* Header */}
-                                    <div className="px-8 py-6 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 border-b border-slate-200 dark:border-slate-700/50">
+                                    <div className="px-4 py-4 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 border-b border-slate-200 dark:border-slate-700/50">
                                         <div className="flex items-start gap-5">
                                             <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center shadow-lg">
                                                 <span className="text-2xl font-black text-white">{firstLetter}</span>
@@ -820,7 +850,7 @@ export const Suppliers = () => {
                                     </div>
 
                                     {/* Body */}
-                                    <div className="px-8 py-6 space-y-5">
+                                    <div className="px-4 py-4 space-y-3">
                                         {/* Contact */}
                                         <div className="space-y-3">
                                             {supplier.email && (
@@ -838,7 +868,7 @@ export const Suppliers = () => {
                                         </div>
 
                                         {/* Finance Summary */}
-                                        <div className="grid grid-cols-3 gap-3 pt-2">
+                                        <div className="grid grid-cols-1 gap-2 [&_p]:whitespace-nowrap [&>div]:flex [&>div]:items-center [&>div]:justify-between [&>div]:gap-3 [&>div]:px-3 [&>div]:py-2 [&>div>p]:mt-0 [&>div>p:last-child]:text-lg">
                                             <div className="rounded-2xl bg-gradient-to-br from-red-50 to-red-100/50 dark:from-red-950/40 dark:to-red-900/20 p-4 text-center border border-red-100 dark:border-red-900/30">
                                                 <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Borç</p>
                                                 <p className="text-2xl font-black text-red-600 dark:text-red-400 mt-2">
@@ -869,7 +899,7 @@ export const Suppliers = () => {
                                     </div>
 
                                     {/* Actions */}
-                                    <div className="px-8 py-5 border-t border-slate-150 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/30 grid grid-cols-2 gap-3">
+                                    <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/30 grid grid-cols-2 gap-3">
                                         <button
                                             onClick={() => nav(`/suppliers/${supplier.id}`)}
                                             className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs font-bold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-primary-300 dark:hover:border-primary-900/50 transition-all"
@@ -878,10 +908,7 @@ export const Suppliers = () => {
                                             Cari
                                         </button>
                                         <button
-                                            onClick={async () => {
-                                                await openSupplierDetail(supplier);
-                                                setDetailTab("products");
-                                            }}
+                                            onClick={() => openSupplierDetail(supplier, "products")}
                                             className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs font-bold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-primary-300 dark:hover:border-primary-900/50 transition-all"
                                         >
                                             <Package className="w-4 h-4" />
@@ -1001,10 +1028,10 @@ export const Suppliers = () => {
                     </div>
                 )}
 
-                {selectedSupplier && !showPaymentModal && (
-                    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[90vh] overflow-hidden w-full max-w-3xl shadow-2xl flex flex-col">
-                            <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-primary-600 to-primary-700">
+                {selectedSupplier && !showPaymentModal && createPortal(
+                    <div className="supplier-detail-overlay fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-3">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl h-[calc(100dvh-2rem)] max-h-[900px] overflow-hidden w-full max-w-3xl shadow-2xl flex flex-col">
+                            <div className="shrink-0 flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-primary-600 to-primary-700">
                                 <h2 className="text-2xl font-black text-white">{selectedSupplier.name}</h2>
                                 <button
                                     onClick={() => setSelectedSupplier(null)}
@@ -1014,7 +1041,7 @@ export const Suppliers = () => {
                                 </button>
                             </div>
 
-                            <div className="flex gap-0 border-b border-slate-200 dark:border-slate-800 overflow-x-auto">
+                            <div className="shrink-0 flex gap-0 border-b border-slate-200 dark:border-slate-800 overflow-x-auto">
                                 {[
                                     { id: "general" as const, label: "Genel" },
                                     { id: "products" as const, label: "Ürünler" },
@@ -1024,7 +1051,7 @@ export const Suppliers = () => {
                                     <button
                                         key={tab.id}
                                         onClick={() => setDetailTab(tab.id)}
-                                        className={`px-6 py-3 font-bold border-b-2 transition whitespace-nowrap ${
+                                        className={`flex-1 px-2 sm:px-6 py-3 font-bold border-b-2 transition whitespace-nowrap ${
                                             detailTab === tab.id
                                                 ? "border-primary-600 text-primary-600 dark:text-primary-400"
                                                 : "border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
@@ -1035,7 +1062,7 @@ export const Suppliers = () => {
                                 ))}
                             </div>
 
-                            <div className="overflow-y-auto flex-1 p-6">
+                            <div className="min-h-0 overflow-y-auto overscroll-contain flex-1 p-4">
                                 {detailTab === "general" && (
                                     <div className="space-y-4">
                                         {!editMode ? (
@@ -1150,7 +1177,7 @@ export const Suppliers = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs font-semibold mb-1">Ürün Adı *</label>
-                                                    <input value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} className="w-full p-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" placeholder="Örn: Stor Perde Beyaz" disabled={productFormSaving || !!editingProductId} />
+                                                    <input value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} className="w-full p-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" placeholder="Örn: Stor Perde Beyaz" disabled={productFormSaving} />
                                                 </div>
                                                 <div className="grid grid-cols-2 gap-3">
                                                     <div>
@@ -1184,11 +1211,7 @@ export const Suppliers = () => {
                                                         <input type="number" min={0} value={productForm.unit_price} onChange={e => setProductForm({...productForm, unit_price: e.target.value})} className="w-full p-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" placeholder="0.00" disabled={productFormSaving} />
                                                     </div>
                                                 </div>
-                                                <div className="flex gap-2 pt-2">
-                                                    <button onClick={handleSaveProduct} disabled={productFormSaving || !productForm.name.trim()} className="flex-1 bg-emerald-600 text-white font-bold text-sm py-2 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition">
-                                                        {productFormSaving ? "Kaydediliyor..." : "Kaydet"}
-                                                    </button>
-                                                </div>
+
                                             </div>
                                         )}
 
@@ -1253,6 +1276,9 @@ export const Suppliers = () => {
 
                                 {detailTab === "transactions" && (
                                     <div className="space-y-3">
+                                        <button type="button" onClick={() => nav(`/suppliers/${selectedSupplier.id}`)} className="w-full rounded-lg bg-primary-600 px-4 py-3 font-bold text-white">
+                                            Cari Ekstre · PDF / Excel Çıktı
+                                        </button>
                                         {transactions.length === 0 ? (
                                             <div className="text-center py-8 text-slate-500">
                                                 Henüz işlem yok
@@ -1262,7 +1288,7 @@ export const Suppliers = () => {
                                                 <div key={tx.id} className="border border-slate-200 dark:border-slate-700 rounded-lg p-3">
                                                     <div className="flex items-center justify-between">
                                                         <div>
-                                                            <p className="font-bold text-slate-900 dark:text-white">{tx.description}</p>
+                                                            <p className="font-bold text-slate-900 dark:text-white">{paymentDescription(tx.description)}</p>
                                                             <p className="text-sm text-slate-500 mt-1">{new Date(tx.created_at).toLocaleDateString("tr-TR")}</p>
                                                         </div>
                                                         <div className="flex items-center gap-4">
@@ -1335,7 +1361,15 @@ export const Suppliers = () => {
                                 )}
                             </div>
 
-                            <div className={`border-t border-slate-200 dark:border-slate-800 p-6 bg-white dark:bg-slate-900 gap-3 ${detailTab === 'products' ? 'hidden' : 'flex'}`}>
+                            {detailTab === "products" && showProductForm && (
+                                <div className="shrink-0 border-t border-slate-200 bg-white dark:bg-slate-900 p-3">
+                                    {priceErr && <p role="alert" className="mb-2 text-sm text-red-600">{priceErr}</p>}
+                                    <button type="button" onClick={handleSaveProduct} disabled={productFormSaving || !productForm.name.trim()} className="w-full min-h-12 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-50">
+                                        {productFormSaving ? "Kaydediliyor..." : "Ürünü Kaydet"}
+                                    </button>
+                                </div>
+                            )}
+                            <div className={`shrink-0 border-t border-slate-200 dark:border-slate-800 p-6 bg-white dark:bg-slate-900 gap-3 ${detailTab === 'products' ? 'hidden' : 'flex'}`}>
                                 {!editMode ? (
                                     <>
                                         <button
@@ -1371,7 +1405,7 @@ export const Suppliers = () => {
                             </div>
                         </div>
                     </div>
-                )}
+                , document.body)}
 
                 {showPaymentModal && selectedSupplier && selectedBalance && (
                     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
@@ -1438,10 +1472,9 @@ export const Suppliers = () => {
                                         onChange={(e) => setPaymentMethod(e.target.value)}
                                         className="w-full px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
                                     >
-                                        <option value="cash">Nakit</option>
-                                        <option value="bank_transfer">Banka Transferi</option>
-                                        <option value="check">Çek</option>
-                                        <option value="credit_card">Kredi Kartı</option>
+                                        {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
                                     </select>
                                 </div>
 
@@ -1478,7 +1511,7 @@ export const Suppliers = () => {
 
                 {deletingProduct && (
                     <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl flex flex-col max-h-[calc(100dvh-2rem)] overflow-y-auto">
                             <div className="p-6">
                                 <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Ürünü Sil</h3>
                                 <p className="text-slate-600 dark:text-slate-400">

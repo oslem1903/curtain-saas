@@ -9,7 +9,9 @@
 // etkilenmemek için) ve kullanıcı dostu Türkçe başlıklarla ayrı bir sheet'e yazar.
 // ============================================================================
 import * as XLSX from "xlsx";
+import { paymentLabel } from "./paymentLabels";
 import { supabase } from "../supabaseClient";
+import { todayLocalISO } from "../utils/date";
 
 export type BackupOptions = {
   companyId: string;
@@ -247,7 +249,7 @@ export async function exportBackupWorkbook(opts: BackupOptions): Promise<BackupR
       Müşteri: customerName.get(orderCustomer.get(p.order_id) || "") || "",
       "Sipariş No": shortId(p.order_id),
       Tutar: num(p.amount),
-      Yöntem: p.method || p.payment_method || "",
+      Yöntem: paymentLabel(p.method || p.payment_method),
       Not: p.note || "",
     }));
 
@@ -265,7 +267,7 @@ export async function exportBackupWorkbook(opts: BackupOptions): Promise<BackupR
         Tür: "Tedarikçi",
         Alıcı: supplierName.get(p.supplier_id) || "",
         Tutar: num(p.amount),
-        Yöntem: p.payment_method || "",
+        Yöntem: paymentLabel(p.payment_method),
         Not: p.description || "",
       }),
     );
@@ -277,7 +279,7 @@ export async function exportBackupWorkbook(opts: BackupOptions): Promise<BackupR
         Tür: "Montajcı",
         Alıcı: installerName.get(t.installer_id) || "",
         Tutar: num(t.amount),
-        Yöntem: t.payment_method || "",
+        Yöntem: paymentLabel(t.payment_method),
         Not: t.description || "",
       }),
     );
@@ -302,7 +304,7 @@ export async function exportBackupWorkbook(opts: BackupOptions): Promise<BackupR
     sheetCounts[name] = rows.length;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalISO();
   const filename = `PerdePRO_Yedek_${today}.xlsx`;
   XLSX.writeFile(wb, filename);
   return { filename, sheetCounts };

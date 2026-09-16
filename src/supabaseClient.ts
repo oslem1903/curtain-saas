@@ -88,7 +88,20 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         }
     }
 
-    return window.fetch(input, init);
+    const requestUrl = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const endpoint = new URL(requestUrl, window.location.href).pathname;
+    const reportable = endpoint.startsWith("/rest/v1/") && !endpoint.endsWith("/report_client_error");
+    try {
+        const response = await window.fetch(input, init);
+        if (reportable && !response.ok) {
+            // No request bodies, query strings, credentials or customer values.
+            console.error(`Veritabanı isteği başarısız: ${endpoint} (HTTP ${response.status})`);
+        }
+        return response;
+    } catch (error) {
+        if (reportable) console.error(`Veritabanı bağlantısı kurulamadı: ${endpoint}`);
+        throw error;
+    }
 };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -96,7 +109,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        storageKey: "curtain-saas-auth",
+        storageKey: "perdepro-auth",
     },
     global: {
         fetch: customFetch,

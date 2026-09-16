@@ -1,4 +1,4 @@
-﻿import React, { useEffect } from "react";
+﻿import React, { lazy, Suspense, useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Layout } from "./layouts/Layout";
@@ -14,58 +14,68 @@ import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import Unauthorized from "./pages/Unauthorized";
 import Locked from "./pages/Locked";
-import NewSupplier from "./pages/NewSupplier";
-import { Dashboard } from "./pages/Dashboard";
-import Customers from "./pages/Customers";
-import Orders from "./pages/Orders";
-import NewOrder from "./pages/NewOrder";
-import NewAppointment from "./pages/NewAppointment";
-import OrderDetail from "./pages/OrderDetail";
-import InstallationTracking from "./pages/InstallationTracking";
-import InstallerEarningsDetail from "./pages/InstallerEarningsDetail";
-import FieldDashboard from "./pages/FieldDashboard";
-import TodayRoute from "./pages/TodayRoute";
-import FieldCustomers from "./pages/FieldCustomers";
-import MeasurementEntry from "./pages/MeasurementEntry";
-import AppointmentDetail from "./pages/AppointmentDetail";
-import { Suppliers } from "./pages/Suppliers";
-import { Accounting } from "./pages/Accounting";
-import Collections from "./pages/Collections";
-import { Settings } from "./pages/Settings";
-import SupplierLedger from "./pages/SupplierLedger";
-import Products from "./pages/Products";
-import Invoices from "./pages/Invoices";
-import InvoiceDetail from "./pages/InvoiceDetail";
-import StaffManagement from "./pages/StaffManagement";
-import BranchManagement from "./pages/BranchManagement";
-import SuperAdminTrials from "./pages/SuperAdminTrials";
-import SuperAdminCompanies from "./pages/SuperAdminCompanies";
-import VisualPreviews from "./pages/VisualPreviews";
-import CatalogManagement from "./pages/CatalogManagement";
-import { ExpensesPage, IncomePage, ReportsPage, TaxPage } from "./pages/AccountingSubPages";
-import SuperAdminSupport from "./pages/SuperAdminSupport";
-import SuperAdminUpdates from "./pages/SuperAdminUpdates";
-import SuperAdminNotifications from "./pages/SuperAdminNotifications";
-import SuperAdminMobileManagement from "./pages/SuperAdminMobileManagement";
-import SuperAdminFirmaDetay from "./pages/SuperAdminFirmaDetay";
-import SuperAdminLiveMonitoring from "./pages/SuperAdminLiveMonitoring";
-import SuperAdminRemoteMaintenance from "./pages/SuperAdminRemoteMaintenance";
-import SuperAdminErrorLogs from "./pages/SuperAdminErrorLogs";
-import SuperAdminVersioning from "./pages/SuperAdminVersioning";
-import SuperAdminLicenseManagement from "./pages/SuperAdminLicenseManagement";
-import SuperAdminBackupCenter from "./pages/SuperAdminBackupCenter";
-import SuperAdminDatabaseHealth from "./pages/SuperAdminDatabaseHealth";
-import SuperAdminObservability from "./pages/SuperAdminObservability";
-import DeploymentWizard from "./pages/DeploymentWizard";
-import DeploymentHistory from "./pages/DeploymentHistory";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { canAccess, type AppRole } from "./auth/roles";
-import SupplierDetail from "./pages/SupplierDetail";
-import Installations from "./pages/Installations";
-import SupplierCariReport from "./pages/SupplierCariReport";
-import Quotes from "./pages/Quotes";
 import { initLocalNotificationNavigation } from "./utils/localNotifications";
 import { isNativeAndroid } from "./utils/nativeRuntime";
+
+// ---------------------------------------------------------------------------
+// Rota bazli kod bolme (code-splitting): her sayfa ayri bir parcaya cikar ve
+// yalnizca o rotaya girildiginde indirilir. Mobilde ilk acilis suresini ve
+// veri kullanimini ciddi olcude dusurur.
+// ---------------------------------------------------------------------------
+const Accounting = lazy(() => import("./pages/Accounting").then((m) => ({ default: m.Accounting })));
+const AppointmentDetail = lazy(() => import("./pages/AppointmentDetail"));
+const BranchManagement = lazy(() => import("./pages/BranchManagement"));
+const CatalogManagement = lazy(() => import("./pages/CatalogManagement"));
+const Collections = lazy(() => import("./pages/Collections"));
+const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
+const Customers = lazy(() => import("./pages/Customers"));
+const DeploymentHistory = lazy(() => import("./pages/DeploymentHistory"));
+const DeploymentWizard = lazy(() => import("./pages/DeploymentWizard"));
+const ExpensesPage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.ExpensesPage })));
+const FieldCustomers = lazy(() => import("./pages/FieldCustomers"));
+const FieldDashboard = lazy(() => import("./pages/FieldDashboard"));
+const IncomePage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.IncomePage })));
+const InstallationTracking = lazy(() => import("./pages/InstallationTracking"));
+const Installations = lazy(() => import("./pages/Installations"));
+const InstallerEarningsDetail = lazy(() => import("./pages/InstallerEarningsDetail"));
+const InvoiceDetail = lazy(() => import("./pages/InvoiceDetail"));
+const Invoices = lazy(() => import("./pages/Invoices"));
+const MeasurementEntry = lazy(() => import("./pages/MeasurementEntry"));
+const NewAppointment = lazy(() => import("./pages/NewAppointment"));
+const NewOrder = lazy(() => import("./pages/NewOrder"));
+const NewSupplier = lazy(() => import("./pages/NewSupplier"));
+const OrderDetail = lazy(() => import("./pages/OrderDetail"));
+const Orders = lazy(() => import("./pages/Orders"));
+const Products = lazy(() => import("./pages/Products"));
+const Quotes = lazy(() => import("./pages/Quotes"));
+const ReportsPage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.ReportsPage })));
+const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
+const StaffManagement = lazy(() => import("./pages/StaffManagement"));
+const SuperAdminBackupCenter = lazy(() => import("./pages/SuperAdminBackupCenter"));
+const SuperAdminCompanies = lazy(() => import("./pages/SuperAdminCompanies"));
+const SuperAdminDatabaseHealth = lazy(() => import("./pages/SuperAdminDatabaseHealth"));
+const SuperAdminErrorLogs = lazy(() => import("./pages/SuperAdminErrorLogs"));
+const SuperAdminFirmaDetay = lazy(() => import("./pages/SuperAdminFirmaDetay"));
+const SuperAdminLicenseManagement = lazy(() => import("./pages/SuperAdminLicenseManagement"));
+const SuperAdminLiveMonitoring = lazy(() => import("./pages/SuperAdminLiveMonitoring"));
+const SuperAdminMobileManagement = lazy(() => import("./pages/SuperAdminMobileManagement"));
+const SuperAdminNotifications = lazy(() => import("./pages/SuperAdminNotifications"));
+const SuperAdminObservability = lazy(() => import("./pages/SuperAdminObservability"));
+const SuperAdminRemoteMaintenance = lazy(() => import("./pages/SuperAdminRemoteMaintenance"));
+const SuperAdminSupport = lazy(() => import("./pages/SuperAdminSupport"));
+const SuperAdminTrials = lazy(() => import("./pages/SuperAdminTrials"));
+const SuperAdminUpdates = lazy(() => import("./pages/SuperAdminUpdates"));
+const SuperAdminVersioning = lazy(() => import("./pages/SuperAdminVersioning"));
+const SupplierCariReport = lazy(() => import("./pages/SupplierCariReport"));
+const SupplierDetail = lazy(() => import("./pages/SupplierDetail"));
+const SupplierLedger = lazy(() => import("./pages/SupplierLedger"));
+const Suppliers = lazy(() => import("./pages/Suppliers").then((m) => ({ default: m.Suppliers })));
+const TaxPage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.TaxPage })));
+const TodayRoute = lazy(() => import("./pages/TodayRoute"));
+const VisualPreviews = lazy(() => import("./pages/VisualPreviews"));
+
 
 function defaultPathForRole(role: AppRole | "unknown") {
   if (role === "super_admin") return "/super-admin/companies";
@@ -100,7 +110,7 @@ function RoleGate({
 function HomeRedirect() {
   const { status, role, isPasswordRecovery } = useAuth();
 
-  if (status === "loading") return <div style={{ padding: 16 }}>YÃ¶nlendirme hazÄ±rlanÄ±yor...</div>;
+  if (status === "loading") return <div style={{ padding: 16 }}>Yönlendirme hazırlanıyor...</div>;
   if (isPasswordRecovery) return <Navigate to="/reset-password" replace />;
   if (status === "unauthenticated") return <Navigate to="/login" replace />;
   if (status === "unauthorized") return <Navigate to="/unauthorized" replace />;
@@ -155,6 +165,18 @@ function PasswordRecoveryRedirect() {
   return null;
 }
 
+/** Rota parcasi indirilirken gosterilen hafif yukleniyor ekrani. */
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[60vh] w-full items-center justify-center p-8">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />
+        <span className="text-sm font-medium text-slate-500">Yükleniyor…</span>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -165,6 +187,7 @@ export default function App() {
               <AndroidBackButtonHandler />
               <LocalNotificationNavigationHandler />
               <PasswordRecoveryRedirect />
+                <Suspense fallback={<RouteFallback />}>
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />
@@ -193,7 +216,7 @@ export default function App() {
                   </RoleGate>
                 }
               />
-                {/* "/" aÃ§Ä±lÄ±nca dashboard'a */}
+                {/* "/" açılınca dashboard'a */}
                 <Route index element={<HomeRedirect />} />
 
                 {/* Admin + Staff */}
@@ -795,14 +818,15 @@ export default function App() {
 
 
 
-                {/* Ä°Ã§ route bulunamazsa */}
+                {/* İç route bulunamazsa */}
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
 
-            {/* DÄ±ÅŸarÄ±da kalan her ÅŸey */}
+            {/* Dışarıda kalan her şey */}
             <Route path="*" element={<Navigate to="/login" replace />} />
 
               </Routes>
+                </Suspense>
             </SupportModalProvider>
           </ImpersonationProvider>
         </AuthProvider>

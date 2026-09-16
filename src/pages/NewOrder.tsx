@@ -43,7 +43,7 @@ type OrderItemUI = {
     key: string; product_id: string; product_name: string; model_name: string; color_name: string;
     supplier_id: string; supplier_cost: number; product_type: ProductType; room: string;
     width_cm: number; height_cm: number; qty: number; unit_price: number;
-    pile: "2" | "3"; mechanism: "reducer" | "standard"; control_type: "corded" | "tape";
+    pile: "2" | "3" | "S"; mechanism: "reducer" | "standard"; control_type: "corded" | "tape";
 };
 type StaffOption = { id: string; userId: string | null; employeeId: string | null; full_name: string; role: string; };
 
@@ -538,7 +538,7 @@ export default function NewOrder() {
         }
 
         setWantAppointment(false);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, [location.state]);
 
     useEffect(() => {
@@ -690,7 +690,8 @@ export default function NewOrder() {
         const currentItem = items.find((item) => item.key === key);
         const supplierId = currentItem?.supplier_id || fabricSupplierId;
         const listedCost = supplierCostForProduct(hit, supplierId);
-        updateItem(key, { product_id: hit.id, product_name: hit.name || "", model_name: currentItem?.model_name || hit.name || "", product_type: (normalizeCategory(hit.category) || "diger") as ProductType, supplier_id: currentItem?.supplier_id || listedCost.supplierId || "", unit_price: safeNumber(hit.unit_price), supplier_cost: listedCost.cost });
+        const type = (normalizeCategory(hit.category) || "diger") as ProductType;
+        updateItem(key, { product_id: hit.id, product_name: hit.name || "", model_name: currentItem?.model_name || hit.name || "", product_type: type, supplier_id: currentItem?.supplier_id || listedCost.supplierId || "", unit_price: type === "jalousie" ? 0 : safeNumber(hit.unit_price), supplier_cost: listedCost.cost });
     }
 
     function applyProductTypeToItem(key: string, productType: ProductType) {
@@ -699,7 +700,7 @@ export default function NewOrder() {
         if (!item || !product) { updateItem(key, { product_type: productType }); return; }
         const supplierId = item.supplier_id || fabricSupplierId;
         const listedCost = supplierCostForProduct(product, supplierId);
-        updateItem(key, { product_type: productType, product_id: product.id, product_name: product.name || item.product_name, model_name: item.model_name || product.name || "", supplier_id: item.supplier_id || listedCost.supplierId || "", unit_price: item.unit_price || safeNumber(product.unit_price), supplier_cost: listedCost.cost });
+        updateItem(key, { product_type: productType, product_id: product.id, product_name: product.name || item.product_name, model_name: item.model_name || product.name || "", supplier_id: item.supplier_id || listedCost.supplierId || "", unit_price: productType === "jalousie" ? 0 : (item.unit_price || safeNumber(product.unit_price)), supplier_cost: listedCost.cost });
     }
 
     useEffect(() => {
@@ -741,11 +742,13 @@ export default function NewOrder() {
             let fabric_width_cm: number | null = null;
             let calculation_note = "";
             if (it.product_type === "tul" || it.product_type === "fon") {
-                const pm = it.pile === "3" ? 3 : 2;
+                // S pile, 1'e 3 perde ile ayni carpani kullanir.
+                const pm = it.pile === "2" ? 2 : 3;
+                const pileLabel = it.pile === "S" ? "S pile (1'e 3)" : `Pile 1'e ${pm}`;
                 fabric_width_cm = width * pm + 15;
                 area = fabric_width_cm / 100; roundedWidth = width; roundedHeight = height;
                 line_total = area * qty * unit;
-                calculation_note = `Pile 1'e ${pm}: ${width} x ${pm} + 15 cm dikim payi = ${fabric_width_cm} cm kumas`;
+                calculation_note = `${pileLabel}: ${width} x ${pm} + 15 cm dikim payi = ${fabric_width_cm} cm kumas`;
             }
             if (it.product_type === "jalousie" || it.product_type === "picasso") {
                 const mf = it.mechanism === "reducer" ? 1.12 : 1;
@@ -807,11 +810,52 @@ export default function NewOrder() {
         const taxExclusive = Number((params.total / (1 + taxRate / 100)).toFixed(2));
         const taxAmount = Number((params.total - taxExclusive).toFixed(2));
         const invoiceStatus = params.status === "paid" ? "paid" : params.status === "draft" ? "draft" : "sent";
-        const { data: invoiceRow, error: invoiceErr } = await supabase.from("invoices").insert([{ company_id: params.company_id, order_id: params.orderId, customer_id: params.customerId, invoice_type: "sales", invoice_no: invoiceNo, date: new Date().toISOString(), total_tax_exclusive: taxExclusive, total_tax_amount: taxAmount, total_tax_inclusive: params.total, status: invoiceStatus, notes: params.notes || `Siparis faturasi - ${params.customerName}` }]).select("id").single();
-        if (invoiceErr) throw invoiceErr;
-        const invoiceItems = params.items.map((it) => ({ invoice_id: invoiceRow.id, company_id: params.company_id, description: `${productLabel(it.product_type)} - ${it.width_cm}x${it.height_cm} cm`, quantity: it.qty, unit_price: it.unit_price, tax_rate: taxRate, line_total: it.line_total }));
-        const { error: itemErr } = await supabase.from("invoice_items").insert(invoiceItems);
-        if (itemErr) throw itemErr;
+        const invoiceData = {
+            invoice_no: invoiceNo,
+            invoice_type: "sales",
+            date: new Date().toISOString(),
+            total_tax_exclusive: taxExclusive,
+            total_tax_amount: taxAmount,
+            total_tax_inclusive: params.total,
+            paid_amount: 0,
+            payment_method: null,
+            due_date: null,
+            status: invoiceStatus,
+            order_id: params.orderId,
+            customer_id: params.customerId,
+            supplier_id: null,
+            notes: params.notes || `Siparis faturasi - ${params.customerName}`,
+        };
+        const invoiceItems = params.items.map((it) => ({
+            description: `${productLabel(it.product_type)} - ${it.width_cm}x${it.height_cm} cm`,
+            quantity: it.qty,
+            unit_price: it.unit_price,
+            tax_rate: taxRate,
+            line_total: it.line_total,
+        }));
+        const { data, error } = await supabase.rpc("record_invoice_save", {
+            p_company_id: params.company_id,
+            p_invoice_id: null,
+            p_invoice_data: invoiceData,
+            p_items_data: invoiceItems,
+        });
+        if (error) throw error;
+        const result = data as { success?: boolean; error?: string; invoice_id?: string } | null;
+        if (!result?.success || !result.invoice_id) {
+            throw new Error(result?.error || "Satış faturası kaydedilemedi.");
+        }
+        return result.invoice_id;
+    }
+
+    async function rollbackNewOrderInvoice(params: { companyId: string; orderId: string; invoiceId: string }) {
+        const { data, error } = await supabase.rpc("rollback_new_order_invoice", {
+            p_company_id: params.companyId,
+            p_order_id: params.orderId,
+            p_invoice_id: params.invoiceId,
+        });
+        if (error) throw error;
+        const result = data as { success?: boolean; error?: string } | null;
+        if (!result?.success) throw new Error(result?.error || "Yeni sipariş faturası geri alınamadı.");
     }
 
     async function handleSave() {
@@ -859,15 +903,6 @@ export default function NewOrder() {
             const cid = await ensureCustomerId(companyId);
             const customerName = selectedCustomer?.name?.trim() || customerInput.trim() || "Müşteri";
             const selectedStaff = staffList.find((s) => s.id === assignedTo) ?? null;
-            // Calculate assignedUserId: use user_id if available; else strip 'employee:' prefix if present
-            let assignedUserId = "";
-            if (selectedStaff?.userId) {
-              assignedUserId = selectedStaff.userId;
-            } else if (selectedStaff && assignedTo?.startsWith("employee:")) {
-              assignedUserId = assignedTo.replace(/^employee:/, "");
-            } else if (assignedTo && !assignedTo.startsWith("employee:")) {
-              assignedUserId = assignedTo;
-            }
             // Kalıcı kimlik kuralı: orders.assigned_to = daima user_id (auth.users FK'sı,
             // hesabı olmayanlarda null), orders.assigned_staff_id = daima employees.id.
             // (assignedUserId yukarıda employee.id'yi de taşıyabiliyordu — orders.assigned_to
@@ -909,6 +944,20 @@ export default function NewOrder() {
               insertedItems.push(insertedItem);
             }
 
+            // Fatura, tahsilat/plan/randevu gibi geri alınması zor finansal işlemlerden
+            // önce atomik RPC ile oluşturulur. Başarısızsa sipariş ve kalemler temizlenir;
+            // kullanıcıya yarım bir sipariş bırakılmaz.
+            let createdInvoiceId: string | null = null;
+            if (status !== "quoted") {
+              try {
+                createdInvoiceId = await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
+              } catch (invoiceError) {
+                await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
+                await supabase.from("orders").delete().eq("id", orderId);
+                throw new Error(`Sipariş faturası oluşturulamadı; sipariş geri alındı: ${invoiceError instanceof Error ? invoiceError.message : String(invoiceError)}`);
+              }
+            }
+
             // Peşinat — customer_record_collection üzerinden TEK kayıt (tahsilat
             // ledger'ının tek doğruluk kaynağı, aynı OrderDetail.tsx'in "+ Ödeme
             // Ekle" akışı). Başarısız olursa sipariş+kalemler geri alınır — henüz
@@ -920,10 +969,21 @@ export default function NewOrder() {
                 companyId, orderId, amount: deposit, method: "nakit", note: "Sipariş peşinatı",
               });
               if (depositResult.status !== "success") {
+                let invoiceRollbackError: unknown = null;
+                if (createdInvoiceId) {
+                  try {
+                    await rollbackNewOrderInvoice({ companyId, orderId, invoiceId: createdInvoiceId });
+                  } catch (rollbackError) {
+                    invoiceRollbackError = rollbackError;
+                  }
+                }
                 if (insertedItems.length > 0) {
                   await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
                 }
                 await supabase.from("orders").delete().eq("id", orderId);
+                if (invoiceRollbackError) {
+                  throw new Error(`Peşinat kaydedilemedi ve otomatik fatura geri alınamadı: ${invoiceRollbackError instanceof Error ? invoiceRollbackError.message : String(invoiceRollbackError)}`);
+                }
                 throw new Error(`Peşinat kaydedilemedi: ${depositResult.status === "error" ? depositResult.error.message : "bilinmeyen hata"}`);
               }
               overpayment = depositResult.data.overpaymentAmount ?? 0;
@@ -990,7 +1050,6 @@ export default function NewOrder() {
             // Teklif (quoted) henüz kabul edilmiş sipariş değildir: tedarikçi gideri
             // ve satış faturası oluşturulmaz; gerçek sipariş durumuna geçilince oluşur.
             if (status !== "quoted" && supplierExpenseAmount > 0 && firstSupplierId) await createSupplierExpense({ company_id: companyId, amount: supplierExpenseAmount, category: "Kumaş / Ürün", supplier_id: firstSupplierId, orderId, customerName });
-            if (status !== "quoted") await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
             const cariWarnings: string[] = [];
             for (const it of itemsComputed) {
                 if (status === "quoted") break; // Teklifte tedarikçi cari borcu oluşturulmaz
@@ -1329,19 +1388,22 @@ export default function NewOrder() {
                                         <input type="number" value={item.supplier_cost} onChange={(e) => updateItem(item.key, { supplier_cost: safeNumber(e.target.value) })} onBlur={() => persistSupplierPurchasePriceFromField(item.key)} className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-right" placeholder="Alış maliyeti" />
                                         <input value={item.room} onChange={(e) => updateItem(item.key, { room: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200" placeholder="Oda (Salon, Mutfak...)" />
                                         {(item.product_type === "tul" || item.product_type === "fon") && (
-                                            <select value={item.pile} onChange={(e) => updateItem(item.key, { pile: e.target.value as "2" | "3" })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
-                                                <option value="2">Pile 1'e 2</option><option value="3">Pile 1'e 3</option>
+                                            <select value={item.pile} onChange={(e) => updateItem(item.key, { pile: e.target.value as "2" | "3" | "S" })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
+                                                <option value="2">Pile 1'e 2</option><option value="3">Pile 1'e 3</option><option value="S">S pile (1'e 3 perde)</option>
                                             </select>
                                         )}
-                                        {(item.product_type === "jalousie" || item.product_type === "picasso") && (
-                                            <>
-                                                <select value={item.mechanism} onChange={(e) => updateItem(item.key, { mechanism: e.target.value as "reducer" | "standard" })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
-                                                    <option value="standard">Redüktörsüz</option><option value="reducer">Redüktörlü</option>
-                                                </select>
-                                                <select value={item.control_type} onChange={(e) => updateItem(item.key, { control_type: e.target.value as "corded" | "tape" })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
-                                                    <option value="corded">İpli</option><option value="tape">Kurdelalı</option>
-                                                </select>
-                                            </>
+                                        {item.product_type === "jalousie" && (
+                                            <select value={item.mechanism === "reducer" ? "reducer_tape" : "corded"}
+                                              onChange={(e) => updateItem(item.key, e.target.value === "reducer_tape" ? { mechanism: "reducer", control_type: "tape" } : { mechanism: "standard", control_type: "corded" })}
+                                              className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
+                                                <option value="reducer_tape">Redüktörlü + Kurdelalı</option>
+                                                <option value="corded">İpli</option>
+                                            </select>
+                                        )}
+                                        {item.product_type === "picasso" && (
+                                            <select value={item.mechanism} onChange={(e) => updateItem(item.key, { mechanism: e.target.value as "reducer" | "standard" })} className="w-full px-3 py-2.5 rounded-lg border border-slate-200">
+                                                <option value="standard">Standart</option><option value="reducer">Redüktörlü</option>
+                                            </select>
                                         )}
                                     </div>
                                     <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
