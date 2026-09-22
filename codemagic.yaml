@@ -37,6 +37,10 @@ workflows:
     environment:
       node: 24.17.0
       xcode: latest
+      # Degerler Codemagic UI > Environment variables altinda saklanir;
+      # bu dosyaya yazilmaz.
+      groups:
+        - perdepro_env
 
     scripts:
       - *npm_install
