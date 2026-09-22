@@ -1,29 +1,100 @@
 # PerdePRO - Capacitor 8 iOS build
 # Repository: oslem1903/curtain-saas
-# Branch: master
+#
+# Proje SPM tabanlidir (Capacitor 8): Podfile/.xcworkspace YOKTUR,
+# bu yuzden xcodebuild'e -project verilir ve cocoapods gerekmez.
+#
+# İKİ IS AKISI:
+#   ios-build-check -> imzasiz derleme dogrulamasi. Apple kimlik bilgisi
+#                      GEREKTIRMEZ, hicbir yere yukleme YAPMAZ.
+#   perdepro-ios    -> imzali IPA. Codemagic'te dagitim sertifikasi +
+#                      provisioning profile tanimli olmadan CALISMAZ.
+
+definitions:
+  # Tekil adim anchorlari. DIKKAT: bir listeyi tek anchor ile yeniden
+  # kullanmak (- *liste) ic ice dizi uretir ve Codemagic ayristiramaz;
+  # bu yuzden her adim ayri anchorlanir.
+  scripts:
+    - &npm_install
+      name: Install dependencies
+      script: npm ci
+    - &web_build
+      name: Build web application
+      script: npm run build
+    - &cap_sync
+      name: Synchronize Capacitor iOS project
+      script: npx cap sync ios
 
 workflows:
-  perdepro-ios:
-    name: PerdePRO iOS
-    max_build_duration: 60
+  # ───────────────────────────────────────────────────────────────────
+  # 1) Imzasiz derleme dogrulamasi — su an calistirilacak olan budur
+  # ───────────────────────────────────────────────────────────────────
+  ios-build-check:
+    name: PerdePRO iOS (imzasiz derleme kontrolu)
+    max_build_duration: 45
+    instance_type: mac_mini_m2
 
     environment:
       node: 24.17.0
       xcode: latest
-      cocoapods: default
+
+    scripts:
+      - *npm_install
+      - *web_build
+      - *cap_sync
+
+      - name: Archive unsigned (no Apple credentials needed)
+        script: |
+          set -e
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$CM_BUILD_DIR/build/ios/App.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            | tee /tmp/xcodebuild_archive.log
+
+      - name: Verify bundle metadata
+        script: |
+          set -e
+          PLIST="$CM_BUILD_DIR/build/ios/App.xcarchive/Products/Applications/App.app/Info.plist"
+          echo "--- Derlenen uygulamanin Info.plist degerleri ---"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName"      "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier"       "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$PLIST"
+
+    artifacts:
+      - build/ios/App.xcarchive
+      - /tmp/xcodebuild_archive.log
+      - /tmp/xcodebuild_logs/*.log
+
+  # ───────────────────────────────────────────────────────────────────
+  # 2) Imzali IPA — Codemagic'te sertifika/profil tanimlandiktan SONRA
+  #    Yukleme yok: publishing bolumu bilerek bos birakildi.
+  # ───────────────────────────────────────────────────────────────────
+  perdepro-ios:
+    name: PerdePRO iOS (imzali IPA)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      node: 24.17.0
+      xcode: latest
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.curtainsaas.app
 
     scripts:
-      - name: Install dependencies
-        script: npm ci
-
-      - name: Build web application
-        script: npm run build
-
-      - name: Synchronize Capacitor iOS project
-        script: npx cap sync ios
+      - *npm_install
+      - *web_build
+      - *cap_sync
 
       - name: Apply iOS signing profiles
         script: xcode-project use-profiles
@@ -37,4 +108,3 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-
