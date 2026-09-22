@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Curtain Saas</string>
+        <string>PerdePRO</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,12 +22,22 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>itms-apps</string>
+		<string>tel</string>
+		<string>sms</string>
+		<string>mailto</string>
+		<string>whatsapp</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>Ölçü, sipariş ve kartela fotoğrafı çekebilmeniz için kamera erişimi gerekir.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ölçü ve montaj notlarınız için sesli not kaydedebilmek üzere mikrofon erişimi gerekir.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Ölçü, sipariş ve kartela fotoğraflarını galeriden seçebilmeniz için fotoğraf arşivi erişimi gerekir.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -38,7 +48,7 @@
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
+		<string>arm64</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
