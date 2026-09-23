@@ -88,14 +88,14 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
 
-     environment:
-       groups:
-        - perdepro_env
-      node: 24.17.0
-      xcode: latest
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.curtainsaas.app
+    environment:
+    groups:
+      - perdepro_env
+    node: 24.17.0
+    xcode: latest
+    ios_signing:
+      distribution_type: app_store
+      bundle_identifier: com.curtainsaas.app
 
   
     scripts:
