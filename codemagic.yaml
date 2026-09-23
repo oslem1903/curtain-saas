@@ -87,8 +87,10 @@ workflows:
     name: PerdePRO iOS (imzalı IPA)
     max_build_duration: 60
     instance_type: mac_mini_m2
-       integrations:
-         app_store_connect: PerdePRO Codemagic
+
+    integrations:
+      app_store_connect: PerdePRO Codemagic
+
     environment:
       groups:
         - perdepro_env
