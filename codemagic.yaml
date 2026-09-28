@@ -72,7 +72,6 @@ workflows:
           /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName"      "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier"       "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$PLIST"
 
     artifacts:
       - build/ios/App.xcarchive
