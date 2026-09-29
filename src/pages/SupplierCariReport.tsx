@@ -344,7 +344,42 @@ export default function SupplierCariReport() {
                         {hideZero ? "Açık bakiyesi olan tedarikçi yok." : "Görüntülenecek tedarikçi yok."}
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
+                    <>
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800 md:hidden">
+                        {summaries.map((s) => (
+                            <div key={s.id} onClick={() => nav(`/suppliers/${s.id}`)} className="cursor-pointer p-4 active:bg-slate-50 dark:active:bg-slate-800/60">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="font-black text-slate-900 dark:text-white">{s.name}</div>
+                                    {s.overdueNet > 0 && (
+                                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-black text-rose-700">
+                                            <AlertTriangle className="h-2.5 w-2.5" /> Vadesi geçmiş
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                                    <div>
+                                        <div className="text-slate-400">Toplam Borç</div>
+                                        <div className="font-bold text-red-600">{formatTL(s.totalDebt)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-slate-400">Toplam Ödenen</div>
+                                        <div className="font-bold text-emerald-600">{formatTL(s.totalPaid)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-slate-400">Kalan Borç</div>
+                                        <div className={`font-black ${s.balance > 0 ? "text-amber-600" : "text-slate-400"}`}>{formatTL(s.balance)}</div>
+                                    </div>
+                                </div>
+                                <div className="mt-2 text-xs text-slate-400">Son hareket: {formatDate(s.lastDate)}</div>
+                            </div>
+                        ))}
+                        <div className="p-4 bg-slate-50 dark:bg-slate-950 font-black text-sm">
+                            <div className="flex justify-between"><span className="text-slate-500">Genel Toplam Borç</span><span className="text-red-700">{formatTL(grandDebt)}</span></div>
+                            <div className="flex justify-between mt-1"><span className="text-slate-500">Genel Toplam Ödenen</span><span className="text-emerald-700">{formatTL(grandPaid)}</span></div>
+                            <div className="flex justify-between mt-1"><span className="text-slate-500">Genel Kalan Borç</span><span className="text-amber-700">{formatTL(grandBalance)}</span></div>
+                        </div>
+                    </div>
+                    <div className="hidden overflow-x-auto md:block">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
@@ -398,6 +433,7 @@ export default function SupplierCariReport() {
                             </tfoot>
                         </table>
                     </div>
+                    </>
                 )}
             </div>
         </div>

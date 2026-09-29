@@ -6,6 +6,7 @@ import {
   RefreshCw, Ruler, Search, XCircle,
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { logAction } from "../utils/audit";
 import { DELIVERY_DATE_LABEL, todayISO, isValidDeliveryDate, orderDeliveryFields } from "../utils/order";
 import { postSupplierDebt } from "../utils/supplierCari";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
@@ -358,6 +359,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
       } else {
         orderId = orderRow.id;
       }
+      void logAction("order_created", "order", orderId, { source: "quote_convert", customer: customerName });
 
       // 2) Termin tarihi — kullanıcı tarafından siparişe çevirmede girilir (zorunlu).
       // orders.delivery_due_date tek doğruluk kaynağıdır; ölçüden (appointments) okunmaz.

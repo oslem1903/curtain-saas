@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { supabase } from "../supabaseClient";
 import { Lock, CheckCircle2, AlertCircle } from "lucide-react";
 
 const STATUS_CONFIG: Record<
@@ -37,6 +39,23 @@ const STATUS_CONFIG: Record<
     },
 };
 
+const MODULE_LABELS: Record<string, string> = {
+    admin: "Yönetim",
+    measurements: "Ölçüler",
+    orders: "Siparişler",
+    customers: "Müşteriler",
+    appointments: "Randevular",
+    suppliers: "Tedarikçiler",
+    installation: "Montaj",
+    collections: "Tahsilatlar",
+    accounting: "Finans",
+    catalogs: "Kartela Yönetimi",
+};
+
+function moduleLabel(module: string): string {
+    return MODULE_LABELS[module] || module;
+}
+
 function calculateRemainingDays(expiresAt: string | null | undefined): string {
     if (!expiresAt) return "—";
 
@@ -61,6 +80,28 @@ function calculateRemainingDays(expiresAt: string | null | undefined): string {
 
 export function LicenseCard() {
     const { company } = useAuth();
+    // "Kullanıcı" = farklı KİŞİ sayısı (company_members, benzersiz user_id) — aynı
+    // kişinin birden fazla cihazdan girmesi ayrı kullanıcı sayılmaz. "Cihaz" ise
+    // ayrı bir sayaçtır (company_devices) — biri telefon+bilgisayardan girerse 2
+    // cihaz ama 1 kullanıcıdır.
+    const [userCount, setUserCount] = useState<number | null>(null);
+    const [deviceCount, setDeviceCount] = useState<number | null>(null);
+
+    useEffect(() => {
+        if (!company?.id) return;
+        let alive = true;
+        Promise.all([
+            // enforce_max_users (migration 021) ile AYNI tanım: aktif + benzersiz kullanıcı.
+            supabase.from("company_members").select("user_id").eq("company_id", company.id).eq("is_active", true)
+                .then((r) => (r.error ? null : new Set((r.data ?? []).map((m: { user_id: string }) => m.user_id)).size)),
+            supabase.from("company_devices").select("id", { count: "exact", head: true }).eq("company_id", company.id).eq("is_active", true).then((r) => r.count ?? null),
+        ]).then(([u, d]) => {
+            if (!alive) return;
+            setUserCount(u);
+            setDeviceCount(d);
+        });
+        return () => { alive = false; };
+    }, [company?.id]);
 
     if (!company) {
         return (
@@ -171,20 +212,21 @@ export function LicenseCard() {
                     {/* Max Users */}
                     <div>
                         <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">
-                            Maksimum Kullanıcı
+                            Kullanıcı (Kişi)
                         </p>
                         <p className="text-slate-900 dark:text-white">
-                            {company.max_users || "—"}
+                            {userCount !== null ? `${userCount} / ${company.max_users || "—"}` : (company.max_users || "—")}
                         </p>
+                        <p className="text-xs text-slate-400 mt-1">Aynı kişinin birden fazla cihazı ayrı sayılmaz.</p>
                     </div>
 
                     {/* Max Devices */}
                     <div>
                         <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">
-                            Maksimum Cihaz
+                            Aktif Cihaz
                         </p>
                         <p className="text-slate-900 dark:text-white">
-                            {company.max_devices || "—"}
+                            {deviceCount !== null ? `${deviceCount} / ${company.max_devices || "—"}` : (company.max_devices || "—")}
                         </p>
                     </div>
                 </div>
@@ -201,7 +243,7 @@ export function LicenseCard() {
                                     key={module}
                                     className="inline-flex items-center px-3 py-1.5 rounded-full bg-primary-100 dark:bg-primary-950/30 text-primary-700 dark:text-primary-300 text-sm font-medium"
                                 >
-                                    {module}
+                                    {moduleLabel(module)}
                                 </span>
                             ))}
                         </div>

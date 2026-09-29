@@ -92,6 +92,19 @@ const PRODUCT_SELECT = `
 `;
 
 
+/** Alış ve satış fiyatı zorunlu: boş, 0, negatif veya geçersiz değer kaydedilmez. */
+function validateProductPrices(costPrice: unknown, unitPrice: unknown): string | null {
+    const cost = Number(costPrice);
+    const sale = Number(unitPrice);
+    if (!Number.isFinite(cost) || cost <= 0) {
+        return "Alış fiyatı zorunlu. Lütfen 0'dan büyük geçerli bir alış fiyatı girin.";
+    }
+    if (!Number.isFinite(sale) || sale <= 0) {
+        return "Satış fiyatı zorunlu. Lütfen 0'dan büyük geçerli bir satış fiyatı girin.";
+    }
+    return null;
+}
+
 function safeNumber(v: unknown, fallback = 0) {
     const n = Number(v);
     return Number.isFinite(n) ? n : fallback;
@@ -360,8 +373,9 @@ export default function Products() {
             return;
         }
 
-        if (form.unit_price < 0) {
-            setErr("Birim fiyat negatif olamaz.");
+        const priceError = validateProductPrices(form.cost_price, form.unit_price);
+        if (priceError) {
+            setErr(priceError);
             return;
         }
 
@@ -703,7 +717,7 @@ export default function Products() {
                                 <label className="text-sm font-medium">Bu tedarikçiden alış fiyatı</label>
                                 <input
                                     type="number"
-                                    min={0}
+                                    min={0.01} step="any"
                                     className="mt-1 w-full border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800"
                                     value={form.cost_price}
                                     onChange={(e) => setField("cost_price", safeNumber(e.target.value))}
@@ -715,7 +729,7 @@ export default function Products() {
                                     <label className="text-sm font-medium">Satış Fiyatı</label>
                                     <input
                                         type="number"
-                                        min={0}
+                                        min={0.01} step="any"
                                         className="mt-1 w-full border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800"
                                         value={form.unit_price}
                                         onChange={(e) => setField("unit_price", safeNumber(e.target.value))}

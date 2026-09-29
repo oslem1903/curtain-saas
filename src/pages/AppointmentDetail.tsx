@@ -24,6 +24,21 @@ import {
 } from "lucide-react";
 import { toLocalDateISO } from "../utils/date";
 
+const APPOINTMENT_STATUS_LABELS: Record<string, string> = {
+    planned: "Planlandı",
+    onway: "Yolda",
+    measured: "Ölçü Alındı",
+    done: "Tamamlandı",
+    completed: "Tamamlandı",
+    cancelled: "İptal Edildi",
+    postponed: "Ertelendi",
+};
+
+function appointmentStatusLabel(status: string | null | undefined): string {
+    if (!status) return "Planlandı";
+    return APPOINTMENT_STATUS_LABELS[status.toLowerCase()] || status;
+}
+
 type AppointmentRow = {
     id: string;
     customer_id: string | null;
@@ -123,27 +138,35 @@ export default function AppointmentDetail() {
                     .eq("user_id", user.id)
                     .maybeSingle();
 
-                if (myCompany?.company_id) {
-                    const normalizedRole = normalizeRole(profile?.role);
-                    const isSameCompany = appointment.company_id === myCompany.company_id;
-                    const isAssignedStaff = appointment.assigned_to === user.id || appointment.assigned_user_id === user.id;
+                const normalizedRole = normalizeRole(profile?.role);
+                const isSuperAdmin = normalizedRole === "super_admin";
+                // Süper admin: yalnızca RLS'in (is_super_admin) izin verdiği randevuyu görür;
+                // kendi company_members kaydı izlenen firmayla karşılaştırılmaz. Normal
+                // kullanıcılarda şirket izolasyonu aynen korunur.
+                const scopeCompanyId = isSuperAdmin ? appointment.company_id : myCompany?.company_id;
 
-                    if (!isSameCompany || ((normalizedRole === "installer" || normalizedRole === "measurement" || normalizedRole === "personnel") && !isAssignedStaff)) {
-                        setRow(null);
-                        throw new Error("Bu randevuya erişim yetkiniz yok.");
+                if (scopeCompanyId) {
+                    if (!isSuperAdmin) {
+                        const isSameCompany = appointment.company_id === scopeCompanyId;
+                        const isAssignedStaff = appointment.assigned_to === user.id || appointment.assigned_user_id === user.id;
+
+                        if (!isSameCompany || ((normalizedRole === "installer" || normalizedRole === "measurement" || normalizedRole === "personnel") && !isAssignedStaff)) {
+                            setRow(null);
+                            throw new Error("Bu randevuya erişim yetkiniz yok.");
+                        }
                     }
 
                     const { data: employees } = await supabase
                         .from("employees")
                         .select("user_id, full_name, target_role, is_active")
-                        .eq("company_id", myCompany.company_id);
+                        .eq("company_id", scopeCompanyId);
 
                     const employeeRows = (employees ?? []).filter((employee: any) => employee.is_active !== false && Boolean(employee.user_id));
 
                     const { data: members } = await supabase
                         .from("company_members")
                         .select("user_id")
-                        .eq("company_id", myCompany.company_id);
+                        .eq("company_id", scopeCompanyId);
 
                     const employeeIds = employeeRows.map((employee: any) => employee.user_id).filter(Boolean);
                     const memberIds = (members ?? []).map((member) => member.user_id).filter(Boolean);
@@ -167,17 +190,20 @@ export default function AppointmentDetail() {
                             })
                             : (profiles ?? []);
 
+                        const roleFiltered = staffRows.filter((item) => {
+                            const staffRole = normalizeRole(item.role);
+                            return staffRole === "installer" || staffRole === "measurement" || staffRole === "personnel";
+                        });
+                        // Sirket personelinin rolleri bu 3 kategoriye uymuyorsa (orn. hepsi
+                        // "admin"/"accountant" etiketli), dropdown hep bos gorunup pasif
+                        // sanilmasin diye tum aktif personeli goster.
+                        const staffSource = roleFiltered.length > 0 ? roleFiltered : staffRows;
                         setStaffList(
-                            staffRows
-                                .filter((item) => {
-                                    const staffRole = normalizeRole(item.role);
-                                    return staffRole === "installer" || staffRole === "measurement" || staffRole === "personnel";
-                                })
-                                .map((item) => ({
-                                    id: item.user_id,
-                                    full_name: item.full_name || "İsimsiz",
-                                    role: item.role || "installer",
-                                })),
+                            staffSource.map((item) => ({
+                                id: item.user_id,
+                                full_name: item.full_name || "İsimsiz",
+                                role: item.role || "installer",
+                            })),
                         );
                     }
                 }
@@ -228,7 +254,7 @@ export default function AppointmentDetail() {
             setIsEditMode(false);
             await loadData();
         } catch (e: any) {
-            alert(`Hata: ${e?.message || "Randevu guncellenemedi."}`);
+            alert(`Hata: ${e?.message || "Randevu güncellenemedi."}`);
         } finally {
             setSaving(false);
         }
@@ -268,14 +294,14 @@ export default function AppointmentDetail() {
             if (error) throw error;
             await loadData();
         } catch (e: any) {
-            alert(`Hata: ${e?.message || "Olcu kaydedilemedi."}`);
+            alert(`Hata: ${e?.message || "Ölçü kaydedilemedi."}`);
         } finally {
             setSaving(false);
         }
     }
 
     async function handleDelete() {
-        if (!id || !window.confirm("Bu randevu kalici olarak silinsin mi?")) return;
+        if (!id || !window.confirm("Bu randevu kalıcı olarak silinsin mi?")) return;
         const { error } = await supabase.from("appointments").delete().eq("id", id);
         if (error) {
             alert(error.message);
@@ -286,7 +312,7 @@ export default function AppointmentDetail() {
     }
 
     if (loading) return <div className="p-10 text-center font-bold">Veriler getiriliyor...</div>;
-    if (!row) return <div className="p-10 text-center">Randevu bulunamadi.</div>;
+    if (!row) return <div className="p-10 text-center">Randevu bulunamadı.</div>;
 
     const assignedName = staffList.find((staff) => staff.id === (isEditMode ? editAssignedTo : row.assigned_to))?.full_name;
     const customerData = Array.isArray(row.customer) ? row.customer[0] : row.customer;
@@ -302,23 +328,23 @@ export default function AppointmentDetail() {
                 </button>
 
                 <div className="flex gap-2">
-                    {!isEditMode && row.status !== "cancelled" && (role === "admin" || role === "accountant" || role === "installer" || role === "measurement" || role === "personnel") && (
+                    {!isEditMode && row.status !== "cancelled" && (role === "super_admin" || role === "admin" || role === "accountant" || role === "installer" || role === "measurement" || role === "personnel") && (
                         <button
                             onClick={() => setIsEditMode(true)}
                             className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-100 dark:border-emerald-900/30 text-emerald-600 hover:bg-emerald-50 transition font-bold text-sm"
                         >
-                            <Edit3 className="w-4 h-4" /> Duzenle
+                            <Edit3 className="w-4 h-4" /> Düzenle
                         </button>
                     )}
-                    {row.status !== "cancelled" && row.status !== "done" && (role === "admin" || role === "accountant" || role === "installer" || role === "measurement" || role === "personnel") && (
+                    {row.status !== "cancelled" && row.status !== "done" && (role === "super_admin" || role === "admin" || role === "accountant" || role === "installer" || role === "measurement" || role === "personnel") && (
                         <button
                             onClick={handleCancelAppointment}
                             className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-rose-100 dark:border-rose-900/30 text-rose-500 hover:bg-rose-50 transition font-bold text-sm"
                         >
-                            <XCircle className="w-4 h-4" /> Iptal Et
+                            <XCircle className="w-4 h-4" /> İptal Et
                         </button>
                     )}
-                    {role === "admin" && (
+                    {(role === "super_admin" || role === "admin") && (
                         <button
                             onClick={handleDelete}
                             className="p-3 rounded-2xl bg-rose-50 border border-rose-100 text-rose-600 hover:bg-rose-100 transition shadow-sm"
@@ -335,12 +361,12 @@ export default function AppointmentDetail() {
                         <div>
                             <div className="flex items-center gap-2 text-primary-400 text-sm font-black uppercase tracking-widest mb-3">
                                 <Calendar className="w-4 h-4" />
-                                {row.type === "measurement" ? "Olcu Randevusu" : "Montaj Randevusu"}
+                                {row.type === "measurement" ? "Ölçü Randevusu" : "Montaj Randevusu"}
                             </div>
                             <h1 className="text-4xl md:text-5xl font-black">{customerData?.name || "İsimsiz"}</h1>
                         </div>
                         <div className="px-6 py-2.5 rounded-2xl text-xs font-black tracking-widest shadow-xl bg-primary-600">
-                            {row.status?.toUpperCase()}
+                            {appointmentStatusLabel(row.status).toUpperCase()}
                         </div>
                     </div>
                 </div>
@@ -352,7 +378,7 @@ export default function AppointmentDetail() {
                                 <Phone className="w-7 h-7" />
                             </div>
                             <div>
-                                <div className="text-xs text-slate-400 font-bold uppercase mb-1">Musteri Hatti</div>
+                                <div className="text-xs text-slate-400 font-bold uppercase mb-1">Müşteri Hattı</div>
                                 <a href={`tel:${customerData?.phone || ""}`} className="text-xl font-black text-slate-900 dark:text-white">
                                     {customerData?.phone || "Numara yok"}
                                 </a>
@@ -385,7 +411,7 @@ export default function AppointmentDetail() {
                                 <Clock className="w-7 h-7" />
                             </div>
                             <div className="flex-1">
-                                <div className="text-xs text-slate-400 font-bold uppercase mb-1">Randevu Zamani</div>
+                                <div className="text-xs text-slate-400 font-bold uppercase mb-1">Randevu Zamanı</div>
                                 {isEditMode ? (
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                                         <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} className="p-3 rounded-xl border-2 border-primary-100 w-full" />
@@ -432,7 +458,7 @@ export default function AppointmentDetail() {
                                     disabled={saving}
                                     className="flex-1 bg-primary-600 text-white p-4 rounded-2xl font-black flex items-center justify-center gap-2 shadow-lg"
                                 >
-                                    <Save className="w-5 h-5" /> {saving ? "Guncelleniyor..." : "Bilgileri Kaydet"}
+                                    <Save className="w-5 h-5" /> {saving ? "Güncelleniyor..." : "Bilgileri Kaydet"}
                                 </button>
                                 <button onClick={() => setIsEditMode(false)} className="px-6 bg-slate-100 text-slate-600 p-4 rounded-2xl font-black">
                                     Vazgec
@@ -455,7 +481,7 @@ export default function AppointmentDetail() {
                         <textarea
                             value={mNotes}
                             onChange={(e) => setMNotes(e.target.value)}
-                            placeholder="Musterinin ozel istekleri, detayli olculer, perde turu vb."
+                            placeholder="Müşterinin özel istekleri, detaylı ölçüler, perde türü vb."
                             className="w-full h-56 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl p-6 text-base outline-none focus:border-primary-500 transition-all font-medium leading-relaxed"
                         />
 
@@ -467,7 +493,7 @@ export default function AppointmentDetail() {
                                     className="bg-slate-900 hover:bg-black text-white px-6 py-4 rounded-2xl font-black shadow-lg transition-all flex items-center justify-center gap-3"
                                 >
                                     <CheckCircle2 className="w-6 h-6 text-emerald-400" />
-                                    Olcuyu Kaydet
+                                    Randevuyu Güncelle
                                 </button>
 
                                 <button
@@ -487,14 +513,14 @@ export default function AppointmentDetail() {
                                     }
                                     className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-4 rounded-2xl font-black shadow-lg shadow-orange-500/20 transition-all flex items-center justify-center gap-3"
                                 >
-                                    Siparise Donustur
+                                    Siparişe Dönüştür
                                 </button>
                             </div>
                         )}
 
                         {row.status === "cancelled" && (
                             <div className="p-6 bg-rose-50 border border-rose-100 rounded-3xl text-center">
-                                <div className="text-rose-600 font-black text-lg mb-1">Bu randevu iptal edilmistir</div>
+                                <div className="text-rose-600 font-black text-lg mb-1">Bu randevu iptal edilmiştir</div>
                                 <div className="text-rose-400 text-sm">Uzerinde islem yapilamaz.</div>
                             </div>
                         )}
@@ -512,7 +538,7 @@ export default function AppointmentDetail() {
                         <AlertCircle className="w-6 h-6" />
                     </div>
                     <div>
-                        <div className="text-indigo-800 dark:text-indigo-400 font-black mb-1">Musteri / Yönetici Notu</div>
+                        <div className="text-indigo-800 dark:text-indigo-400 font-black mb-1">Müşteri / Yönetici Notu</div>
                         <div className="text-indigo-900 dark:text-indigo-200 text-sm font-medium leading-relaxed">{row.note}</div>
                     </div>
                 </div>

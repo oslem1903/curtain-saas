@@ -4,9 +4,10 @@ import { ArrowLeft, ExternalLink, Plus, TrendingDown, TrendingUp, Wallet, X, Pri
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
 import { paymentDescription } from "../utils/paymentLabels";
-import * as XLSX from "xlsx";
+import { downloadBrandedExcel } from "../utils/excelBranding";
 import { todayLocalISO } from "../utils/date";
 import { printHtmlDocument } from "../utils/printDocument";
+import { logAction } from "../utils/audit";
 
 const financeService = createFinanceService();
 
@@ -223,6 +224,7 @@ export default function SupplierDetail() {
             });
             if (result.status === "error") throw result.error;
 
+            void logAction("supplier_payment_created", "supplier_payment", "", { supplier_id: id, amount, method: payMethod });
             setSuccess("Ödeme kaydedildi.");
             setPayAmount("");
             setPayNote("");
@@ -267,26 +269,33 @@ export default function SupplierDetail() {
         return { debt, paid, reversal };
     }, [filteredRowsWithBalance]);
 
-    function handleExportExcel() {
+    async function handleExportExcel() {
         if (filteredRowsWithBalance.length === 0) return;
 
-        const headers = ["Tarih", "Açıklama", "Evrak No", "Borç (+)", "Ödeme (-)", "Bakiye"];
         const rows = [...filteredRowsWithBalance].reverse().map(({ tx, balance: bal }) => [
             formatDate(tx.transaction_date),
             paymentDescription(tx.description),
             tx.reference_no || "",
             // 'payment_reversal' borcu geri actigi icin 'debt' ile ayni sutunda (+) gosterilir;
             // "Aciklama" sutunundaki mevcut "Iptal: ..." metni (RPC tarafindan yazilir) ayrimi saglar.
-            tx.transaction_type === "debt" || tx.transaction_type === "payment_reversal" ? tx.amount.toFixed(2) : "0.00",
-            tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? tx.amount.toFixed(2) : "0.00",
-            bal.toFixed(2)
-        ]);
+            tx.transaction_type === "debt" || tx.transaction_type === "payment_reversal" ? Number(tx.amount.toFixed(2)) : 0,
+            tx.transaction_type === "payment" || tx.transaction_type === "cancel" ? Number(tx.amount.toFixed(2)) : 0,
+            Number(bal.toFixed(2)),
+        ] as Array<string | number>);
 
-        const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows.map(row => row.map((value, i) => i >= 3 ? Number(value) : value))]);
-        sheet["!cols"] = [{ wch: 14 }, { wch: 60 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, sheet, "Tedarikçi Cari");
-        XLSX.writeFile(workbook, `tedarikci_cari_${todayLocalISO()}.xlsx`);
+        try {
+            await downloadBrandedExcel({
+                filename: `tedarikci_cari_${todayLocalISO()}.xlsx`,
+                sheetName: "Tedarikçi Cari",
+                title: "Tedarikçi Cari Ekstresi",
+                header: ["Tarih", "Açıklama", "Evrak No", "Borç (+)", "Ödeme (-)", "Bakiye"],
+                rows,
+                colWidths: [14, 60, 20, 18, 18, 18],
+                moneyColumns: [3, 4, 5],
+            });
+        } catch (e: any) {
+            alert("Excel dışa aktarma başarısız: " + (e?.message || ""));
+        }
     }
 
     function handleExportPDF() {
@@ -459,12 +468,14 @@ export default function SupplierDetail() {
 
             {/* Ödeme Formu */}
             {showPaymentForm && (
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-                    <div className="mb-4 flex items-center justify-between">
+                <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true">
+                    <div className="flex max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-emerald-200 bg-emerald-50 dark:border-emerald-900/40 dark:bg-slate-900 sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl">
+                    <div className="flex shrink-0 items-center justify-between p-5 pb-3">
                         <h3 className="font-black text-emerald-900 dark:text-emerald-100">Ödeme Ekle</h3>
-                        <button onClick={() => setShowPaymentForm(false)}><X className="h-4 w-4 text-slate-500" /></button>
+                        <button type="button" aria-label="Kapat" onClick={() => setShowPaymentForm(false)}><X className="h-5 w-5 text-slate-500" /></button>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto px-5 pb-3 sm:grid-cols-2">
+                        {err && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 sm:col-span-2">{err}</div>}
                         <label>
                             <span className="text-xs font-bold text-slate-500">Ödeme Tarihi</span>
                             <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 dark:border-slate-700 dark:bg-slate-900" />
@@ -487,9 +498,15 @@ export default function SupplierDetail() {
                             <input value={payNote} onChange={e => setPayNote(e.target.value)} placeholder="Ödeme notu..." className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 dark:border-slate-700 dark:bg-slate-900" />
                         </label>
                     </div>
-                    <button onClick={handleAddPayment} disabled={saving} className="mt-4 w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60">
-                        {saving ? "Kaydediliyor..." : "Ödemeyi Kaydet"}
-                    </button>
+                    <div className="flex shrink-0 gap-3 border-t border-emerald-200 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-slate-700">
+                        <button type="button" onClick={() => setShowPaymentForm(false)} disabled={saving} className="flex-1 rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                            İptal
+                        </button>
+                        <button type="button" onClick={handleAddPayment} disabled={saving} className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-60">
+                            {saving ? "Kaydediliyor..." : "Ödemeyi Kaydet"}
+                        </button>
+                    </div>
+                    </div>
                 </div>
             )}
 

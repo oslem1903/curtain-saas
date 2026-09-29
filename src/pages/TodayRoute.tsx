@@ -65,6 +65,7 @@ function statusLabel(status?: string | null) {
   if (value === "cancelled" || value === "canceled") return "İptal";
   if (value === "postponed") return "Ertelendi";
   if (value === "onway") return "Yolda";
+  if (value === "measured") return "Ölçü Alındı";
   return "Planlandı";
 }
 
@@ -126,7 +127,7 @@ export default function TodayRoute() {
         .from("appointments")
         .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,assigned_user_id,assigned_role,order_id,customer:customers(id,name,phone)")
         .eq("company_id", ctx.company_id)
-        .in("status", ["planned", "postponed", "onway"])
+        .in("status", ["planned", "postponed", "onway", "measured"])
         .or(`and(start_at.gte.${dayStartISO},start_at.lt.${dayEndISO}),and(scheduled_at.gte.${dayStartISO},scheduled_at.lt.${dayEndISO})`);
 
       if (error && String(error.message || "").toLowerCase().includes("assigned_user_id")) {
@@ -134,7 +135,7 @@ export default function TodayRoute() {
           .from("appointments")
           .select("id,type,title,address,start_at,scheduled_at,status,note,assigned_to,order_id,customer:customers(id,name,phone)")
           .eq("company_id", ctx.company_id)
-          .in("status", ["planned", "postponed", "onway"])
+          .in("status", ["planned", "postponed", "onway", "measured"])
           .or(`and(start_at.gte.${dayStartISO},start_at.lt.${dayEndISO}),and(scheduled_at.gte.${dayStartISO},scheduled_at.lt.${dayEndISO})`);
         data = retry.data as any;
         error = retry.error;

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, Loader2, RefreshCw, X } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
-import { nativePlatform } from "../utils/nativeRuntime";
+import { nativePlatform, openExternalUrl } from "../utils/nativeRuntime";
 
 declare global {
     interface Window {
@@ -78,6 +78,8 @@ export default function AppUpdateNotifier() {
 
     const forced = Boolean(update?.forced_update || update?.force_update);
     const downloadUrl = getDownloadUrl(update);
+    // iOS'ta kurulum App Store uzerinden yapilir; diger platformlarda metin degismez.
+    const iosLabel = nativePlatform() === "ios" ? "App Store'da Aç" : null;
     const canDesktopInstall = Boolean(window.curtainUpdater && downloadUrl);
 
     useEffect(() => {
@@ -167,7 +169,7 @@ export default function AppUpdateNotifier() {
             setInstallError("Bu sürüm için indirme linki girilmemiş.");
             return;
         }
-        window.location.href = downloadUrl;
+        openExternalUrl(downloadUrl);
     }
 
     if (!update || (dismissed && !forced)) return null;
@@ -197,7 +199,7 @@ export default function AppUpdateNotifier() {
                                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white hover:bg-red-700 disabled:opacity-60"
                             >
                                 {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                                İndir ve Kur
+                                {iosLabel ?? "İndir ve Kur"}
                             </button>
                         ) : (
                             <button
@@ -206,7 +208,7 @@ export default function AppUpdateNotifier() {
                                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white hover:bg-red-700"
                             >
                                 <Download className="h-4 w-4" />
-                                Güncellemeyi İndir
+                                {iosLabel ?? "Güncellemeyi İndir"}
                             </button>
                         )}
                     </div>
@@ -230,7 +232,7 @@ export default function AppUpdateNotifier() {
                     className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-black text-white disabled:opacity-60"
                 >
                     {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                    İndir ve Kur
+                    {iosLabel ?? "İndir ve Kur"}
                 </button>
                 <button
                     type="button"

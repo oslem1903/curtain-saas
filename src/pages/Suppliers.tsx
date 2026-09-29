@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { PAYMENT_METHOD_OPTIONS, paymentLabel, paymentDescription } from "../utils/paymentLabels";
+import { logAction } from "../utils/audit";
 import { withoutDeleted } from "../utils/softDelete";
 import { saveSupplierPrice, resolveSupplierPriceNameColumn } from "../utils/supplierPriceCompatibility";
 import { saveProductWithCostCompatibility } from "../utils/productSchemaCompatibility";
@@ -52,6 +53,7 @@ type SupplierTransaction = {
     transaction_type: "debt" | "payment" | "cancel";
     amount: number;
     description?: string | null;
+    payment_method?: string | null;
     created_at: string;
 };
 
@@ -366,7 +368,7 @@ export const Suppliers = () => {
             const ctx = await getContext();
             const { data, error } = await supabase
                 .from("supplier_transactions")
-                .select("id, supplier_id, transaction_type, amount, description, created_at")
+                .select("id, supplier_id, transaction_type, amount, description, payment_method, created_at")
                 .eq("company_id", ctx.company_id)
                 .eq("supplier_id", supplierId)
                 .order("transaction_date", { ascending: false })
@@ -379,6 +381,7 @@ export const Suppliers = () => {
                 transaction_type: row.transaction_type,
                 amount: Number(row.amount || 0),
                 description: row.description || "",
+                payment_method: row.payment_method || null,
                 created_at: row.created_at
             })));
         } catch {
@@ -511,6 +514,7 @@ export const Suppliers = () => {
 
             if (error) throw error;
 
+            void logAction("supplier_payment_created", "supplier_payment", "", { supplier_id: selectedSupplier.id, amount, method: paymentMethod });
             setSuccess("Ödeme kaydedildi!");
             setPaymentAmount("");
             setPaymentNote("");
@@ -1289,11 +1293,14 @@ const RLS_WRITE_HINT =
                                                     <div className="flex items-center justify-between">
                                                         <div>
                                                             <p className="font-bold text-slate-900 dark:text-white">{paymentDescription(tx.description)}</p>
-                                                            <p className="text-sm text-slate-500 mt-1">{new Date(tx.created_at).toLocaleDateString("tr-TR")}</p>
+                                                            <p className="text-sm text-slate-500 mt-1">
+                                                                {new Date(tx.created_at).toLocaleDateString("tr-TR")}
+                                                                {tx.transaction_type !== "debt" && tx.payment_method ? ` · ${paymentLabel(tx.payment_method)}` : ""}
+                                                            </p>
                                                         </div>
                                                         <div className="flex items-center gap-4">
                                                             <p className={`font-black text-lg ${tx.transaction_type === "debt" ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
-                                                                {tx.transaction_type === "debt" ? "+" : "-"}{formatTL(tx.amount)}
+                                                                {tx.transaction_type === "debt" ? "Borç: " : "Ödeme: "}{formatTL(tx.amount)}
                                                             </p>
                                                             <button type="button" onClick={() => handleDeleteTransaction(tx.id)} className="p-2 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/50 dark:hover:text-red-400 rounded-lg transition" title="İşlemi Sil">
                                                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -1350,8 +1357,11 @@ const RLS_WRITE_HINT =
                                                 <div className="space-y-2">
                                                     {transactions.filter(t => t.transaction_type === "payment").map(tx => (
                                                         <div key={tx.id} className="flex items-center justify-between text-sm">
-                                                            <span className="text-slate-600 dark:text-slate-400">{new Date(tx.created_at).toLocaleDateString("tr-TR")}</span>
-                                                            <span className="font-bold text-emerald-600 dark:text-emerald-400">-{formatTL(tx.amount)}</span>
+                                                            <span className="text-slate-600 dark:text-slate-400">
+                                                                {new Date(tx.created_at).toLocaleDateString("tr-TR")}
+                                                                {tx.payment_method ? ` · ${paymentLabel(tx.payment_method)}` : ""}
+                                                            </span>
+                                                            <span className="font-bold text-emerald-600 dark:text-emerald-400">Ödeme: {formatTL(tx.amount)}</span>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -1362,7 +1372,7 @@ const RLS_WRITE_HINT =
                             </div>
 
                             {detailTab === "products" && showProductForm && (
-                                <div className="shrink-0 border-t border-slate-200 bg-white dark:bg-slate-900 p-3">
+                                <div className="shrink-0 border-t border-slate-200 bg-white dark:bg-slate-900 p-3" style={{ paddingBottom: "max(0.75rem, calc(env(safe-area-inset-bottom) + 0.5rem))" }}>
                                     {priceErr && <p role="alert" className="mb-2 text-sm text-red-600">{priceErr}</p>}
                                     <button type="button" onClick={handleSaveProduct} disabled={productFormSaving || !productForm.name.trim()} className="w-full min-h-12 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-50">
                                         {productFormSaving ? "Kaydediliyor..." : "Ürünü Kaydet"}
@@ -1409,8 +1419,8 @@ const RLS_WRITE_HINT =
 
                 {showPaymentModal && selectedSupplier && selectedBalance && (
                     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[90vh] overflow-y-auto w-full max-w-xl shadow-2xl">
-                            <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl shadow-2xl flex flex-col max-h-full overflow-hidden">
+                            <div className="flex shrink-0 items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800">
                                 <h2 className="text-2xl font-black text-slate-900 dark:text-white">Ödeme Yap</h2>
                                 <button
                                     onClick={() => setShowPaymentModal(false)}
@@ -1420,7 +1430,7 @@ const RLS_WRITE_HINT =
                                 </button>
                             </div>
 
-                            <div className="p-6 space-y-4">
+                            <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
                                 <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
                                     <div className="grid grid-cols-3 gap-3 text-center">
                                         <div>
@@ -1490,7 +1500,7 @@ const RLS_WRITE_HINT =
                                 </div>
                             </div>
 
-                            <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-slate-800">
+                            <div className="flex shrink-0 gap-3 p-6 border-t border-slate-200 dark:border-slate-800" style={{ paddingBottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}>
                                 <button
                                     onClick={() => setShowPaymentModal(false)}
                                     className="flex-1 px-6 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition"

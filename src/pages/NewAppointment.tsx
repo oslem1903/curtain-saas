@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { logAction } from "../utils/audit";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
@@ -515,6 +516,7 @@ export default function NewAppointment() {
             if (apptErr) throw apptErr;
             const appointmentId = appointmentRow?.id;
             if (appointmentId) {
+                void logAction("appointment_created", "appointment", appointmentId, { type });
                 const displayCustomerName = customerMode === "new" ? nameForNewCustomer : customerName;
                 const taskType: ReminderTaskType = type === "measurement" ? "measurement" : type === "installation" ? "installation" : "other";
                 await scheduleReminderNotification({

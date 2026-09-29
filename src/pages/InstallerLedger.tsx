@@ -15,6 +15,7 @@ type Employee = {
     id: string;
     user_id: string | null;
     full_name: string | null;
+    phone: string | null;
     target_role: string | null;
     // Aynı isimli kopya kayıtların tüm kimlikleri (iş eşleştirme için)
     allIds: string[];
@@ -134,6 +135,10 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
     const [err, setErr] = useState("");
     const [needsMigration, setNeedsMigration] = useState(false);
     const [addEarningModalId, setAddEarningModalId] = useState<string | null>(null);
+    const [editEmpId, setEditEmpId] = useState<string | null>(null);
+    const [editEmpName, setEditEmpName] = useState("");
+    const [editEmpPhone, setEditEmpPhone] = useState("");
+    const [editEmpSaving, setEditEmpSaving] = useState(false);
 
     const [openBalanceId, setOpenBalanceId] = useState<string | null>(null);
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -157,7 +162,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
 
             const { data: emps, error: employeeError } = await supabase
                 .from("employees")
-                .select("id, user_id, full_name, target_role")
+                .select("id, user_id, full_name, phone, target_role")
                 .eq("company_id", ctx.company_id)
                 .eq("is_active", true)
                 .order("full_name");
@@ -174,7 +179,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                 if (existing) {
                     existing.allIds = Array.from(new Set([...existing.allIds, ...ids]));
                 } else {
-                    grouped.set(key, { id: e.id, user_id: e.user_id, full_name: name, target_role: e.target_role, allIds: ids });
+                    grouped.set(key, { id: e.id, user_id: e.user_id, full_name: name, phone: e.phone || null, target_role: e.target_role, allIds: ids });
                 }
             });
             setEmployees(Array.from(grouped.values()));
@@ -347,7 +352,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                     if (existing) {
                         existing.allIds = Array.from(new Set([...existing.allIds, idv]));
                     } else {
-                        grouped.set(key, { id: idv, user_id: idv, full_name: nm, target_role: "installer", allIds: [idv] });
+                        grouped.set(key, { id: idv, user_id: idv, full_name: nm, phone: null, target_role: "installer", allIds: [idv] });
                     }
                 });
                 setEmployees(Array.from(grouped.values()));
@@ -599,6 +604,60 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             // istediği tutarı elle girebilir, bu asla engellenmez.
         }
         setDrafts((prev) => ({ ...prev, [job.id]: next }));
+    }
+
+    function openEditEmployee(emp: Employee) {
+        setEditEmpId(emp.id);
+        setEditEmpName(emp.full_name || "");
+        setEditEmpPhone(emp.phone || "");
+    }
+
+    async function saveEmployeeEdit() {
+        if (!editEmpId || !editEmpName.trim()) return;
+        setEditEmpSaving(true);
+        try {
+            const { error } = await supabase
+                .from("employees")
+                .update({ full_name: editEmpName.trim(), phone: editEmpPhone.trim() || null })
+                .eq("id", editEmpId);
+            if (error) throw error;
+            setEmployees((prev) => prev.map((e) => e.id === editEmpId ? { ...e, full_name: editEmpName.trim(), phone: editEmpPhone.trim() || null } : e));
+            setEditEmpId(null);
+        } catch (e: any) {
+            alert(e?.message || "Montajcı güncellenemedi.");
+        } finally {
+            setEditEmpSaving(false);
+        }
+    }
+
+    async function handleDeleteOrDeactivateEmployee(emp: Employee) {
+        try {
+            const [earningsRes, txRes, jobsRes] = await Promise.all([
+                supabase.from("installer_earnings").select("id", { count: "exact", head: true }).in("installer_id", emp.allIds),
+                supabase.from("installer_transactions").select("id", { count: "exact", head: true }).in("installer_id", emp.allIds),
+                supabase.from("installation_jobs").select("id", { count: "exact", head: true }).in("assigned_staff_id", emp.allIds),
+            ]);
+            const hasRecords = (earningsRes.count || 0) > 0 || (txRes.count || 0) > 0 || (jobsRes.count || 0) > 0;
+
+            if (hasRecords) {
+                const confirmPassive = window.confirm(
+                    `${emp.full_name} için geçmiş montaj, hakediş veya ödeme kayıtları var. Kayıtların bozulmaması için tamamen silinemez.\n\n` +
+                    "Bunun yerine PASİF yapılsın mı? Pasif personel yeni işe atanamaz, geçmiş kayıtları korunur."
+                );
+                if (!confirmPassive) return;
+                const { error } = await supabase.from("employees").update({ is_active: false }).eq("id", emp.id);
+                if (error) throw error;
+                setEmployees((prev) => prev.filter((e) => e.id !== emp.id));
+                return;
+            }
+
+            if (!window.confirm(`${emp.full_name} silinsin mi?`)) return;
+            const { error } = await supabase.from("employees").delete().eq("id", emp.id);
+            if (error) throw error;
+            setEmployees((prev) => prev.filter((e) => e.id !== emp.id));
+        } catch (e: any) {
+            alert(e?.message || "Montajcı silinemedi.");
+        }
     }
 
     async function saveJobFee(job: Job) {
@@ -855,7 +914,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                     </div>
                                     <div className="space-y-1.5">
                                         <div className="text-sm font-medium text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                                            <Phone className="h-4 w-4 text-slate-400" /> Kayıtlı Değil
+                                            <Phone className="h-4 w-4 text-slate-400" /> {emp.phone || "Kayıtlı Değil"}
                                         </div>
                                         <div className="text-sm font-medium text-slate-600 dark:text-slate-400 flex items-center gap-2">
                                             <CalendarCheck className="h-4 w-4 text-slate-400" /> Son Öd: {(() => {
@@ -948,6 +1007,28 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                         {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                                         Detay & Ekstre
                                     </button>
+                                    {/* Yalnizca gercek bir employees satirina bagli kartlarda duzenle/sil
+                                        goster -- yalnizca profiles'tan turetilen "hesap" kayitlarinda
+                                        (id === user_id, employees tablosunda karsiligi yok) bu islemler
+                                        sessizce hicbir seyi etkilemez, bu yuzden gizlenir. */}
+                                    {emp.id !== emp.user_id && (
+                                        <div className="w-full flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => openEditEmployee(emp)}
+                                                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-black text-amber-700 hover:bg-amber-100 transition dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-500"
+                                            >
+                                                Düzenle
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteOrDeactivateEmployee(emp)}
+                                                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs font-black text-rose-700 hover:bg-rose-100 transition dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-400"
+                                            >
+                                                Sil / Pasif Yap
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -1372,6 +1453,32 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                     onSave={(amount, date, description) => handleAddEarning(emp, amount, date, description)}
                                     onCancel={() => setAddEarningModalId(null)}
                                 />
+                            )}
+
+                            {/* Montajcı Düzenle Modal */}
+                            {editEmpId === emp.id && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                                    <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="text-lg font-black text-slate-900 dark:text-white">Montajcı Bilgilerini Düzenle</h3>
+                                            <button onClick={() => setEditEmpId(null)} className="rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-700">✕</button>
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-xs font-bold text-slate-500">Ad Soyad</label>
+                                            <input value={editEmpName} onChange={(e) => setEditEmpName(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+                                        </div>
+                                        <div>
+                                            <label className="mb-1 block text-xs font-bold text-slate-500">Telefon</label>
+                                            <input value={editEmpPhone} onChange={(e) => setEditEmpPhone(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" placeholder="05xx xxx xx xx" />
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button type="button" onClick={() => setEditEmpId(null)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-black text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">İptal</button>
+                                            <button type="button" disabled={editEmpSaving || !editEmpName.trim()} onClick={saveEmployeeEdit} className="flex-1 rounded-xl bg-primary-600 py-2.5 text-sm font-black text-white hover:bg-primary-700 disabled:opacity-60">
+                                                {editEmpSaving ? "Kaydediliyor..." : "Kaydet"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     );

@@ -7,6 +7,7 @@ import { type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { createReadScope } from "../utils/readScope";
 import { logAction } from "../utils/audit";
+import { getErrorMessage } from "../utils/errorMessage";
 import { notifyPaymentReceived } from "../services/notificationManager";
 import { createFinanceService } from "../services/finance";
 import { computePlanForOrder, buildInstallmentPlanFromDraft } from "../utils/installments";
@@ -1108,7 +1109,7 @@ export default function OrderDetail() {
             resetItemForm();
             await loadData();
         } catch (e: unknown) {
-            setItemFormError(e instanceof Error ? e.message : "Ürün satırı kaydedilemedi.");
+            setItemFormError(getErrorMessage(e, "Ürün satırı kaydedilemedi."));
         } finally {
             setSaving(false);
         }
@@ -1147,7 +1148,7 @@ export default function OrderDetail() {
             await recalcAndSaveOrderTotals((freshItems ?? []) as OrderItemRow[]);
             await loadData();
         } catch (e: unknown) {
-            setItemFormError(e instanceof Error ? e.message : "Ürün satırı silinemedi.");
+            setItemFormError(getErrorMessage(e, "Ürün satırı silinemedi."));
         } finally {
             setSaving(false);
         }
@@ -1765,7 +1766,6 @@ export default function OrderDetail() {
                     )}
                 </div>
 
-                {paymentError ? <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">{paymentError}</div> : null}
                 {paymentSuccess ? <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{paymentSuccess}</div> : null}
                 {workflowError ? <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">{workflowError}</div> : null}
                 {workflowMessage ? <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{workflowMessage}</div> : null}
@@ -1853,19 +1853,44 @@ export default function OrderDetail() {
                 )}
 
                 {showPaymentForm ? (
-                    <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10">
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_auto]">
-                            <input type="number" min={0} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} className="min-h-12 rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900" placeholder="Tahsilat tutarı" />
-                            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="min-h-12 rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900">
-                                <option value="nakit">Nakit</option>
-                                <option value="kart">Kart</option>
-                                <option value="havale">Havale/EFT</option>
-                                <option value="diger">Diğer</option>
-                            </select>
-                            <input value={paymentNote} onChange={(e) => setPaymentNote(e.target.value)} className="min-h-12 rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900" placeholder="Açıklama" />
-                            <button type="button" onClick={handleAddPayment} disabled={saving} className="min-h-12 rounded-xl bg-emerald-600 px-5 font-black text-white disabled:opacity-60 sm:col-span-2 lg:col-span-1">
-                                Kaydet
-                            </button>
+                    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4">
+                        <div className="flex max-h-full w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl dark:bg-slate-900 sm:max-w-lg sm:rounded-3xl">
+                            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 p-5 dark:border-slate-800">
+                                <h3 className="text-lg font-black text-slate-900 dark:text-white">Ödeme Ekle</h3>
+                                <button type="button" onClick={() => setShowPaymentForm(false)} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+                                    <X className="h-5 w-5" />
+                                </button>
+                            </div>
+
+                            <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-3">
+                                {paymentError ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">{paymentError}</div> : null}
+                                <label className="block">
+                                    <span className="mb-1 block text-xs font-black uppercase tracking-widest text-slate-400">Tahsilat Tutarı</span>
+                                    <input type="number" min={0} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} className="min-h-12 w-full rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900" placeholder="0,00" autoFocus />
+                                </label>
+                                <label className="block">
+                                    <span className="mb-1 block text-xs font-black uppercase tracking-widest text-slate-400">Ödeme Yöntemi</span>
+                                    <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="min-h-12 w-full rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900">
+                                        <option value="nakit">Nakit</option>
+                                        <option value="kart">Kart</option>
+                                        <option value="havale">Havale/EFT</option>
+                                        <option value="diger">Diğer</option>
+                                    </select>
+                                </label>
+                                <label className="block">
+                                    <span className="mb-1 block text-xs font-black uppercase tracking-widest text-slate-400">Açıklama</span>
+                                    <input value={paymentNote} onChange={(e) => setPaymentNote(e.target.value)} className="min-h-12 w-full rounded-xl border border-emerald-200 bg-white px-4 font-bold outline-none dark:border-emerald-900 dark:bg-slate-900" placeholder="İsteğe bağlı" />
+                                </label>
+                            </div>
+
+                            <div className="flex shrink-0 gap-3 border-t border-slate-100 p-5 dark:border-slate-800" style={{ paddingBottom: "max(1.25rem, calc(env(safe-area-inset-bottom) + 0.75rem))" }}>
+                                <button type="button" onClick={() => setShowPaymentForm(false)} disabled={saving} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-black text-slate-600 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                                    İptal
+                                </button>
+                                <button type="button" onClick={handleAddPayment} disabled={saving} className="flex-1 min-h-12 rounded-xl bg-emerald-600 px-5 font-black text-white disabled:opacity-60">
+                                    {saving ? "Kaydediliyor..." : "Kaydet"}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 ) : null}

@@ -51,14 +51,19 @@ export default function FieldInfoSection({
     }
 
     try {
+      // Uri (Base64 degil): buyuk fotograflarda base64 stringi tum resmi JS
+      // bellegine tasiyip kameradan donuste Android'in WebView surecini
+      // bellek baskisiyla oldurup sayfayi sifirdan yenilemesine (ve o ana
+      // kadar girilen tum formun kaybolmasina) neden olabiliyordu — ayni
+      // duzeltme FieldInfoEditor.tsx'te zaten kullaniliyordu.
       const photo = await CapacitorCamera.getPhoto({
         quality: 90,
-        resultType: CameraResultType.Base64,
+        resultType: CameraResultType.Uri,
         source: CameraSource.Camera,
       });
 
-      if (photo.base64String) {
-        const blob = base64ToBlob(photo.base64String, photo.format);
+      if (photo.webPath) {
+        const blob = await (await fetch(photo.webPath)).blob();
         await uploadPhoto(blob);
       }
     } catch (err) {
@@ -264,14 +269,4 @@ export default function FieldInfoSection({
       </label>
     </div>
   );
-}
-
-function base64ToBlob(base64: string, format: string): Blob {
-  const binary = atob(base64);
-  const array = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    array[i] = binary.charCodeAt(i);
-  }
-  const mimeType = `image/${format || "jpeg"}`;
-  return new Blob([array], { type: mimeType });
 }

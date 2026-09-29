@@ -5,6 +5,9 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 let isReadOnly = false;
 
+export const READ_ONLY_MESSAGE =
+    "Bu hesap salt okunur modda. Değişiklik yapmak için aktif/yazma yetkili hesap kullanın.";
+
 export function setAppReadOnlyMode(status: boolean) {
     isReadOnly = status;
 }
@@ -78,11 +81,23 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
             const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
             if (!urlStr.includes("/auth/v1/")) {
                 showPurchaseRequired();
+                // supabase-js (postgrest) hata metnini gövdedeki `message` alanından okur;
+                // `error` alanı kullanılırsa kullanıcıya "undefined" gösterilir.
                 return Promise.resolve(
-                    new Response(JSON.stringify({ error: "Trial expired. Read-only mode active." }), {
-                        status: 403,
-                        statusText: "Forbidden",
-                    })
+                    new Response(
+                        JSON.stringify({
+                            code: "READ_ONLY_MODE",
+                            message: READ_ONLY_MESSAGE,
+                            details: null,
+                            hint: null,
+                            error: READ_ONLY_MESSAGE,
+                        }),
+                        {
+                            status: 403,
+                            statusText: "Forbidden",
+                            headers: { "Content-Type": "application/json" },
+                        }
+                    )
                 );
             }
         }

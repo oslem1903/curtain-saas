@@ -69,7 +69,7 @@ async function createTulOrder(page: Page, companyId: string, step: (s: string) =
 
 async function cleanupOrder(page: Page, companyId: string, o: { orderId?: string; customerId?: string; apptIds?: string[]; installerId?: string }) {
   if (page.isClosed()) return;
-  await page.evaluate(async ({ companyId, o }) => {
+  await page.evaluate(async ({ o }) => {
     const sb = (window as any).supabase;
     try {
       if (o.orderId) {
@@ -92,8 +92,8 @@ async function cleanupOrder(page: Page, companyId: string, o: { orderId?: string
         await sb.from("installer_earnings").delete().eq("installer_id", o.installerId);
         await sb.from("employees").delete().eq("id", o.installerId);
       }
-    } catch (e) { /* temizlik asıl sonucu maskelemesin */ }
-  }, { companyId, o });
+    } catch { /* temizlik asıl sonucu maskelemesin */ }
+  }, { o });
 }
 
 test.describe("Tahsilat & Montaj (Test Company 1) — canlı UI E2E", () => {
@@ -180,7 +180,7 @@ test.describe("Tahsilat & Montaj (Test Company 1) — canlı UI E2E", () => {
     // --- Onaylı: Test Company 1'in montaj modülünü test için AÇ (önce mevcut ayarı kaydet) ---
     await page.goto("/#/super-admin/companies", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => !!(window as any).supabase, null, { timeout: 15_000 }).catch(() => {});
-    const moduleState = await page.evaluate(async (nameRe) => {
+    const moduleState = await page.evaluate(async () => {
       const sb = (window as any).supabase;
       const { data } = await sb.from("companies").select("id,name,enabled_modules").ilike("name", "oss");
       const row = (data || [])[0];
@@ -191,7 +191,7 @@ test.describe("Tahsilat & Montaj (Test Company 1) — canlı UI E2E", () => {
         await sb.from("companies").update({ enabled_modules: next }).eq("id", row.id);
       }
       return { id: row.id as string, prior, changed: !prior.includes("installation") };
-    }, TC1_NAME_RE.source);
+    });
     console.log(`[STEP] montaj modülü ayarı: ${JSON.stringify(moduleState)}`);
 
     const company = await actAsTestCompanyAdmin(page);
@@ -250,7 +250,7 @@ test.describe("Tahsilat & Montaj (Test Company 1) — canlı UI E2E", () => {
       step("Montaj tamamlandı, hakediş doğrulanıyor");
 
       // DOĞRULAMA: iş completed + sipariş montaj_tamamlandi + installer_earnings/transactions oluştu
-      const after = await page.evaluate(async ({ companyId, orderId, installerId }) => {
+      const after = await page.evaluate(async ({ orderId, installerId }) => {
         const sb = (window as any).supabase;
         const { data: job } = await sb.from("installation_jobs").select("id,status").eq("order_id", orderId).limit(1);
         const { data: ord } = await sb.from("orders").select("id,status").eq("id", orderId).single();
@@ -260,7 +260,7 @@ test.describe("Tahsilat & Montaj (Test Company 1) — canlı UI E2E", () => {
         const { data: earnings } = await sb.from("installer_earnings").select("id,total_earning,installer_id,order_id").eq("order_id", orderId);
         const { data: txns } = await sb.from("installer_transactions").select("id,amount,installer_id,transaction_type").eq("installer_id", installerId).eq("transaction_type", "earning");
         return { jobStatus: job?.[0]?.status, orderStatus: ord?.status, earnings, txns };
-      }, { companyId: company.id, orderId: o.orderId, installerId });
+      }, { orderId: o.orderId, installerId });
 
       expect(after.jobStatus, "iş 'completed' değil").toBe("completed");
       expect(after.orderStatus, "sipariş 'montaj_tamamlandi' değil").toBe("montaj_tamamlandi");

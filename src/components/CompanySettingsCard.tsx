@@ -3,6 +3,13 @@ import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { Upload, X, Check, Loader2 } from "lucide-react";
 import SecureImage from "./SecureImage";
+import { clearStorageUrlCache } from "../utils/storageUrl";
+import { logAction } from "../utils/audit";
+import { getErrorMessage } from "../utils/errorMessage";
+
+/** Şirket adı/logosu değiştiğinde Layout'un (sol menü, üst başlık) anında
+ * güncellenmesi için yayınlanan olay — sayfa yenilemeden senkron olur. */
+export const COMPANY_PROFILE_UPDATED_EVENT = "company-profile-updated";
 
 type CompanySettingsState = {
     id: string;
@@ -97,16 +104,16 @@ export function CompanySettingsCard() {
                 setIsEditing(false);
                 await refreshCompany();
                 await refreshAuth();
+                void logAction("company_profile_updated", "company", settings.id, { name: settings.name });
+                window.dispatchEvent(new CustomEvent(COMPANY_PROFILE_UPDATED_EVENT));
             } else {
                 setMessage({ type: "error", text: data?.message || "Bir hata oluştu." });
             }
         } catch (err) {
+            console.error("update_company_profile hatası:", err);
             setMessage({
                 type: "error",
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : "Şirket profili kaydedilemedi.",
+                text: getErrorMessage(err, "Şirket profili kaydedilemedi."),
             });
         } finally {
             setLoading(false);
@@ -200,10 +207,18 @@ export function CompanySettingsCard() {
 
             if (updateError) throw updateError;
 
+            // Eski imzalı-URL önbelleği yol bazlı tutulduğu için (bkz. storageUrl.ts),
+            // aynı yola tekrar yüklenen logo, önbellek süresi (1 saat) dolana kadar
+            // eski görseli göstermeye devam ediyordu. Önbelleği tamamen temizleyip
+            // yeni bir imzalı URL üretilmesini zorunlu kılıyoruz.
+            clearStorageUrlCache();
+
             setSettings((prev) =>
                 prev ? { ...prev, logo_url: logoValue } : null
             );
             setMessage({ type: "success", text: "Logo başarıyla güncellendi." });
+            await refreshAuth();
+            window.dispatchEvent(new CustomEvent(COMPANY_PROFILE_UPDATED_EVENT));
         } catch {
             setMessage({
                 type: "error",
@@ -223,10 +238,13 @@ export function CompanySettingsCard() {
                 .eq("id", settings?.id);
 
             if (error) throw error;
+            clearStorageUrlCache();
             setSettings((prev) =>
                 prev ? { ...prev, logo_url: null } : null
             );
             setMessage({ type: "success", text: "Logo kaldırıldı." });
+            await refreshAuth();
+            window.dispatchEvent(new CustomEvent(COMPANY_PROFILE_UPDATED_EVENT));
         } catch {
             setMessage({
                 type: "error",
