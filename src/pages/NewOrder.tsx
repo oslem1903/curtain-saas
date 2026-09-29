@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { logAction } from "../utils/audit";
 import { useRole } from "../context/RoleContext";
 import { normalizeRole } from "../auth/roles";
 import { ArrowLeft, Users, Phone, Trash2, Package, Save, Briefcase, Plus, ChevronDown, ChevronUp, Search } from "lucide-react";
@@ -919,6 +920,7 @@ export default function NewOrder() {
             const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: note.trim() || null, status, total_amount: grandTotal, deposit_amount: 0, paid_amount: 0, remaining_amount: grandTotal, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId }]).select("id").single();
             if (orderErr) throw orderErr;
             const orderId = orderRow.id;
+            void logAction("order_created", "order", orderId, { source: "new_order" });
 
             const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
             // Tek tek insert edilir: order_items.select() batch-insert'te DB'nin dönüş sırasını

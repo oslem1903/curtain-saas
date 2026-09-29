@@ -21,6 +21,7 @@
 
 import { Capacitor } from "@capacitor/core";
 import { shareOrDownloadTextFile } from "./nativeShare";
+import { brandingHeaderHtml, getCompanyBranding } from "./companyBranding";
 
 export type PrintDocumentOptions = {
   /** Yazdırma diyaloğunda / dosya adında görünen başlık. */
@@ -29,6 +30,8 @@ export type PrintDocumentOptions = {
   fileName?: string;
   /** İçerik yerleşmesi için yazdırmadan önce beklenecek süre (ms). */
   delayMs?: number;
+  /** false verilirse şirket logosu/adı şeridi eklenmez (varsayılan: eklenir). */
+  brand?: boolean;
 };
 
 function slugify(value: string): string {
@@ -62,7 +65,15 @@ function ensureDocument(html: string, title?: string): string {
  */
 export async function printHtmlDocument(html: string, options: PrintDocumentOptions = {}): Promise<boolean> {
   const { title, delayMs = 350 } = options;
-  const documentHtml = ensureDocument(html, title);
+  let documentHtml = ensureDocument(html, title);
+  if (options.brand !== false) {
+    const header = brandingHeaderHtml(await getCompanyBranding());
+    if (header) {
+      documentHtml = /<body[^>]*>/i.test(documentHtml)
+        ? documentHtml.replace(/<body[^>]*>/i, (m) => m + header)
+        : header + documentHtml;
+    }
+  }
   const baseName = slugify(options.fileName || title || "perdepro-belge");
   const fileName = /\.html?$/i.test(options.fileName || "") ? (options.fileName as string) : `${baseName}.html`;
 

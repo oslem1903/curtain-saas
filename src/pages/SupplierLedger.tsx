@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
+import { downloadBrandedExcel } from "../utils/excelBranding";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { createFinanceService } from "../services/finance";
 import { todayLocalISO } from "../utils/date";
-import { paymentLabel } from "../utils/paymentLabels";
+import { paymentLabel, PAYMENT_METHOD_OPTIONS } from "../utils/paymentLabels";
 
 const financeService = createFinanceService();
 
@@ -146,7 +146,7 @@ export default function SupplierLedger() {
     const [exporting, setExporting] = useState(false);
 
     const [quickPaymentAmount, setQuickPaymentAmount] = useState("");
-    const [quickPaymentMethod, setQuickPaymentMethod] = useState("");
+    const [quickPaymentMethod, setQuickPaymentMethod] = useState("nakit");
     const [quickPaymentNote, setQuickPaymentNote] = useState("");
 
     const [quickExpenseAmount, setQuickExpenseAmount] = useState("");
@@ -235,55 +235,18 @@ export default function SupplierLedger() {
         try {
             setExporting(true);
 
-            // Calculate running balance for each row
             let runningBalance = 0;
             const dataRows = ledgerRows.map((r) => {
                 runningBalance += r.debt - r.payment;
-                return {
-                    "Tarih": formatDateTR(r.date),
-                    "Vade": formatDateTR(r.due_date),
-                    "Açıklama": r.description,
-                    "Borç": r.debt > 0 ? formatTL(r.debt) : "-",
-                    "Ödeme": r.payment > 0 ? formatTL(r.payment) : "-",
-                    "Bakiye": formatTL(runningBalance),
-                };
+                return [
+                    formatDateTR(r.date),
+                    formatDateTR(r.due_date),
+                    r.description,
+                    r.debt > 0 ? r.debt : 0,
+                    r.payment > 0 ? r.payment : 0,
+                    runningBalance,
+                ] as Array<string | number>;
             });
-
-            // Header info
-            const headerData = [
-                ["Tedarikçi Cari Ekstesi"],
-                [],
-                ["Tedarikçi:", selectedSupplierName],
-                ["Toplam Borç:", formatTL(totalDebt)],
-                ["Toplam Ödeme:", formatTL(totalPayment)],
-                ["Kalan Bakiye:", formatTL(remaining)],
-                ["Dışa Aktarma Tarihi:", formatDateTR(new Date().toISOString())],
-                [],
-            ];
-
-            // Combine header + column titles + data
-            const sheetData = [
-                ...headerData,
-                Object.keys(dataRows[0] || {}),
-                ...dataRows.map(r => Object.values(r)),
-            ];
-
-            // Create worksheet
-            const ws = XLSX.utils.aoa_to_sheet(sheetData);
-
-            // Set column widths
-            ws['!cols'] = [
-                { wch: 14 }, // Tarih
-                { wch: 14 }, // Vade
-                { wch: 32 }, // Açıklama
-                { wch: 14 }, // Borç
-                { wch: 14 }, // Ödeme
-                { wch: 14 }, // Bakiye
-            ];
-
-            // Create workbook
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, "Tedarikçi Cari");
 
             // Generate safe filename (replace Turkish chars)
             const safeName = selectedSupplierName
@@ -295,10 +258,22 @@ export default function SupplierLedger() {
                 .replace(/ü/g, "u").replace(/Ü/g, "U")
                 .replace(/[^a-zA-Z0-9_-]/g, "_");
 
-            const today = todayLocalISO();
-            const filename = `Tedarikci_Cari_${safeName}_${today}.xlsx`;
-
-            XLSX.writeFile(wb, filename);
+            await downloadBrandedExcel({
+                filename: `Tedarikci_Cari_${safeName}_${todayLocalISO()}.xlsx`,
+                sheetName: "Tedarikçi Cari",
+                title: "Tedarikçi Cari Ekstresi",
+                infoRows: [
+                    ["Tedarikçi:", selectedSupplierName],
+                    ["Toplam Borç:", formatTL(totalDebt)],
+                    ["Toplam Ödeme:", formatTL(totalPayment)],
+                    ["Kalan Bakiye:", formatTL(remaining)],
+                    ["Dışa Aktarma Tarihi:", formatDateTR(new Date().toISOString())],
+                ],
+                header: ["Tarih", "Vade", "Açıklama", "Borç", "Ödeme", "Bakiye"],
+                rows: dataRows,
+                colWidths: [14, 14, 40, 16, 16, 16],
+                moneyColumns: [3, 4, 5],
+            });
         } catch (e: any) {
             alert("Excel dışa aktarma başarısız: " + (e?.message || ""));
         } finally {
@@ -806,9 +781,9 @@ export default function SupplierLedger() {
             </div>
 
             {showQuickPaymentModal && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl p-6 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
-                        <div className="flex items-center justify-between">
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
+                    <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col max-h-full overflow-hidden">
+                        <div className="flex shrink-0 items-center justify-between p-6 pb-4">
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">
                                 Hızlı Tedarikçi Ödemesi
                             </h2>
@@ -820,42 +795,47 @@ export default function SupplierLedger() {
                             </button>
                         </div>
 
-                        <div className="text-sm text-slate-500">
-                            Tedarikçi: <span className="font-medium">{selectedSupplierName}</span>
+                        <div className="min-h-0 flex-1 overflow-y-auto px-6 space-y-4">
+                            <div className="text-sm text-slate-500">
+                                Tedarikçi: <span className="font-medium">{selectedSupplierName}</span>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Tutar</label>
+                                <input
+                                    value={quickPaymentAmount}
+                                    onChange={(e) => setQuickPaymentAmount(e.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                                    placeholder="0"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Ödeme Yöntemi</label>
+                                <select
+                                    value={quickPaymentMethod}
+                                    onChange={(e) => setQuickPaymentMethod(e.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                                >
+                                    {PAYMENT_METHOD_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Not</label>
+                                <textarea
+                                    value={quickPaymentNote}
+                                    onChange={(e) => setQuickPaymentNote(e.target.value)}
+                                    rows={3}
+                                    className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
+                                    placeholder="İsteğe bağlı not"
+                                />
+                            </div>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Tutar</label>
-                            <input
-                                value={quickPaymentAmount}
-                                onChange={(e) => setQuickPaymentAmount(e.target.value)}
-                                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="0"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Ödeme Yöntemi</label>
-                            <input
-                                value={quickPaymentMethod}
-                                onChange={(e) => setQuickPaymentMethod(e.target.value)}
-                                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="Nakit / Havale / Kart"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Not</label>
-                            <textarea
-                                value={quickPaymentNote}
-                                onChange={(e) => setQuickPaymentNote(e.target.value)}
-                                rows={3}
-                                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 bg-white dark:bg-slate-950"
-                                placeholder="İsteğe bağlı not"
-                            />
-                        </div>
-
-                        <div className="flex justify-end gap-3">
+                        <div className="flex shrink-0 justify-end gap-3 p-6 pt-4" style={{ paddingBottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}>
                             <button
                                 onClick={() => setShowQuickPaymentModal(false)}
                                 className="px-4 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg"

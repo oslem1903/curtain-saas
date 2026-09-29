@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import { findDuplicatePhone, duplicatePhoneMessage, phoneConstraintMessage } from "../utils/phoneUtils";
+import { logAction } from "../utils/audit";
 import { withoutDeleted } from "../utils/softDelete";
 import { todayLocalISO } from "../utils/date";
 import { printHtmlDocument } from "../utils/printDocument";
@@ -590,6 +591,7 @@ export default function Customers() {
             return;
         }
 
+        void logAction("customer_created", "customer", "", { name: form.name.trim() });
         setForm(emptyForm);
         setShowAddForm(false); // Auto-collapse form
         await loadData();

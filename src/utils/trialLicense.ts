@@ -35,6 +35,7 @@ export type TrialCompanyLike = {
   is_pilot?: boolean | null;
   plan_status?: string | null;
   trial_ends_at?: string | null;
+  license_expires_at?: string | null;
 };
 
 /**
@@ -58,7 +59,13 @@ export function isTrialExpired(company: TrialCompanyLike | null | undefined): bo
 
   const status = String(company.plan_status ?? "").toLowerCase();
   if (status === "expired") return true;
-  if (status === "active" || status === "lifetime") return false;
+  if (status === "lifetime") return false;
+  if (status === "active") {
+    // Ucretli lisans: bitis tarihi girilmisse ve gecmisse sure dolmustur.
+    // Tarih bos ise (suresiz/elle yonetilen lisans) kilitlenmez.
+    if (!company.license_expires_at) return false;
+    return new Date(company.license_expires_at).getTime() < Date.now();
+  }
 
   if (!company.trial_ends_at) return true;
   return new Date(company.trial_ends_at).getTime() < Date.now();

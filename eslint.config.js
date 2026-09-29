@@ -7,7 +7,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
   // delivery altında arşivlenmiş eski kaynak kopyaları bulunur; üretim kaynağı değildir.
-  globalIgnores(['dist', 'android/**', 'release/**', 'release-fixed/**', 'delivery/**']),
+  globalIgnores(['dist', 'backup-before-*/**', 'android/**', 'release/**', 'release-fixed/**', 'delivery/**']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

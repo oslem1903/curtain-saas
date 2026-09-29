@@ -330,9 +330,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (isTrialExpired(activeCompany)) {
+            // Suresi dolan hesap kilitlenmez: salt okunur modda girer.
             setLockReason(activeCompany.read_only ? "read_only" : "expired_trial");
             hasLoadedOnce.current = true;
-            setStatus(activeCompany.read_only ? "ready" : "locked");
+            setStatus("ready");
             return;
         }
 
@@ -367,9 +368,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     return;
                 }
                 if (licenseCheck === "expired") {
+                    // Sunucu da suresi dolmus diyor: kilitleme, salt okunur gir.
                     setLockReason("expired_trial");
+                    setAppReadOnlyMode(true);
                     hasLoadedOnce.current = true;
-                    setStatus("locked");
+                    setStatus("ready");
                     return;
                 }
                 if (licenseCheck === "device_limit") {
@@ -478,7 +481,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberRole,
         readOnly: role === "super_admin" && Boolean(localStorage.getItem("demo_company_id")) && localStorage.getItem("demo_read_only") === "false"
             ? false
-            : Boolean(company?.read_only) || lockReason === "read_only" || (role === "super_admin" && localStorage.getItem("demo_read_only") !== "false" && Boolean(localStorage.getItem("demo_company_id"))),
+            : Boolean(company?.read_only) || lockReason === "read_only" || lockReason === "expired_trial" || (role === "super_admin" && localStorage.getItem("demo_read_only") !== "false" && Boolean(localStorage.getItem("demo_company_id"))),
         enabledModules,
         hasModule: (module: string) => {
             if (role === "super_admin" && !localStorage.getItem("demo_company_id")) return true;

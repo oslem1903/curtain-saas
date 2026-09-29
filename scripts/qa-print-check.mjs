@@ -25,6 +25,18 @@ const bundled = await build({
   write: false,
   format: 'iife',
   define: { 'process.env.NODE_ENV': '"production"' },
+  // companyBranding.ts supabaseClient'i (import.meta.env + ağ) çeker; yazdırma testi
+  // yalnızca iframe/print akışını sınar, bu yüzden markalama modülü test tarafında stub'lanır.
+  plugins: [{
+    name: 'stub-company-branding',
+    setup(b) {
+      b.onResolve({ filter: /companyBranding$/ }, () => ({ path: 'company-branding-stub', namespace: 'qa-stub' }));
+      b.onLoad({ filter: /.*/, namespace: 'qa-stub' }, () => ({
+        contents: 'export async function getCompanyBranding(){return null;}\nexport function brandingHeaderHtml(){return "";}',
+        loader: 'js',
+      }));
+    },
+  }],
 });
 const bundleJs = bundled.outputFiles[0].text;
 

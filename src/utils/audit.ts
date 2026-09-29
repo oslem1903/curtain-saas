@@ -1,5 +1,11 @@
-import { supabase } from "../supabaseClient";
+import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 
+/**
+ * Denetim kaydı yazar. Kullanıcı işlemini ASLA bozmaz (hata yutulmaz ama fırlatılmaz);
+ * başarısızlık console.error ile raporlanır (uzaktan hata raporlama bunu yakalar).
+ * Şirket kimliği getEffectiveTenantContext'ten gelir — süper admin demo/işlem
+ * modunda izlenen firmaya yazılır.
+ */
 export async function logAction(
     action: string,
     entityType: string,
@@ -7,26 +13,24 @@ export async function logAction(
     details: any = {}
 ) {
     try {
-        const { data: u } = await supabase.auth.getUser();
-        if (!u?.user) return;
+        const ctx = await getEffectiveTenantContext();
+        if (!ctx.company_id) return;
 
-        // Company ID'yi company_members üzerinden çek
-        const { data: cm } = await supabase
-            .from("company_members")
-            .select("company_id")
-            .eq("user_id", u.user.id)
-            .maybeSingle();
+        // Salt okunur demo oturumunda yazma zaten engelli; gereksiz hata üretme.
+        if (ctx.isDemoTenant && ctx.readOnly) return;
 
-        if (!cm?.company_id) return;
-
-        await supabase.from("audit_logs").insert({
-            company_id: cm.company_id,
-            user_id: u.user.id,
+        const { error } = await supabase.from("audit_logs").insert({
+            company_id: ctx.company_id,
+            user_id: ctx.user.id,
             action,
             entity_type: entityType,
-            entity_id: entityId,
-            details
+            entity_id: entityId || null,
+            details,
         });
+
+        if (error) {
+            console.error("Audit logging failed:", error.message || error.code || "bilinmeyen hata", { action, entityType });
+        }
     } catch (err) {
         console.error("Audit logging failed:", err);
     }

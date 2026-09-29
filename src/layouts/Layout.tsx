@@ -39,13 +39,15 @@ import { clearDemoTenantContext, getEffectiveTenantContext, supabase, setAppRead
 import { canAccess, roleLabel, type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { useAuth } from "../context/AuthContext";
-import { getTrialDisplayInfo, formatTrialDateTR } from "../utils/trialLicense";
+import { getTrialDisplayInfo, formatTrialDateTR, isTrialExpired } from "../utils/trialLicense";
 import { useSupportModal } from "../context/SupportModalContext";
 import { useImpersonation } from "../context/ImpersonationContext";
 import SupportModal from "../components/SupportModal";
 import NotificationBell from "../components/NotificationBell";
 import AppUpdateNotifier from "../components/AppUpdateNotifier";
 import SecureImage from "../components/SecureImage";
+import CompanyLogo from "../components/CompanyLogo";
+import { COMPANY_PROFILE_UPDATED_EVENT } from "../components/CompanySettingsCard";
 
 function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -148,6 +150,8 @@ type TrialInfo = {
   trialEndsAt: Date | null;
   isExpired: boolean;
   daysLeft: number | null;
+  /** Pilot firmalar deneme kilidinden muaf: uyarı gösterilmez. */
+  isPilot?: boolean;
 };
 
 /** -----------------------
@@ -392,7 +396,7 @@ export const Layout = () => {
          try {
              const { data: comp } = await supabase
                    .from("companies")
-                   .select("subscription_plan, plan_status, trial_ends_at, is_pilot, enabled_roles")
+                   .select("subscription_plan, plan_status, trial_ends_at, license_expires_at, is_pilot, enabled_roles")
                    .eq("id", ctx.company_id)
                    .maybeSingle();
 
@@ -401,7 +405,7 @@ export const Layout = () => {
                  const plan = comp.subscription_plan || comp.plan_status || 'trial';
                  const display = getTrialDisplayInfo(comp);
                  if (display.isTrialPlan) {
-                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft });
+                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft, isPilot: Boolean((comp as any).is_pilot) });
                      // Süper adminin KENDİ hesabı gerçek bir firmaya (company_members üzerinden,
                      // demo_company_id OLMADAN) bağlıysa VE o firmanın denemesi dolmuşsa, ctx.company_id
                      // buraya o firmanın ID'sini getirir — display.isExpired TRUE olur ve aşağıdaki
@@ -411,9 +415,11 @@ export const Layout = () => {
                      // ağa HİÇ gönderilmiyordu). Süper admin HER ZAMAN muaf olmalı — yalnızca "yazma
                      // demo modunda" değil, kendi hesabının durumundan BAĞIMSIZ olarak.
                      const isSuperAdminExempt = realRole === "super_admin";
+                     // Suresi dolan hesap salt okunur girer: satin alma ekrani sayfayi
+                     // kapatmaz, ustte uyari seridi gosterilir.
                      if (display.isExpired && !isSuperAdminExempt) {
                          setIsExpiredTrial(true);
-                         setShowPurchaseScreen(true);
+                         setShowPurchaseScreen(false);
                          setAppReadOnlyMode(true);
                      } else {
                          setIsExpiredTrial(false);
@@ -422,9 +428,11 @@ export const Layout = () => {
                      }
                  } else {
                      setTrialInfo({ plan, trialEndsAt: null, isExpired: false, daysLeft: null });
-                     setIsExpiredTrial(false);
+                     // Ucretli lisans suresi dolduysa salt okunur (super admin muaf).
+                     const licenseExpired = realRole !== "super_admin" && isTrialExpired(comp);
+                     setIsExpiredTrial(licenseExpired);
                      setShowPurchaseScreen(false);
-                     setAppReadOnlyMode(false);
+                     setAppReadOnlyMode(licenseExpired);
                  }
              }
          } catch {
@@ -434,10 +442,32 @@ export const Layout = () => {
     }
 
     loadCompanyInfo();
+    // Uygulama açıkken deneme süresi dolarsa (ör. dün 20:24'te biten firma bugün hâlâ açık
+    // oturumla çalışıyordu) kilit ancak yeniden yüklemede devreye giriyordu: periyodik ve
+    // sekmeye dönüşte yeniden kontrol et. Firma değişince (Süper Admin firma girişi) de yenilenir.
+    const timer = window.setInterval(loadCompanyInfo, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") loadCompanyInfo(); };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [realRole]);
+  }, [realRole, isActingAsTenant]);
+
+  // Ayarlar'da logo/şirket adı kaydedildiğinde sayfa yenilenmeden sol menü ve
+  // üst başlık anında güncellensin diye — bkz. CompanySettingsCard.tsx.
+  useEffect(() => {
+    function handleCompanyProfileUpdated() {
+      getContext().then((ctx) => {
+        if (!ctx.user || !ctx.company_id) return;
+        setCompanyName(ctx.company_name || "Perde SaaS");
+        setCompanyLogo(ctx.company_logo || null);
+      });
+    }
+    window.addEventListener(COMPANY_PROFILE_UPDATED_EVENT, handleCompanyProfileUpdated);
+    return () => window.removeEventListener(COMPANY_PROFILE_UPDATED_EVENT, handleCompanyProfileUpdated);
+  }, []);
 
   useEffect(() => {
     const handler = () => setShowPurchaseScreen(true);
@@ -737,7 +767,7 @@ export const Layout = () => {
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed lg:sticky top-0 left-0 z-50 h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
+          "fixed lg:sticky top-0 left-0 z-[60] h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
@@ -747,19 +777,8 @@ export const Layout = () => {
               <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-black text-sm shrink-0 shadow-md">
                 P
               </div>
-            ) : companyLogo ? (
-              <SecureImage
-                src={companyLogo}
-                alt={companyName}
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                }}
-                className="w-8 h-8 rounded-lg object-contain bg-white shrink-0 shadow-sm"
-              />
             ) : (
-              <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center text-white font-bold shrink-0 shadow-md">
-                {companyName.charAt(0).toUpperCase()}
-              </div>
+              <CompanyLogo logoUrl={companyLogo} companyName={companyName} sizeClassName="w-8 h-8" />
             )}
             <span className="text-xl font-black tracking-tight text-slate-900 dark:text-white truncate">
               {role === "super_admin" ? "PerdePRO" : companyName}
@@ -902,7 +921,7 @@ export const Layout = () => {
 	          </div>
 	        ) : null}
         {isImpersonating && (
-            <div className="bg-amber-600 text-white text-center py-3 px-4 shadow-md sticky top-0 z-[60] flex items-center justify-between gap-3">
+            <div className="bg-amber-600 text-white text-center py-3 px-4 shadow-md sticky top-0 z-30 flex items-center justify-between gap-3">
                 <div className="flex-1 flex items-center justify-center gap-3">
                     <span className="font-bold">🔐 Firma Olarak Giriş Yapılmış:</span>
                     <span className="text-sm font-semibold">{impersonatingCompanyName}</span>
@@ -919,8 +938,8 @@ export const Layout = () => {
             </div>
         )}
         {isExpiredTrial && (
-            <div className="bg-red-600 text-white text-center py-2 px-4 shadow-md sticky top-0 z-[60] flex items-center justify-center gap-3">
-                <span className="font-bold">Uyarı: DENEME SÜRENİZ DOLMUŞTUR</span>
+            <div className="bg-red-600 text-white text-center py-2 px-4 shadow-md sticky top-0 z-30 flex items-center justify-center gap-3">
+                <span className="font-bold">Uyarı: LİSANS/DENEME SÜRENİZ DOLMUŞTUR</span>
                 <span className="text-sm">Hesabınız salt-okunur (read-only) moddadır. Yeni işlem yapılamaz.</span>
                 <a
                   href="#"
@@ -1203,10 +1222,16 @@ export const Layout = () => {
 
         <div className="min-w-0 flex-1 overflow-x-clip p-4 pb-24 pt-6 sm:pt-8 lg:p-8 max-w-7xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
           {/* Deneme süresi bitmek üzere uyarısı (son 1 gün) */}
-          {!showPurchaseScreen && trialInfo && !trialInfo.isExpired && trialInfo.daysLeft != null && trialInfo.daysLeft <= 1 && (
+          {/* Süper Admin panelinde (firma girişi yokken) kendi hesabının deneme uyarısı anlamsız: gösterme. */}
+          {!(realRole === "super_admin" && !isActingAsTenant) && !showPurchaseScreen && trialInfo && !trialInfo.isPilot && !trialInfo.isExpired && trialInfo.daysLeft != null && trialInfo.daysLeft >= 0 && trialInfo.daysLeft <= 1 && (
             <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
               ⏳ Deneme süreniz {trialInfo.daysLeft === 0 ? "bugün" : "yarın"} doluyor
               {trialInfo.trialEndsAt ? ` (${formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true })})` : ""}. Kesintisiz devam etmek için lisans satın alın.
+            </div>
+          )}
+          {realRole === "super_admin" && isActingAsTenant && trialInfo?.isExpired && (
+            <div className="mb-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm font-bold text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+              ⛔ Bu firmanın deneme süresi dolmuş{trialInfo.trialEndsAt ? ` (${formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true })})` : ""}. Firma kullanıcıları salt okunur olur; siz Süper Admin olarak işlem yapabilirsiniz.
             </div>
           )}
           {showPurchaseScreen &&
@@ -1256,7 +1281,7 @@ export const Layout = () => {
       )}
 
       {/* MOBILE BOTTOM NAVIGATION */}
-      <nav className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] overflow-hidden pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-[60] shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
+      <nav className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] overflow-hidden pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-30 shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
 
         <NavLink 
           to={isFieldOnlyRole ? "/field" : "/dashboard"}

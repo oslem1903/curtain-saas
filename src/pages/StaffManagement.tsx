@@ -154,8 +154,29 @@ export default function StaffManagement() {
     }
 
     async function handleDeleteEmployee(id: string) {
-        if (!window.confirm("Bu personeli silmek istediğinize emin misiniz?")) return;
         try {
+            const [earningsRes, txRes, jobsRes] = await Promise.all([
+                supabase.from("installer_earnings").select("id", { count: "exact", head: true }).eq("installer_id", id),
+                supabase.from("installer_transactions").select("id", { count: "exact", head: true }).eq("installer_id", id),
+                supabase.from("installation_jobs").select("id", { count: "exact", head: true }).eq("assigned_staff_id", id),
+            ]);
+            const hasRecords = (earningsRes.count || 0) > 0 || (txRes.count || 0) > 0 || (jobsRes.count || 0) > 0;
+
+            if (hasRecords) {
+                const confirmPassive = window.confirm(
+                    "Bu personelin geçmiş montaj, hakediş veya ödeme kayıtları var. " +
+                    "Kayıtların bozulmaması için tamamen silinemez.\n\n" +
+                    "Bunun yerine personeli PASİF yapmak ister misiniz? " +
+                    "Pasif personel yeni işe atanamaz, geçmiş kayıtları korunur."
+                );
+                if (!confirmPassive) return;
+                const { error } = await supabase.from("employees").update({ is_active: false }).eq("id", id);
+                if (error) throw error;
+                setEmployees(prev => prev.map(e => e.id === id ? { ...e, is_active: false } : e));
+                return;
+            }
+
+            if (!window.confirm("Bu personeli silmek istediğinize emin misiniz?")) return;
             const { error } = await supabase
                 .from("employees")
                 .delete()
@@ -163,7 +184,19 @@ export default function StaffManagement() {
             if (error) throw error;
             setEmployees(prev => prev.filter(e => e.id !== id));
         } catch (e: any) {
-            alert(e.message);
+            alert(e.message || "Personel silinemedi.");
+        }
+    }
+
+    async function handleToggleActive(emp: Employee) {
+        const nextActive = !emp.is_active;
+        if (!window.confirm(nextActive ? "Bu personeli tekrar aktif yapmak istiyor musunuz?" : "Bu personeli pasif yapmak istiyor musunuz? Pasif personel yeni işe atanamaz.")) return;
+        try {
+            const { error } = await supabase.from("employees").update({ is_active: nextActive }).eq("id", emp.id);
+            if (error) throw error;
+            setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, is_active: nextActive } : e));
+        } catch (e: any) {
+            alert(e.message || "Durum güncellenemedi.");
         }
     }
 
@@ -403,7 +436,12 @@ export default function StaffManagement() {
                                         {emp.full_name[0]?.toUpperCase()}
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                        <div className="font-bold text-slate-900 dark:text-white uppercase break-words">{emp.full_name}</div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <div className="font-bold text-slate-900 dark:text-white uppercase break-words">{emp.full_name}</div>
+                                            {emp.is_active === false && (
+                                                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">Pasif</span>
+                                            )}
+                                        </div>
                                         <div className="text-sm text-emerald-600 dark:text-emerald-400 font-semibold">{formatTL(emp.salary_amount)}</div>
                                         <div className="mt-1 flex flex-wrap gap-1 text-[10px] font-bold">
                                             <span className="rounded-full bg-orange-50 px-2 py-1 text-orange-700">Avans {formatTL(getEmployeeLedger(emp).advance)}</span>
@@ -443,6 +481,9 @@ export default function StaffManagement() {
                                         });
                                         setShowAddModal(true);
                                     }} className="px-3 py-2 bg-amber-50 text-amber-700 rounded-xl text-xs font-bold">Düzenle</button>
+                                    <button onClick={() => handleToggleActive(emp)} className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold">
+                                        {emp.is_active === false ? "Aktif Yap" : "Pasif Yap"}
+                                    </button>
                                     <button onClick={() => handleDeleteEmployee(emp.id)} className="px-3 py-2 bg-rose-50 text-rose-700 rounded-xl text-xs font-bold">Sil</button>
                                 </div>
                             </div>
@@ -471,7 +512,12 @@ export default function StaffManagement() {
                                                 <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 rounded-full flex items-center justify-center font-bold text-lg">
                                                     {emp.full_name[0].toUpperCase()}
                                                 </div>
-                                                <div className="font-bold text-slate-900 dark:text-white uppercase">{emp.full_name}</div>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="font-bold text-slate-900 dark:text-white uppercase">{emp.full_name}</div>
+                                                    {emp.is_active === false && (
+                                                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">Pasif</span>
+                                                    )}
+                                                </div>
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
@@ -543,7 +589,12 @@ export default function StaffManagement() {
                                                     className="p-2 text-amber-600 hover:bg-amber-50 rounded-xl transition-colors" title="Düzenle">
                                                     <Edit2 className="w-5 h-5" />
                                                 </button>
-                                                <button 
+                                                <button
+                                                    onClick={() => handleToggleActive(emp)}
+                                                    className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors" title={emp.is_active === false ? "Aktif Yap" : "Pasif Yap"}>
+                                                    <RefreshCw className="w-5 h-5" />
+                                                </button>
+                                                <button
                                                     onClick={() => handleDeleteEmployee(emp.id)}
                                                     className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors" title="Sil">
                                                     <Trash2 className="w-5 h-5" />

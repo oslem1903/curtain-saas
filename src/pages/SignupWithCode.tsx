@@ -134,6 +134,9 @@ function friendlyInviteError(message: string) {
     if (lower.includes("suresi dol") || lower.includes("süresi dol")) {
         return "Bu davetin süresi dolmuş. Lütfen yöneticinizden yeni davet isteyin.";
     }
+    if (lower.includes("kullanıcı limit") || lower.includes("kullanici limit")) {
+        return "Bu firmanın kullanıcı limiti dolu. Yeni kişi eklenebilmesi için firma yöneticisinin lisansı yükseltmesi veya kullanılmayan bir kullanıcıyı pasif yapması gerekir.";
+    }
     return message || "Davet doğrulanamadı.";
 }
 
@@ -171,6 +174,9 @@ function friendlySignupError(message: string, step?: JoinStep) {
     }
     if (lower.includes("farkli") || lower.includes("farklı")) {
         return "Bu davet farklı bir e-posta adresi için oluşturulmuş.";
+    }
+    if (lower.includes("kullanıcı limit") || lower.includes("kullanici limit")) {
+        return "Bu firmanın kullanıcı limiti dolu. Yeni kişi eklenebilmesi için firma yöneticisinin lisansı yükseltmesi veya kullanılmayan bir kullanıcıyı pasif yapması gerekir.";
     }
     if (lower.includes("firma lisansı") || lower.includes("firma lisansi")) {
         return "Firma lisansı aktif değil veya sadece okuma modunda. Yeni kullanıcı eklemek için firmayı aktif hale getirin.";

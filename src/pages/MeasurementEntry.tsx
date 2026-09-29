@@ -176,6 +176,10 @@ export default function MeasurementEntry() {
   const initialState = state && Object.keys(state).length > 0 ? state : savedState;
 
   const [groupId, setGroupId] = useState(initialState.groupId ?? crypto.randomUUID());
+  // Sahadan ("Ölçü Al") mevcut bir randevu uzerinden gelindiyse, olcu kaydedildikten
+  // sonra o randevunun durumunu "measured" yapmak icin saklanir — aksi halde randevu
+  // sonsuza kadar "Planlandi" durumunda kalip listede takili kaliyordu.
+  const sourceAppointmentId: string | null = initialState.appointmentId ?? null;
   const [customerId, setCustomerId] = useState(initialState.customerId ?? "");
   const [customerName, setCustomerName] = useState(initialState.customerName ?? "");
   const [phone, setPhone] = useState(initialState.phone ?? "");
@@ -435,7 +439,8 @@ export default function MeasurementEntry() {
       const ctx = await getEffectiveTenantContext();
       let cid = customerId;
       if (!cid && customerName) {
-        const { data } = await supabase.from("customers").insert({ company_id: ctx.company_id, name: customerName, phone: phone || null, address: address || null }).select("id").single();
+        const { data, error: custErr } = await supabase.from("customers").insert({ company_id: ctx.company_id, name: customerName, phone: phone || null, address: address || null }).select("id").single();
+        if (custErr) throw custErr;
         if (data?.id) cid = data.id;
       }
       if (!cid) throw new Error("Müşteri belirlenemedi");
@@ -505,6 +510,20 @@ export default function MeasurementEntry() {
       if (rpcErr) throw rpcErr;
       if (!rpcResult?.success) {
         throw new Error(rpcResult?.error || 'Ölçü grubu kaydedilemedi');
+      }
+
+      // Sahadan mevcut bir randevu uzerinden gelindiyse, o randevu artik
+      // "Planlandi" durumunda takili kalmasin diye "Olcu Alindi" yapilir.
+      // Ölçü kaydinin kendisini etkilemez, yalnizca kaynak randevu satirini gunceller.
+      if (sourceAppointmentId) {
+        try {
+          await supabase
+            .from("appointments")
+            .update({ status: "measured", measurement_notes: `[Grup: ${groupId}]` })
+            .eq("id", sourceAppointmentId);
+        } catch {
+          // Randevu güncellenemese bile ölçü kaydı başarılı sayılır.
+        }
       }
 
       setSuccess("✅ Ölçü grubu kaydedildi.");

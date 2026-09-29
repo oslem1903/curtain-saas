@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
+import { logAction } from "../utils/audit";
 
 async function getContext() {
     return getEffectiveTenantContext();
@@ -43,6 +44,7 @@ export default function NewSupplier() {
             localStorage.removeItem("draft_supplier_email");
             localStorage.removeItem("draft_supplier_address");
 
+            void logAction("supplier_created", "supplier", "", { name });
             nav("/suppliers");
         } catch (e: any) {
             setErr(e?.message ?? "Tedarikçi kaydedilemedi.");
