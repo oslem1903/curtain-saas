@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../supabaseClient";
 import { getEffectiveTenantContext } from "../supabaseClient";
 import { useRole } from "../context/RoleContext";
@@ -68,6 +69,20 @@ export default function NotificationBell({ userId }: { userId: string }) {
         }
     });
     const [isOpen, setIsOpen] = useState(false);
+    const [readError, setReadError] = useState<string | null>(null);
+    const [isMarkingRead, setIsMarkingRead] = useState(false);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const close = () => setIsOpen(false);
+        const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+        window.addEventListener("hashchange", close);
+        window.addEventListener("keydown", onKey);
+        return () => {
+            window.removeEventListener("hashchange", close);
+            window.removeEventListener("keydown", onKey);
+        };
+    }, [isOpen]);
     const visibleOperational = useMemo(() => operational.filter((item) => !readOperational.has(item.id)), [operational, readOperational]);
     const unreadCount = notifications.filter(n => !n.is_read).length + visibleOperational.length;
 
@@ -306,25 +321,44 @@ export default function NotificationBell({ userId }: { userId: string }) {
     }, [loadNotifications, loadOperationalNotifications, userId]);
 
     async function markAsRead(id: string) {
-        await supabase
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('id', id);
-        
-        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+        if (isMarkingRead || isActingAsTenant) return;
+        setReadError(null);
+        setIsMarkingRead(true);
+        try {
+            const { data, error } = await supabase.from('notifications')
+                .update({ is_read: true }).eq('id', id).eq('user_id', userId)
+                .select('id');
+            if (error || !data?.some(row => row.id === id)) throw new Error("read_failed");
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+            setIsOpen(false);
+            const item = notifications.find(n => n.id === id);
+            if (item?.related_ticket_id) window.location.hash = "#/settings";
+        } catch {
+            setReadError("Bildirim okundu olarak kaydedilemedi. Lütfen tekrar deneyin.");
+        } finally { setIsMarkingRead(false); }
     }
 
     async function markAllAsRead() {
-        await supabase
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('user_id', userId)
-            .eq('is_read', false);
-        
-        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-        const allOperational = new Set(operational.map((item) => item.id));
-        setReadOperational(allOperational);
-        localStorage.setItem("dashboard_read_operational_notifications", JSON.stringify([...allOperational]));
+        if (isMarkingRead) return;
+        setReadError(null);
+        setIsMarkingRead(true);
+        const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
+        try {
+            if (!isActingAsTenant && unreadIds.length > 0) {
+                const { data, error } = await supabase.from('notifications')
+                    .update({ is_read: true }).eq('user_id', userId)
+                    .in('id', unreadIds).select('id');
+                const updated = new Set((data ?? []).map(row => row.id));
+                if (error || unreadIds.some(id => !updated.has(id))) throw new Error("read_failed");
+                setNotifications(prev => prev.map(n => updated.has(n.id) ? { ...n, is_read: true } : n));
+            }
+            const allOperational = new Set([...readOperational, ...operational.map(item => item.id)]);
+            localStorage.setItem("dashboard_read_operational_notifications", JSON.stringify([...allOperational]));
+            setReadOperational(allOperational);
+            setIsOpen(false);
+        } catch {
+            setReadError("Bildirimler okundu olarak kaydedilemedi. Lütfen tekrar deneyin.");
+        } finally { setIsMarkingRead(false); }
     }
 
     function markOperationalAsRead(id: string) {
@@ -347,7 +381,10 @@ export default function NotificationBell({ userId }: { userId: string }) {
     return (
         <div className="relative">
             <button 
-                onClick={() => setIsOpen(!isOpen)}
+                type="button"
+                aria-label="Bildirimler"
+                aria-expanded={isOpen}
+                onClick={() => { setReadError(null); setIsOpen(open => !open); }}
                 className="relative p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 hover:bg-slate-100 transition-colors"
             >
                 <Bell size={20} />
@@ -358,13 +395,13 @@ export default function NotificationBell({ userId }: { userId: string }) {
                 )}
             </button>
 
-            {isOpen && (
+            {isOpen && createPortal(
                 <>
                     <div 
-                        className="fixed inset-0 z-40" 
+                        className="fixed inset-0 z-[140]" 
                         onClick={() => setIsOpen(false)}
                     />
-                    <div className="fixed right-2 top-[4.5rem] w-[min(24rem,calc(100vw-1rem))] max-h-[calc(100dvh-5.5rem)] bg-white dark:bg-slate-900 rounded-[1.25rem] border border-slate-200 dark:border-slate-800 shadow-2xl z-50 overflow-hidden animate-in slide-in-from-top-2 duration-200">
+                    <div className="fixed right-2 top-[4.5rem] w-[min(24rem,calc(100vw-1rem))] max-h-[calc(100dvh-5.5rem)] bg-white dark:bg-slate-900 rounded-[1.25rem] border border-slate-200 dark:border-slate-800 shadow-2xl z-[150] overflow-hidden animate-in slide-in-from-top-2 duration-200">
                         <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-between items-center">
                             <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                                 Bildirimler
@@ -372,7 +409,8 @@ export default function NotificationBell({ userId }: { userId: string }) {
                             </h3>
                             {unreadCount > 0 && (
                                 <button 
-                                    onClick={markAllAsRead}
+                                    disabled={isMarkingRead}
+                                    onClick={() => void markAllAsRead()}
                                     className="text-xs font-bold text-blue-600 hover:underline"
                                 >
                                     Okundu olarak işaretle
@@ -380,6 +418,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
                             )}
                         </div>
 
+                        {readError && <p role="alert" className="px-4 py-3 text-sm text-red-600">{readError}</p>}
                         <div className="max-h-[400px] overflow-y-auto">
                             {notifications.length + visibleOperational.length > 0 ? (
                                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -409,14 +448,7 @@ export default function NotificationBell({ userId }: { userId: string }) {
                                     {notifications.map((n) => (
                                         <div
                                             key={n.id}
-                                            onClick={() => {
-                                                markAsRead(n.id);
-                                                // Destek bildirimi: kullanıcıyı Destek Taleplerim'e götür
-                                                if (n.related_ticket_id) {
-                                                    setIsOpen(false);
-                                                    window.location.hash = "#/settings";
-                                                }
-                                            }}
+                                            onClick={() => void markAsRead(n.id)}
                                             className={cn(
                                                 "p-4 flex gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer relative",
                                                 !n.is_read && "bg-blue-50/30 dark:bg-blue-900/10"
@@ -454,12 +486,12 @@ export default function NotificationBell({ userId }: { userId: string }) {
                         </div>
 
                         <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 text-center">
-                            <button className="text-xs font-black text-slate-500 uppercase tracking-widest hover:text-slate-900">
-                                Tüm Geçmişi Gör
+                            <button type="button" onClick={() => setIsOpen(false)} className="text-xs font-black text-slate-500 uppercase tracking-widest hover:text-slate-900">
+                                Kapat
                             </button>
                         </div>
                     </div>
-                </>
+                </>, document.body
             )}
         </div>
     );

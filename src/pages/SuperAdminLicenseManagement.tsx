@@ -26,7 +26,6 @@ export default function SuperAdminLicenseManagement() {
     const [editValues, setEditValues] = useState({
         max_users: 0,
         max_devices: 0,
-        trial_days: 0,
         subscription_status: "trial",
         subscription_plan: "solo",
         license_expires_at: "",
@@ -81,13 +80,8 @@ export default function SuperAdminLicenseManagement() {
 
             if (limitError) throw limitError;
 
-            // If trial days specified, extend trial
-            if (editValues.trial_days > 0) {
-                await supabase.rpc("extend_company_trial", {
-                    p_company_id: companyId,
-                    p_extra_days: editValues.trial_days,
-                });
-            }
+            // Deneme süresi burada değiştirilmez (önceden hatası kontrol edilmeden çağrılıyor ve
+            // başarısız olsa da "güncellendi" deniyordu). Tek yol: "Süre / Özel Erişim" paneli.
 
             alert("✓ Lisans güncellendi");
             setEditing(null);
@@ -157,7 +151,6 @@ export default function SuperAdminLicenseManagement() {
                                             setEditValues({
                                                 max_users: company.max_users || 0,
                                                 max_devices: company.max_devices || 0,
-                                                trial_days: 0,
                                                 subscription_status: company.subscription_status || "trial",
                                                 subscription_plan: company.subscription_plan || "solo",
                                                 license_expires_at: company.license_expires_at || "",
@@ -274,20 +267,10 @@ export default function SuperAdminLicenseManagement() {
                                                 />
                                             </div>
                                         </div>
-                                        <div>
-                                            <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">
-                                                <Calendar size={16} className="inline mr-1" />
-                                                Trial Gün Ekle (Opsiyonel)
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={editValues.trial_days}
-                                                onChange={(e) =>
-                                                    setEditValues({ ...editValues, trial_days: parseInt(e.target.value) || 0 })
-                                                }
-                                                className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
-                                            />
+                                        <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                            <Calendar size={14} className="inline mr-1" />
+                                            Deneme süresi ve özel erişim: Müşteri Firmalar veya Deneme Hesapları ekranındaki
+                                            "Süre / Özel Erişim" butonundan yönetilir.
                                         </div>
                                         <div>
                                             <label className="text-xs font-black text-slate-600 dark:text-slate-400 uppercase">

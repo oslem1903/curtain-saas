@@ -1,15 +1,38 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowRight, Loader2, Lock, Mail, ShieldCheck, UserPlus } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { ArrowRight, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Sparkles } from "lucide-react";
 
 import { supabase } from "../supabaseClient";
+import AuthShell, {
+    AuthMessage,
+    authInputClass,
+    authLabelClass,
+    authPrimaryButtonClass,
+    authSecondaryButtonClass,
+    scrollFieldIntoView,
+} from "../components/AuthShell";
+import { getAuthRedirectUrl } from "../utils/authRedirect";
+import { friendlyAuthError } from "../utils/authErrors";
+import { PASSWORD_UPDATED_EMAIL, PASSWORD_UPDATED_FLAG } from "./ResetPassword";
 
-function loginErrorMessage(message: string): string {
-    if (/invalid login credentials/i.test(message)) return "E-posta veya şifre hatalı.";
-    if (/email not confirmed/i.test(message)) return "Giriş yapmak için e-posta adresinizi doğrulayın.";
-    if (/rate limit|too many requests/i.test(message)) return "Çok fazla deneme yapıldı. Biraz sonra tekrar deneyin.";
-    if (/fetch|network/i.test(message)) return "Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin.";
-    return message;
+const PASSWORD_UPDATED_TEXT = "Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz.";
+
+/** Şifre sıfırlamadan gelindiyse bayrağı okuyup hemen temizler (tek seferlik mesaj). */
+function consumePasswordUpdated(state: unknown): { updated: boolean; email: string | null } {
+    const navState = (state && typeof state === "object" ? state : {}) as { passwordUpdated?: boolean; email?: string | null };
+    let flag = false;
+    let storedEmail: string | null = null;
+    try {
+        flag = sessionStorage.getItem(PASSWORD_UPDATED_FLAG) === "1";
+        storedEmail = sessionStorage.getItem(PASSWORD_UPDATED_EMAIL);
+        sessionStorage.removeItem(PASSWORD_UPDATED_FLAG);
+        sessionStorage.removeItem(PASSWORD_UPDATED_EMAIL);
+    } catch {
+        // depolama kapalı olabilir
+    }
+    const updated = navState.passwordUpdated === true || flag;
+    const email = (navState.email || storedEmail || "").trim().toLowerCase() || null;
+    return { updated, email };
 }
 
 function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Promise<T> {
@@ -28,31 +51,43 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Prom
     });
 }
 
-async function goToHome(userId: string, nav: ReturnType<typeof useNavigate>) {
-    void userId;
-    nav("/", { replace: true });
-}
-
 export default function Login() {
     const nav = useNavigate();
-    const [email, setEmail] = useState(() => localStorage.getItem("last_login_email") || "");
+    const location = useLocation();
+    const [passwordUpdated] = useState(() => consumePasswordUpdated(location.state));
+    const [email, setEmail] = useState(() => passwordUpdated.email || localStorage.getItem("last_login_email") || "");
     const [password, setPassword] = useState("");
-    const [info, setInfo] = useState<string>("");
+    const [showPassword, setShowPassword] = useState(false);
+    const [info, setInfo] = useState<{ tone: "info" | "error" | "success"; text: string } | null>(() =>
+        passwordUpdated.updated ? { tone: "success", text: PASSWORD_UPDATED_TEXT } : null,
+    );
     const [loading, setLoading] = useState(false);
     const [checkingSession, setCheckingSession] = useState(true);
     const [rememberMe, setRememberMe] = useState(() => localStorage.getItem("remember_login") !== "false");
 
     useEffect(() => {
+        // Mesaj bir kez gösterildi: yönlendirme durumunu geçmişten sil (yenilemede tekrar çıkmasın).
+        if ((location.state as { passwordUpdated?: boolean } | null)?.passwordUpdated) {
+            nav(location.pathname, { replace: true, state: null });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
         let alive = true;
 
         async function restoreSession() {
+            if (passwordUpdated.updated) {
+                // Şifre yeni güncellendi: kalmış olabilecek kurtarma oturumuyla asla otomatik giriş yapma.
+                await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+                if (alive) setCheckingSession(false);
+                return;
+            }
             try {
                 const { data } = await withTimeout(supabase.auth.getSession(), "Oturum kontrolu");
-                const user = data.session?.user;
-
                 if (!alive) return;
-                if (user) {
-                    await goToHome(user.id, nav);
+                if (data.session?.user) {
+                    nav("/", { replace: true });
                     return;
                 }
             } catch (error) {
@@ -67,7 +102,7 @@ export default function Login() {
         return () => {
             alive = false;
         };
-    }, [nav]);
+    }, [nav, passwordUpdated.updated]);
 
     async function handleLogin(e: React.FormEvent) {
         e.preventDefault();
@@ -75,72 +110,62 @@ export default function Login() {
 
         const cleanEmail = email.trim().toLowerCase();
         if (!cleanEmail || !password) {
-            setInfo("E-posta ve şifre alanlarini doldurun.");
+            setInfo({ tone: "error", text: "E-posta ve şifre alanlarını doldurun." });
             return;
         }
 
         setLoading(true);
-        setInfo("");
+        setInfo(null);
 
-        let data;
-        let error;
         try {
-            const result = await withTimeout(
-                supabase.auth.signInWithPassword({
-                    email: cleanEmail,
-                    password,
-                }),
-                "Giris",
+            const { data, error } = await withTimeout(
+                supabase.auth.signInWithPassword({ email: cleanEmail, password }),
+                "Giriş",
+                15000,
             );
-            data = result.data;
-            error = result.error;
+            if (error) throw error;
+
+            localStorage.setItem("remember_login", rememberMe ? "true" : "false");
+            if (rememberMe) localStorage.setItem("last_login_email", cleanEmail);
+            else localStorage.removeItem("last_login_email");
+
+            if (data.session?.user) {
+                nav("/", { replace: true });
+                return;
+            }
         } catch (loginError) {
-            setLoading(false);
-            return setInfo(loginError instanceof Error ? loginError.message : "Giriş sırasında bağlantı hatası oluştu.");
+            const message = loginError instanceof Error ? loginError.message : String((loginError as { message?: string })?.message || "");
+            setInfo({ tone: "error", text: friendlyAuthError(message || "Giriş sırasında bağlantı hatası oluştu.") });
         }
-
-        if (error) {
-            setLoading(false);
-            return setInfo(loginErrorMessage(error.message));
-        }
-
-        localStorage.setItem("remember_login", rememberMe ? "true" : "false");
-        if (rememberMe) localStorage.setItem("last_login_email", cleanEmail);
-        else localStorage.removeItem("last_login_email");
-
-        if (data.session?.user) {
-            await goToHome(data.session.user.id, nav);
-            return;
-        }
-
         setLoading(false);
     }
 
     async function handleForgot() {
         if (loading) return;
-
-        setInfo("");
+        setInfo(null);
 
         const cleanEmail = email.trim().toLowerCase();
         if (!cleanEmail) {
-            setInfo("Şifre sıfırlamak için önce e-posta adresinizi yazin.");
+            setInfo({ tone: "error", text: "Şifre sıfırlamak için önce e-posta adresinizi yazın." });
             return;
         }
 
         setLoading(true);
-
         try {
-            const configuredRedirect = import.meta.env.VITE_PASSWORD_RESET_REDIRECT_URL;
-            const native = window.location.protocol === "file:" || Boolean((window as any).Capacitor?.isNativePlatform?.());
-            if (native && !configuredRedirect) {
-                throw new Error("Bu sürümde şifre sıfırlama bağlantısı ayarlanmamış. Destek ekibiyle iletişime geçin.");
-            }
-            const redirectTo = configuredRedirect || `${window.location.origin}${window.location.pathname}#/reset-password`;
-            const { error } = await withTimeout(supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo }), "Şifre sıfırlama", 15000);
+            const redirectTo = getAuthRedirectUrl("/reset-password");
+            const { error } = await withTimeout(
+                supabase.auth.resetPasswordForEmail(cleanEmail, redirectTo ? { redirectTo } : undefined),
+                "Şifre sıfırlama",
+                15000,
+            );
             if (error) throw error;
-            setInfo("Şifre sıfırlama e-postası gönderildi. Gelen kutusu ve spam klasörünü kontrol edin.");
+            setInfo({
+                tone: "success",
+                text: "Bu e-posta ile kayıtlı bir hesap varsa şifre sıfırlama bağlantısı gönderildi. Gelen kutusu ve spam klasörünü kontrol edin.",
+            });
         } catch (error) {
-            setInfo(loginErrorMessage(error instanceof Error ? error.message : "Şifre sıfırlama isteği tamamlanamadı."));
+            const message = error instanceof Error ? error.message : String((error as { message?: string })?.message || "");
+            setInfo({ tone: "error", text: friendlyAuthError(message || "Şifre sıfırlama isteği tamamlanamadı.") });
         } finally {
             setLoading(false);
         }
@@ -148,7 +173,7 @@ export default function Login() {
 
     if (checkingSession) {
         return (
-            <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
+            <div className="min-h-[100dvh] bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
                 <div className="flex items-center gap-3 text-slate-500 dark:text-slate-300 font-semibold">
                     <Loader2 className="w-5 h-5 animate-spin" />
                     Oturum kontrol ediliyor...
@@ -158,105 +183,112 @@ export default function Login() {
     }
 
     return (
-        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
-            <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl overflow-hidden">
-                <div className="px-7 pt-8 pb-5">
-                    <div className="w-12 h-12 rounded-2xl bg-primary-600 text-white flex items-center justify-center shadow-lg shadow-primary-600/20 mb-5">
-                        <ShieldCheck className="w-7 h-7" />
-                    </div>
-                    <h1 className="text-2xl font-black text-slate-900 dark:text-white">Giriş Yap</h1>
-                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                        Oturumunuz bu cihazda hatırlanır; bilgisayar ve mobilde aynı anda kullanabilirsiniz.
-                    </p>
-                </div>
-
-                <form onSubmit={handleLogin} className="px-7 pb-7 space-y-4">
-                    <label className="block">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">E-posta</span>
-                        <div className="mt-1.5 relative">
-                            <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                            <input
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                type="email"
-                                autoComplete="email"
-                                placeholder="ornek@mail.com"
-                                className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-primary-500"
-                                disabled={loading}
-                            />
-                        </div>
-                    </label>
-
-                    <label className="block">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Şifre</span>
-                        <div className="mt-1.5 relative">
-                            <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                            <input
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                type="password"
-                                autoComplete="current-password"
-                                placeholder="******"
-                                className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-primary-500"
-                                disabled={loading}
-                            />
-                        </div>
-                    </label>
-
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                        <label className="inline-flex items-center gap-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={rememberMe}
-                                onChange={(e) => setRememberMe(e.target.checked)}
-                                disabled={loading}
-                                className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
-                            />
-                            Beni hatırla
-                        </label>
-                        <button
-                            type="button"
-                            onClick={handleForgot}
-                            className="font-bold text-primary-700 dark:text-primary-300 hover:underline"
-                            disabled={loading}
-                        >
-                            Şifremi unuttum
-                        </button>
-                    </div>
-
+        <AuthShell
+            title="PerdePRO"
+            subtitle="Hesabınıza giriş yapın ya da kendi işletmeniz için 7 günlük ücretsiz denemeyi hemen başlatın."
+            footer={
+                <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm">
+                    <KeyRound className="w-4 h-4 text-slate-400" />
+                    <span className="text-slate-500 dark:text-slate-400">Davet mi aldınız?</span>
                     <button
-                        type="submit"
-                        className="w-full h-12 rounded-2xl bg-primary-600 hover:bg-primary-700 text-white font-black shadow-lg shadow-primary-600/20 transition inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                        type="button"
+                        onClick={() => nav("/join")}
+                        className="font-bold text-primary-700 dark:text-primary-300 hover:underline"
                         disabled={loading}
                     >
-                        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
-                        {loading ? "Giriş yapiliyor..." : "Giriş Yap"}
+                        Davet kodum var
                     </button>
+                </div>
+            }
+        >
+            <form onSubmit={handleLogin} className="space-y-4" noValidate>
+                <label className="block">
+                    <span className={authLabelClass}>E-posta</span>
+                    <div className="mt-1.5 relative">
+                        <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            onFocus={scrollFieldIntoView}
+                            type="email"
+                            inputMode="email"
+                            autoComplete="email"
+                            autoCapitalize="none"
+                            spellCheck={false}
+                            placeholder="ornek@mail.com"
+                            className={authInputClass}
+                            disabled={loading}
+                        />
+                    </div>
+                </label>
 
-                    {info ? (
-                        <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-200">
-                            {info}
-                        </div>
-                    ) : null}
-                </form>
-
-                <div className="border-t border-slate-200 dark:border-slate-800 px-7 py-5 bg-slate-50/70 dark:bg-slate-950/40">
-                    <div className="flex items-center justify-between gap-4">
-                        <div>
-                            <div className="text-sm font-black text-slate-900 dark:text-white">Davet kodunuz mu var?</div>
-                            <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">E-posta ve kod ile kendi şifrenizi belirleyin.</div>
-                        </div>
+                <label className="block">
+                    <span className={authLabelClass}>Şifre</span>
+                    <div className="mt-1.5 relative">
+                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            onFocus={scrollFieldIntoView}
+                            type={showPassword ? "text" : "password"}
+                            autoComplete="current-password"
+                            placeholder="••••••"
+                            className={`${authInputClass} pr-12`}
+                            disabled={loading}
+                        />
                         <button
                             type="button"
-                            onClick={() => nav("/join")}
-                            className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-white dark:hover:bg-slate-800"
+                            onClick={() => setShowPassword((v) => !v)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                            aria-label={showPassword ? "Şifreyi gizle" : "Şifreyi göster"}
                         >
-                            <UserPlus className="w-4 h-4" />
-                            Kodla Katıl
+                            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                         </button>
                     </div>
+                </label>
+
+                <div className="flex items-center justify-between gap-3 text-sm">
+                    <label className="inline-flex items-center gap-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={rememberMe}
+                            onChange={(e) => setRememberMe(e.target.checked)}
+                            disabled={loading}
+                            className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        Beni hatırla
+                    </label>
+                    <button
+                        type="button"
+                        onClick={handleForgot}
+                        className="font-bold text-primary-700 dark:text-primary-300 hover:underline"
+                        disabled={loading}
+                    >
+                        Şifremi unuttum
+                    </button>
                 </div>
+
+                {info ? <AuthMessage tone={info.tone}>{info.text}</AuthMessage> : null}
+
+                <button type="submit" className={authPrimaryButtonClass} disabled={loading}>
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
+                    {loading ? "Lütfen bekleyin..." : "Giriş Yap"}
+                </button>
+            </form>
+
+            <div className="my-4 flex items-center gap-3 text-xs font-bold uppercase tracking-wider text-slate-400">
+                <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                Hesabınız yok mu?
+                <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
             </div>
-        </div>
+
+            <button type="button" onClick={() => nav("/signup")} className={authSecondaryButtonClass} disabled={loading}>
+                <Sparkles className="w-5 h-5" />
+                7 Gün Ücretsiz Dene
+            </button>
+            <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
+                Kredi kartı gerekmez. Kod beklemeden kendi hesabınızı açın.
+            </p>
+        </AuthShell>
     );
 }

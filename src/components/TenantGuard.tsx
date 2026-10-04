@@ -29,7 +29,11 @@ export default function TenantGuard({
         return <Navigate to="/login" replace state={{ from: location.pathname }} />;
     }
 
-    if (status === "unauthorized") {
+    if (status === "needs_setup") {
+        return <Navigate to="/setup" replace />;
+    }
+
+    if ((status === "unauthorized" || status === "access_error")) {
         return <Navigate to="/unauthorized" replace />;
     }
 

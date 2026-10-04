@@ -1,3 +1,4 @@
+import { decorativeRail } from "../utils/decorativeRail";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -70,6 +71,7 @@ function formatMoney(value: number) { return new Intl.NumberFormat("tr-TR", { st
 function productLabel(type: ProductType) { return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün"; }
 
 function calculate(productType: ProductType, widthCm: number, heightCm: number, qty: number, unitPrice: number, pile: "2" | "3" | "S") {
+  if (productType === "dekoratif_ray") return decorativeRail(widthCm, qty, unitPrice);
   if (isManual(productType) || isLinear(productType)) {
     const roundedWidth = isLinear(productType) ? Math.ceil(Math.max(0, widthCm) / 25) * 25 : 0;
     const areaM2 = isManual(productType) ? 1 : roundedWidth / 100;
@@ -479,7 +481,7 @@ export default function MeasurementEntry() {
           assigned_to: ctx.user.id,
           room_name: it.roomName || null,
           width_cm: it.widthCm,
-          height_cm: it.heightCm,
+          height_cm: it.productType === "dekoratif_ray" ? 0 : it.heightCm,
           rounded_width_cm: res.roundedWidth,
           rounded_height_cm: res.roundedHeight,
           product_type: it.productType,
@@ -723,8 +725,14 @@ export default function MeasurementEntry() {
                         </label>
 
                         {/* Dimensions */}
-                        {!isManual(item.productType) && <label><span className={labelCls}>{isLinear(item.productType) ? "Uzunluk (cm)" : "En (cm)"}</span>
-                          <input type="number" value={item.widthCm > 0 ? item.widthCm : ""} onChange={e => updateItem(item.id, { widthCm: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />
+                        {!isManual(item.productType) && <label><span className={labelCls}>{item.productType === "dekoratif_ray" ? "En (cm)" : isLinear(item.productType) ? "Uzunluk (cm)" : "En (cm)"}</span>
+                          <input type="text" inputMode="decimal" value={item.widthCm > 0 ? item.widthCm : ""} onChange={e => {
+                            const val = e.target.value.replace(/,/g, ".");
+                            if (val === "") { updateItem(item.id, { widthCm: 0 }); return; }
+                            if (/^\d*\.?\d*$/.test(val)) { updateItem(item.id, { widthCm: Number(val) }); }
+                          }} onBlur={() => {
+                            if (item.widthCm <= 0) updateItem(item.id, { widthCm: 100 });
+                          }} className={inputCls} placeholder="örn: 110.5" />
                         </label>}
                         {!isManual(item.productType) && !isLinear(item.productType) && <label><span className={labelCls}>Boy (cm)</span>
                           <input type="number" value={item.heightCm > 0 ? item.heightCm : ""} onChange={e => updateItem(item.id, { heightCm: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />

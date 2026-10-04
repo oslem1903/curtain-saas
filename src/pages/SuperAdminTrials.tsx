@@ -6,6 +6,10 @@ import { requestText } from "../utils/requestText";
 import { useRole } from "../context/RoleContext";
 import { CORE_MODULES, ENTERPRISE_MODULES, PRO_MODULES, SOLO_MODULES } from "../context/AuthContext";
 import { type RoleState } from "../auth/roles";
+import SelfSignupSettingsCard from "../components/SelfSignupSettingsCard";
+import CompanyAccessManager from "../components/CompanyAccessManager";
+import { formatTrialDateTR, isSpecialAccessActive } from "../utils/trialLicense";
+import { type CompanyIdentity, copyText, isMissingRpcError, listCompanyIdentities } from "../utils/superAdminAccess";
 
 type CompanyInviteResult = {
     company_id: string;
@@ -26,6 +30,10 @@ type CompanyRow = {
     enabled_modules?: string[] | null;
     trial_ends_at: string | null;
     created_at?: string | null;
+    signup_source?: string | null;
+    plan_status?: string | null;
+    is_pilot?: boolean | null;
+    pilot_until?: string | null;
 };
 
 type ProfileRow = {
@@ -53,6 +61,8 @@ type CustomerAccount = CompanyRow & {
     package_code: string | null;
     enabled_modules: string[];
     pendingInvites: InviteRow[];
+    /** super_admin_list_company_identities (026) — yoksa null. */
+    identity: CompanyIdentity | null;
 };
 
 const planLabels: Record<string, string> = {
@@ -116,7 +126,16 @@ function formatDateTR(iso?: string | null) {
 }
 
 function trialState(row: CompanyRow) {
-    if (row.subscription_plan === "lifetime") return { label: "Lisanslı", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+    if (isSpecialAccessActive(row)) {
+        return {
+            label: row.pilot_until ? `Özel erişim · ${formatTrialDateTR(row.pilot_until, { withTime: true })}'e kadar` : "Özel erişim · süresiz",
+            className: "bg-violet-50 text-violet-700 border-violet-200",
+        };
+    }
+    const plan = String(row.plan_status ?? "").toLowerCase();
+    if (row.subscription_plan === "lifetime" || plan === "lifetime" || plan === "active") return { label: "Lisanslı", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+    if (plan === "suspended") return { label: "Askıda", className: "bg-slate-100 text-slate-700 border-slate-200" };
+    if (plan === "expired") return { label: "Süresi doldu", className: "bg-red-50 text-red-700 border-red-200" };
     const end = row.trial_ends_at ? new Date(row.trial_ends_at).getTime() : 0;
     if (end > 0 && Date.now() > end) return { label: "Süresi doldu", className: "bg-red-50 text-red-700 border-red-200" };
     return { label: "Deneme", className: "bg-indigo-50 text-indigo-700 border-indigo-200" };
@@ -142,8 +161,9 @@ export default function SuperAdminTrials() {
     const [listErr, setListErr] = useState("");
     const [result, setResult] = useState<CompanyInviteResult | null>(null);
     const [accounts, setAccounts] = useState<CustomerAccount[]>([]);
-    const [extensionDays, setExtensionDays] = useState<Record<string, number>>({});
-    const [extendingId, setExtendingId] = useState<string | null>(null);
+    const [accessTarget, setAccessTarget] = useState<{ id: string; name: string | null } | null>(null);
+    const [identityNote, setIdentityNote] = useState("");
+    const [copiedId, setCopiedId] = useState<string | null>(null);
     const [modulePanelId, setModulePanelId] = useState<string | null>(null);
     const [moduleSavingId, setModuleSavingId] = useState<string | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -164,8 +184,18 @@ export default function SuperAdminTrials() {
         try {
             let { data: companies, error: companyErr }: { data: any[] | null; error: any } = await supabase
                 .from("companies")
-                .select("id,name,owner_id,subscription_plan,package_code,enabled_modules,trial_ends_at,created_at")
+                .select("*")
                 .order("created_at", { ascending: false });
+
+            // signup_source migration 024 ile gelir; kurulmadıysa eski sorguya dön.
+            if (companyErr && /signup_source/i.test(companyErr.message || "")) {
+                const withoutSource = await supabase
+                    .from("companies")
+                    .select("id,name,owner_id,subscription_plan,package_code,enabled_modules,trial_ends_at,created_at")
+                    .order("created_at", { ascending: false });
+                companies = withoutSource.data;
+                companyErr = withoutSource.error;
+            }
 
             if (companyErr && /(package_code|enabled_modules|schema cache)/i.test(companyErr.message || "")) {
                 const legacy = await supabase
@@ -209,6 +239,19 @@ export default function SuperAdminTrials() {
                 });
             }
 
+            // Firma yöneticileri (company_members üzerinden; owner_id güvenilir değil). 026 yoksa eski görünüm.
+            const identityMap = new Map<string, CompanyIdentity>();
+            try {
+                (await listCompanyIdentities()).forEach((identity) => identityMap.set(identity.company_id, identity));
+                setIdentityNote("");
+            } catch (identityErr) {
+                setIdentityNote(
+                    isMissingRpcError(identityErr)
+                        ? "Firma yöneticileri listelenemiyor: migration 026 henüz uygulanmamış. Aşağıdaki e-posta, firma kaydındaki sahip alanıdır."
+                        : "Firma yöneticileri yüklenemedi; aşağıdaki e-posta, firma kaydındaki sahip alanıdır.",
+                );
+            }
+
             const profileMap = new Map(profiles.map((profile) => [profile.user_id, profile]));
             setAccounts(
                 rows.map((row) => {
@@ -221,6 +264,7 @@ export default function SuperAdminTrials() {
                         package_code: row.package_code || (row.subscription_plan === "starter" ? "solo" : row.subscription_plan),
                         enabled_modules: Array.isArray(row.enabled_modules) ? row.enabled_modules : modulesForPlan(row.package_code || row.subscription_plan || "starter"),
                         pendingInvites: inviteMap.get(row.id) ?? [],
+                        identity: identityMap.get(row.id) ?? null,
                     };
                 })
             );
@@ -338,36 +382,6 @@ export default function SuperAdminTrials() {
         }
     }
 
-    async function handleExtendTrial(companyId: string) {
-        const extraDays = extensionDays[companyId] || 7;
-        if (extraDays < 1 || extraDays > 365) {
-            setListErr("Uzatma süresi 1 ile 365 gün arasında olmalı.");
-            return;
-        }
-
-        setListErr("");
-        setExtendingId(companyId);
-
-        try {
-            const { error } = await supabase.rpc("extend_company_trial", {
-                p_company_id: companyId,
-                p_extra_days: extraDays,
-            });
-
-            if (error) throw error;
-            await loadAccounts();
-        } catch (e: any) {
-            const message = String(e?.message ?? "");
-            if (message.includes("extend_company_trial") || message.includes("schema cache")) {
-                setListErr("Süre uzatma fonksiyonu Supabase'te kurulu değil. Güncel supabase_fix_provision_trial_rpc.sql dosyasını SQL Editor'da çalıştırın.");
-            } else {
-                setListErr(message || "Süre uzatılamadı.");
-            }
-        } finally {
-            setExtendingId(null);
-        }
-    }
-
     async function handleDeleteTrial(account: CustomerAccount) {
         const name = (account.name || "").trim();
         const confirmation = await requestText("Kalıcı silme", `${name} firmasını ve bağlı tüm kayıtları kalıcı olarak silmek için firma adını aynen yazın.`);
@@ -445,6 +459,7 @@ export default function SuperAdminTrials() {
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                {realRole === "super_admin" ? <SelfSignupSettingsCard /> : null}
                 {showRolePreviewPanel && realRole === "super_admin" ? (
                     <div className="xl:col-span-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -642,6 +657,9 @@ export default function SuperAdminTrials() {
                             {listErr}
                         </div>
                     ) : null}
+                    {identityNote ? (
+                        <div className="mx-6 mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">{identityNote}</div>
+                    ) : null}
 
                     {loadingList ? (
                         <div className="p-8 flex items-center gap-3 text-slate-500 font-semibold">
@@ -660,13 +678,52 @@ export default function SuperAdminTrials() {
                                             <div className="flex items-center gap-2">
                                                 <Building2 className="w-5 h-5 text-indigo-600 shrink-0" />
                                                  <div className="font-black text-slate-900 dark:text-white truncate">{account.name || "İsimsiz şirket"}</div>
+                                                {account.signup_source === "self_service" ? (
+                                                    <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-black text-emerald-700 border border-emerald-200">Kendi kaydı</span>
+                                                ) : null}
+                                            </div>
+                                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                                <span className="font-mono break-all">ID: {account.id}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                        if (await copyText(account.id)) {
+                                                            setCopiedId(account.id);
+                                                            window.setTimeout(() => setCopiedId((cur) => (cur === account.id ? null : cur)), 1500);
+                                                        }
+                                                    }}
+                                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                                                >
+                                                    <Copy className="h-3 w-3" />
+                                                    {copiedId === account.id ? "Kopyalandı" : "ID kopyala"}
+                                                </button>
                                             </div>
                                             <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-500">
-                                                <div>E-posta: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.ownerEmail}</span></div>
-                                                <div>Rol: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.ownerRole}</span></div>
+                                                {account.identity ? (
+                                                    <div className="sm:col-span-2">
+                                                        {account.identity.admins.filter((a) => a.is_active).length > 1 ? "Yöneticiler" : "Yönetici"}:{" "}
+                                                        {account.identity.admins.filter((a) => a.is_active).length === 0 ? (
+                                                            <span className="font-semibold text-amber-700">Aktif yönetici yok</span>
+                                                        ) : (
+                                                            account.identity.admins
+                                                                .filter((a) => a.is_active)
+                                                                .map((a, i) => (
+                                                                    <span key={a.user_id} className="font-semibold text-slate-700 dark:text-slate-200">
+                                                                        {i > 0 ? ", " : ""}
+                                                                        {a.email || a.full_name || a.user_id.slice(0, 8)}
+                                                                    </span>
+                                                                ))
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <>
+                                                        <div>Kayıtlı sahip e-postası: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.ownerEmail}</span></div>
+                                                        <div>Rol: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.ownerRole}</span></div>
+                                                    </>
+                                                )}
                                                 <div>Paket: <span className="font-semibold text-slate-700 dark:text-slate-200">{planLabels[account.package_code || account.subscription_plan || "starter"] || account.package_code || account.subscription_plan || "starter"}</span></div>
                                                 <div>Modül: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.enabled_modules.length}</span></div>
-                                                <div className="sm:col-span-2">Bitiş: <span className="font-semibold text-slate-700 dark:text-slate-200">{formatDateTR(account.trial_ends_at)}</span></div>
+                                                <div className="sm:col-span-2">Deneme bitişi: <span className="font-semibold text-slate-700 dark:text-slate-200">{account.trial_ends_at ? formatTrialDateTR(account.trial_ends_at, { withTime: true }) : "-"}</span></div>
                                             </div>
                                         </div>
 
@@ -681,33 +738,14 @@ export default function SuperAdminTrials() {
                                                 </div>
                                             </div>
 
-                                            {account.subscription_plan !== "lifetime" ? (
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        max={365}
-                                                        value={extensionDays[account.id] ?? 7}
-                                                        onChange={(e) =>
-                                                            setExtensionDays((prev) => ({
-                                                                ...prev,
-                                                                [account.id]: Number(e.target.value),
-                                                            }))
-                                                        }
-                                                        className="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
-                                                        aria-label={`${account.name || "Şirket"} uzatma günü`}
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleExtendTrial(account.id)}
-                                                        disabled={extendingId === account.id}
-                                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-black text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
-                                                    >
-                                                        {extendingId === account.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                                                        Gün Ekle
-                                                    </button>
-                                                </div>
-                                            ) : null}
+                                            <button
+                                                type="button"
+                                                onClick={() => setAccessTarget({ id: account.id, name: account.name })}
+                                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-black text-white shadow-sm hover:bg-indigo-700"
+                                            >
+                                                <Clock className="h-4 w-4" />
+                                                Süre / Özel Erişim
+                                            </button>
                                             <button
                                                 type="button"
                                                 onClick={() => setModulePanelId((prev) => (prev === account.id ? null : account.id))}
@@ -814,6 +852,14 @@ export default function SuperAdminTrials() {
                     )}
                 </div>
             </div>
+            {accessTarget ? (
+                <CompanyAccessManager
+                    companyId={accessTarget.id}
+                    companyName={accessTarget.name}
+                    onClose={() => setAccessTarget(null)}
+                    onChanged={loadAccounts}
+                />
+            ) : null}
         </div>
     );
 }

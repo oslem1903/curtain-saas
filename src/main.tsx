@@ -1,3 +1,5 @@
+import { installTableLabels } from './utils/tableLabels'
+import { routeAuthCallback } from './utils/authRedirect'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -43,6 +45,9 @@ async function registerPushServiceWorker() {
 }
 
 void registerPushServiceWorker();
+installTableLabels();
+
+routeAuthCallback();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

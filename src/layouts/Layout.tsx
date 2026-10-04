@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useActivityTracking } from "../hooks/useActivityTracking";
 import {
@@ -11,6 +11,7 @@ import {
   Menu,
   X,
   Bell,
+  Clock,
   CheckCircle2,
   Map as MapIcon,
   FileText,
@@ -39,7 +40,7 @@ import { clearDemoTenantContext, getEffectiveTenantContext, supabase, setAppRead
 import { canAccess, roleLabel, type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { useAuth } from "../context/AuthContext";
-import { getTrialDisplayInfo, formatTrialDateTR, isTrialExpired } from "../utils/trialLicense";
+import { getTrialDisplayInfo, formatTrialDateTR, isSpecialAccessActive, isTrialExpired } from "../utils/trialLicense";
 import { useSupportModal } from "../context/SupportModalContext";
 import { useImpersonation } from "../context/ImpersonationContext";
 import SupportModal from "../components/SupportModal";
@@ -153,6 +154,15 @@ type TrialInfo = {
   /** Pilot firmalar deneme kilidinden muaf: uyarı gösterilmez. */
   isPilot?: boolean;
 };
+
+/** Erişim kararını etkileyen alanların imzası — Süper Admin bir değişiklik yaptığında
+ * (deneme bitişi, özel erişim) Layout'un periyodik kontrolü bunu fark edip AuthContext'i yeniler. */
+function accessSignature(c: any): string {
+  if (!c) return "";
+  return [c.plan_status, c.subscription_status, c.trial_ends_at, c.license_expires_at, Boolean(c.is_pilot), c.pilot_until ?? null, Boolean(c.read_only), c.is_active]
+    .map((v) => String(v ?? ""))
+    .join("|");
+}
 
 /** -----------------------
  * Helpers
@@ -335,7 +345,13 @@ async function getContext() {
  * ----------------------*/
 export const Layout = () => {
   const { effectiveRole: role, realRole, viewingRole, viewingUserId, viewingLabel, isSimulating, setViewingRoleAndUser } = useRole();
-  const { hasModule, company, readOnly } = useAuth();
+  const { hasModule, company, readOnly, refreshAuth } = useAuth();
+  // Periyodik firma kontrolü kapanışta eski değerleri görmesin diye ref'te tutulur.
+  const authCompanyRef = useRef(company);
+  authCompanyRef.current = company;
+  const refreshAuthRef = useRef(refreshAuth);
+  refreshAuthRef.current = refreshAuth;
+  const lastAccessRefreshSig = useRef<string>("");
   const location = useLocation();
   const { openModal: openSupportModal } = useSupportModal();
   const { isImpersonating, companyName: impersonatingCompanyName, readOnly: impersonationReadOnly, endSession } = useImpersonation();
@@ -396,16 +412,27 @@ export const Layout = () => {
          try {
              const { data: comp } = await supabase
                    .from("companies")
-                   .select("subscription_plan, plan_status, trial_ends_at, license_expires_at, is_pilot, enabled_roles")
+                   .select("*") // 026 oncesi/sonrasi kolon farklarina dayanikli (pilot_until)
                    .eq("id", ctx.company_id)
                    .maybeSingle();
 
              if (comp) {
+                 // Erişim durumu sunucuda değiştiyse (deneme uzatıldı/bitirildi, özel erişim
+                 // verildi/kaldırıldı) AuthContext'i yenile: kilit/salt okunur durumu ve
+                 // banner'lar sayfa yenilemeden güncellenir. Aynı fark için tek kez çağrılır.
+                 const authCompany = authCompanyRef.current as any;
+                 if (authCompany?.id && authCompany.id === ctx.company_id) {
+                     const serverSig = accessSignature(comp);
+                     if (serverSig !== accessSignature(authCompany) && lastAccessRefreshSig.current !== serverSig) {
+                         lastAccessRefreshSig.current = serverSig;
+                         void refreshAuthRef.current().catch(() => undefined);
+                     }
+                 }
                  setCompanyEnabledRoles(Array.isArray((comp as any).enabled_roles) ? (comp as any).enabled_roles : []);
                  const plan = comp.subscription_plan || comp.plan_status || 'trial';
                  const display = getTrialDisplayInfo(comp);
                  if (display.isTrialPlan) {
-                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft, isPilot: Boolean((comp as any).is_pilot) });
+                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft, isPilot: isSpecialAccessActive(comp as any) });
                      // Süper adminin KENDİ hesabı gerçek bir firmaya (company_members üzerinden,
                      // demo_company_id OLMADAN) bağlıysa VE o firmanın denemesi dolmuşsa, ctx.company_id
                      // buraya o firmanın ID'sini getirir — display.isExpired TRUE olur ve aşağıdaki
@@ -887,6 +914,25 @@ export const Layout = () => {
 	              {company.trial_ends_at ? (
 	                <span>Deneme bitiş: {formatTrialDateTR(company.trial_ends_at, { withTime: true })}</span>
 	              ) : null}
+	              {(() => {
+	                // Kalan deneme süresi her sayfada görünsün (sunucudaki trial_ends_at'e göre).
+	                const info = getTrialDisplayInfo(company);
+	                if (!info.isTrialPlan || isSpecialAccessActive(company) || info.daysLeft == null) return null;
+	                if (info.isExpired) {
+	                  return <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-700 dark:bg-red-950/40 dark:text-red-300">Deneme süresi doldu</span>;
+	                }
+	                const label = info.daysLeft <= 0 ? "Deneme bugün bitiyor" : `Deneme: ${info.daysLeft} gün kaldı`;
+	                return (
+	                  <span className={cn("rounded-full px-2 py-0.5", info.daysLeft <= 2 ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200" : "bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300")}>
+	                    {label}
+	                  </span>
+	                );
+	              })()}
+	              {isSpecialAccessActive(company) ? (
+	                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+	                  {company.pilot_until ? `Özel erişim: ${formatTrialDateTR(company.pilot_until, { withTime: true })} tarihine kadar` : "Özel erişim: süresiz"}
+	                </span>
+	              ) : null}
 	              {readOnly ? <span className="text-red-600">Read-only mod aktif</span> : null}
 	              {isDemoWriteMode ? <span className="text-emerald-600">Süper admin işlem modu aktif</span> : null}
 	              {isSimulating ? (
@@ -1018,7 +1064,7 @@ export const Layout = () => {
                 className="relative p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-all"
                 title="Hatırlatmalar"
               >
-                <Bell className="w-5 h-5" />
+                <Clock className="w-5 h-5" />
                 {pendingCount > 0 && (
                   <span className="absolute -top-1 -right-1 text-[11px] min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white flex items-center justify-center">
                     {pendingCount}

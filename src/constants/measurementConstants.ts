@@ -1,3 +1,4 @@
+import { decorativeRail } from "../utils/decorativeRail";
 // Measurement Entry Constants & Types
 // Bu dosya Fast Refresh uyumluluğu için MeasurementEntry.tsx'den ayrıştırıldı.
 
@@ -79,15 +80,40 @@ export function productLabel(type: ProductType) {
   return PRODUCT_OPTIONS.find((item) => item.value === type)?.label ?? "Ürün";
 }
 
+export function isLinear(type: ProductType | string) {
+  return ["rustik", "dekoratif_ray", "katlamali_mekanizma"].includes(type);
+}
+
+export function isManual(type: ProductType | string) {
+  return ["ip_perde", "aksesuar"].includes(type);
+}
+
+export function pricingUnit(type: ProductType | string) {
+  return isManual(type) ? "adet" : isLinear(type) || ["tul", "fon", "kruvaze"].includes(type) ? "m" : "m²";
+}
+
 export function calculate(
-  productType: ProductType,
+  productType: ProductType | string,
   widthCm: number,
   heightCm: number,
   qty: number,
   unitPrice: number,
-  pile: "2" | "3" | "S"
+  pile: "2" | "3" | "S" | string = "2"
 ) {
-  if (productType === "tul" || productType === "fon") {
+  if (productType === "dekoratif_ray") return decorativeRail(widthCm, qty, unitPrice);
+  if (isManual(productType) || isLinear(productType)) {
+    const roundedWidth = isLinear(productType) ? Math.ceil(Math.max(0, widthCm) / 25) * 25 : 0;
+    const areaM2 = isManual(productType) ? 1 : roundedWidth / 100;
+    return {
+      roundedWidth,
+      roundedHeight: 0,
+      areaM2,
+      total: areaM2 * Math.max(1, qty) * Math.max(0, unitPrice),
+      fabricWidthCm: null as number | null
+    };
+  }
+
+  if (productType === "tul" || productType === "fon" || productType === "kruvaze") {
     // "S" (S pile) 1'e 3 perde gibi hesaplanir.
     const pileMultiplier = pile === "3" || pile === "S" ? 3 : 2;
     const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 15;
@@ -95,8 +121,9 @@ export function calculate(
     const total = areaM2 * Math.max(1, qty) * Math.max(0, unitPrice);
     return { roundedWidth: widthCm, roundedHeight: heightCm, areaM2, total, fabricWidthCm };
   }
-  const minWidth = productType === "stor" ? 100 : 1;
-  const minHeight = productType === "stor" ? 200 : 1;
+
+  const minWidth = ["stor", "dikey_stor"].includes(productType) ? 100 : 1;
+  const minHeight = ["stor", "dikey_stor"].includes(productType) ? 200 : 1;
   const roundedWidth = ceil10(Math.max(widthCm, minWidth));
   const roundedHeight = ceil10(Math.max(heightCm, minHeight));
   const areaM2 = (roundedWidth / 100) * (roundedHeight / 100);

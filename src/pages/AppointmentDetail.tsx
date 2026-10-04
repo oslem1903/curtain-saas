@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
+import { pickPrimaryMembership } from "../utils/trialLicense";
 import { normalizeRole, type RoleState } from "../auth/roles";
 import {
     cancelReminderNotification,
@@ -132,11 +133,11 @@ export default function AppointmentDetail() {
                     setRole(normalizeRole(profile.role));
                 }
 
-                const { data: myCompany } = await supabase
-                    .from("company_members")
-                    .select("company_id")
-                    .eq("user_id", user.id)
-                    .maybeSingle();
+                const { data: myCompanyRows } = await supabase
+.from("company_members")
+.select("company_id,is_active,created_at,companies(*)")
+.eq("user_id", user.id);
+const myCompany = pickPrimaryMembership(myCompanyRows as any[] | null) as { company_id?: string } | null;
 
                 const normalizedRole = normalizeRole(profile?.role);
                 const isSuperAdmin = normalizedRole === "super_admin";

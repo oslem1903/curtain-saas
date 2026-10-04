@@ -1,7 +1,7 @@
 import { requestText } from "../utils/requestText";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, CheckCircle2, Eye, LogIn, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, X } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Copy, Eye, LogIn, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, X } from "lucide-react";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 
@@ -10,6 +10,9 @@ import { cn } from "../utils/cn";
 import { CORE_MODULES, ENTERPRISE_MODULES, PRO_MODULES, SOLO_MODULES } from "../context/AuthContext";
 import { useRole } from "../context/RoleContext";
 import ImpersonationModal from "../components/ImpersonationModal";
+import CompanyAccessManager from "../components/CompanyAccessManager";
+import { formatTrialDateTR, isSpecialAccessActive } from "../utils/trialLicense";
+import { type CompanyAdmin, copyText, isMissingRpcError, listCompanyIdentities } from "../utils/superAdminAccess";
 
 type CompanyStats = {
     id: string;
@@ -28,6 +31,10 @@ type CompanyStats = {
     package_code: string;
     max_devices: number;
     active_device_count: number;
+    is_pilot: boolean;
+    pilot_until: string | null;
+    /** null = yönetici listesi alınamadı (026 uygulanmamış olabilir). */
+    admins: CompanyAdmin[] | null;
 };
 
 type CompanyDevice = {
@@ -140,11 +147,13 @@ export default function SuperAdminCompanies() {
     });
 
     const [editingCompany, setEditingCompany] = useState<CompanyStats | null>(null);
+    const [accessTarget, setAccessTarget] = useState<{ id: string; name: string } | null>(null);
+    const [identityNote, setIdentityNote] = useState("");
+    const [copiedId, setCopiedId] = useState<string | null>(null);
     const [editCompanyForm, setEditCompanyForm] = useState({
         name: "",
         package_code: "solo",
         plan_status: "trial",
-        trial_ends_at: "",
         max_devices: 3,
         read_only: false,
         is_active: true,
@@ -174,11 +183,34 @@ export default function SuperAdminCompanies() {
             const { data: rows, error } = await supabase.from("companies").select("*").order("created_at", { ascending: false });
             if (error) throw error;
 
+            // Yöneticiler ve aktif üye sayısı sunucudan (company_members RLS'i süper admine
+            // başka firmaların üyelerini göstermediği için eski sayım 0 dönüyordu).
+            const identityMap = new Map<string, { admins: CompanyAdmin[]; active_member_count: number }>();
+            let identitiesOk = false;
+            try {
+                (await listCompanyIdentities()).forEach((identity) =>
+                    identityMap.set(identity.company_id, { admins: identity.admins, active_member_count: identity.active_member_count }),
+                );
+                identitiesOk = true;
+                setIdentityNote("");
+            } catch (identityErr) {
+                setIdentityNote(
+                    isMissingRpcError(identityErr)
+                        ? "Firma yöneticileri ve kullanıcı sayıları gösterilemiyor: migration 026 henüz uygulanmamış."
+                        : "Firma yöneticileri yüklenemedi.",
+                );
+            }
+
             const stats = await Promise.all((rows ?? []).map(async (company) => {
-                const { count: userCount } = await supabase
-                    .from("company_members")
-                    .select("*", { count: "exact", head: true })
-                    .eq("company_id", company.id);
+                const identity = identityMap.get(company.id);
+                let userCount: number | null = identity ? identity.active_member_count : null;
+                if (!identitiesOk) {
+                    const { count } = await supabase
+                        .from("company_members")
+                        .select("*", { count: "exact", head: true })
+                        .eq("company_id", company.id);
+                    userCount = count ?? null;
+                }
 
                 const { count: openTickets } = await supabase
                     .from("support_tickets")
@@ -208,6 +240,9 @@ export default function SuperAdminCompanies() {
                     read_only: company.read_only === true,
                     trial_end: company.trial_ends_at || null,
                     user_count: userCount || 0,
+                    is_pilot: company.is_pilot === true,
+                    pilot_until: company.pilot_until ?? null,
+                    admins: identity ? identity.admins : null,
                     open_tickets: openTickets || 0,
                     last_error_at: lastError?.[0]?.created_at || null,
                     app_version: "1.0.0",
@@ -291,7 +326,6 @@ export default function SuperAdminCompanies() {
             name: company.name,
             package_code: company.package_code || company.subscription_plan,
             plan_status: company.plan_status,
-            trial_ends_at: company.trial_end ? company.trial_end.slice(0, 10) : "",
             max_devices: company.max_devices,
             read_only: company.read_only,
             is_active: company.is_active,
@@ -319,9 +353,8 @@ export default function SuperAdminCompanies() {
                 is_active: editCompanyForm.is_active,
             };
 
-            if (editCompanyForm.trial_ends_at) {
-                patch.trial_ends_at = new Date(editCompanyForm.trial_ends_at).toISOString();
-            }
+            // Deneme bitişi burada DEĞİŞTİRİLMEZ: tek yol "Süre / Özel Erişim" (sunucu RPC'si,
+            // yetki kontrolü + işlem geçmişi). Böylece iki ayrı tarih alanı birbirini ezmez.
 
             const { error } = await supabase.from("companies").update(patch).eq("id", editingCompany.id);
             if (error) throw error;
@@ -518,9 +551,15 @@ export default function SuperAdminCompanies() {
         setPendingDemoNav({ role, target });
     }
 
-    const filtered = companies.filter((company) =>
-        company.name.toLocaleLowerCase("tr-TR").includes(search.toLocaleLowerCase("tr-TR")),
-    );
+    const filtered = companies.filter((company) => {
+        const q = search.trim().toLocaleLowerCase("tr-TR");
+        if (!q) return true;
+        return (
+            company.name.toLocaleLowerCase("tr-TR").includes(q) ||
+            company.id.toLowerCase().includes(q) ||
+            (company.admins ?? []).some((a) => (a.email ?? "").toLowerCase().includes(q))
+        );
+    });
 
     if (loading) return <div className="p-8 text-center">Yükleniyor...</div>;
 
@@ -548,13 +587,16 @@ export default function SuperAdminCompanies() {
                             type="text"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            placeholder="Müşteri / Firma ara..."
+                            placeholder="Firma adı, ID veya yönetici e-postası..."
                             className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 outline-none transition focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-800"
                         />
                     </div>
                 </div>
             </div>
 
+            {identityNote ? (
+                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">{identityNote}</div>
+            ) : null}
             <div className="grid grid-cols-1 gap-4">
                 {filtered.map((company) => (
                     <div key={company.id} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -577,15 +619,56 @@ export default function SuperAdminCompanies() {
                                             {company.plan_status}
                                         </span>
                                         {company.read_only ? <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-600 dark:bg-slate-800 dark:text-slate-300">Read-only</span> : null}
+                                        {isSpecialAccessActive(company) ? (
+                                            <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-violet-700 dark:bg-violet-950 dark:text-violet-300">
+                                                {company.pilot_until ? `Özel erişim · ${formatTrialDateTR(company.pilot_until)}` : "Özel erişim · süresiz"}
+                                            </span>
+                                        ) : null}
                                     </div>
                                     <div className="mt-1 text-xs font-bold text-slate-500">
                                         Paket: {planLabels[company.package_code] || planLabels[company.subscription_plan] || company.subscription_plan}
                                     </div>
+                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                        <span className="font-mono break-all">ID: {company.id}</span>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                if (await copyText(company.id)) {
+                                                    setCopiedId(company.id);
+                                                    window.setTimeout(() => setCopiedId((cur) => (cur === company.id ? null : cur)), 1500);
+                                                }
+                                            }}
+                                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                                        >
+                                            <Copy size={12} />
+                                            {copiedId === company.id ? "Kopyalandı" : "ID kopyala"}
+                                        </button>
+                                    </div>
+                                    {company.admins ? (
+                                        <div className="mt-1 text-xs text-slate-500">
+                                            {company.admins.filter((a) => a.is_active).length > 1 ? "Yöneticiler: " : "Yönetici: "}
+                                            {company.admins.filter((a) => a.is_active).length === 0 ? (
+                                                <span className="font-bold text-amber-700">Aktif yönetici yok</span>
+                                            ) : (
+                                                <span className="font-bold text-slate-700 dark:text-slate-200">
+                                                    {company.admins.filter((a) => a.is_active).map((a) => a.email || a.full_name || a.user_id.slice(0, 8)).join(", ")}
+                                                </span>
+                                            )}
+                                        </div>
+                                    ) : null}
                                 </div>
                             </div>
 
                             {/* Top Direct Action Buttons */}
                             <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setAccessTarget({ id: company.id, name: company.name })}
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700 shadow-sm transition"
+                                >
+                                    <Clock size={15} />
+                                    Süre / Özel Erişim
+                                </button>
                                 <button
                                     type="button"
                                     onClick={() => openEditModal(company)}
@@ -634,7 +717,7 @@ export default function SuperAdminCompanies() {
                             </div>
                             <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40 col-span-2 sm:col-span-1">
                                 <span className="text-slate-400 font-bold block mb-0.5">Deneme Bitiş</span>
-                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.trial_end ? format(new Date(company.trial_end), "dd MMM yyyy", { locale: tr }) : "Süresiz"}</span>
+                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.trial_end ? formatTrialDateTR(company.trial_end, { withTime: true }) : "Yok"}</span>
                             </div>
                         </div>
 
@@ -1036,6 +1119,7 @@ export default function SuperAdminCompanies() {
                                 <div>
                                     <h3 className="text-lg font-black text-slate-900 dark:text-white">Müşteri Bilgilerini Düzenle</h3>
                                     <p className="text-xs text-slate-500">{editingCompany.name}</p>
+                                    <p className="font-mono text-[11px] text-slate-400 break-all">ID: {editingCompany.id}</p>
                                 </div>
                             </div>
                             <button
@@ -1108,14 +1192,22 @@ export default function SuperAdminCompanies() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
-                                        Deneme / Lisans Bitiş Tarihi
+                                        Deneme Bitişi
                                     </label>
-                                    <input
-                                        type="date"
-                                        value={editCompanyForm.trial_ends_at}
-                                        onChange={(e) => setEditCompanyForm({ ...editCompanyForm, trial_ends_at: e.target.value })}
-                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                                    />
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+                                        {editingCompany.trial_end ? formatTrialDateTR(editingCompany.trial_end, { withTime: true }) : "Yok"}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const target = { id: editingCompany.id, name: editingCompany.name };
+                                            setEditingCompany(null);
+                                            setAccessTarget(target);
+                                        }}
+                                        className="mt-1 text-xs font-black text-indigo-600 hover:underline"
+                                    >
+                                        Süre / Özel Erişim ile değiştir
+                                    </button>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
@@ -1193,6 +1285,14 @@ export default function SuperAdminCompanies() {
                     setPendingImpersonationRedirect(true);
                 }}
             />
+            {accessTarget ? (
+                <CompanyAccessManager
+                    companyId={accessTarget.id}
+                    companyName={accessTarget.name}
+                    onClose={() => setAccessTarget(null)}
+                    onChanged={loadCompanies}
+                />
+            ) : null}
         </div>
     );
 }

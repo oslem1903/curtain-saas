@@ -982,25 +982,25 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                 </div>
 
                                 {/* En Sağ Bölüm: Butonlar */}
-                                <div className="p-5 flex flex-row md:flex-col items-center justify-center gap-3 md:border-l border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 min-w-[160px]">
+                                <div className="p-5 grid grid-cols-2 md:flex md:flex-col items-center justify-center gap-3 md:border-l border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 min-w-[160px]">
                                     <button
                                         type="button"
                                         onClick={() => { setPayModalId(emp.id); setPayAmount(remaining > 0 ? String(remaining) : ""); }}
-                                        className="w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 md:py-3 text-sm font-black text-white shadow-sm hover:bg-emerald-700 transition"
+                                        className="w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 py-3 md:py-3 text-sm whitespace-nowrap font-black text-white shadow-sm hover:bg-emerald-700 transition"
                                     >
                                         <Wallet className="h-4 w-4" /> Ödeme Yap
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setAddEarningModalId(emp.id)}
-                                        className="w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-4 py-3 md:py-3 text-sm font-black text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100 transition dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-500"
+                                        className="w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-3 py-3 md:py-3 text-sm whitespace-nowrap font-black text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100 transition dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-500"
                                     >
                                         <Plus className="h-4 w-4" /> Hakediş Ekle
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setOpenBalanceId(isOpen ? null : emp.id)}
-                                        className={`w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 md:py-3 text-sm font-bold shadow-sm transition ${
+                                        className={`col-span-2 md:col-auto w-full flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 md:py-3 text-sm font-bold shadow-sm transition ${
                                             isOpen ? "bg-slate-800 text-white border-slate-800 dark:bg-white dark:text-slate-900" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
                                         }`}
                                     >
@@ -1012,7 +1012,7 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                         (id === user_id, employees tablosunda karsiligi yok) bu islemler
                                         sessizce hicbir seyi etkilemez, bu yuzden gizlenir. */}
                                     {emp.id !== emp.user_id && (
-                                        <div className="w-full flex gap-2">
+                                        <div className="col-span-2 md:col-auto w-full flex gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => openEditEmployee(emp)}
@@ -1229,7 +1229,120 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
                                                     </div>
                                                 </div>
 
-                                                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                                                {/* Telefon: tablo yerine kart listesi */}
+                                                <div className="md:hidden space-y-3">
+                                                    {withBalance.map((l) => {
+                                                        const isJob = l.type === "job";
+                                                        const isPayment = l.type === "payment";
+                                                        const isCancel = l.type === "cancel";
+                                                        const isEarning = l.type === "earning";
+                                                        const d = isJob ? draftFor(l.raw, emp.allIds) : null;
+                                                        const isAuto = isJob && d && (d.price_type === "m2" || d.price_type === "adet");
+                                                        const dirty = isJob && d && Boolean(drafts[l.raw.id]);
+                                                        const title = isPayment ? "Ödeme Yapıldı" : isCancel ? "Ödeme İptali" : isEarning ? "Manuel Hakediş" : "Montaj Tamamlandı";
+                                                        const titleCls = isPayment ? "text-emerald-700 dark:text-emerald-400" : isCancel ? "text-red-700 dark:text-red-400" : isEarning ? "text-amber-700 dark:text-amber-400" : "text-slate-800 dark:text-slate-200";
+                                                        return (
+                                                            <div key={`m-${l.id}${l.type}`} className={`rounded-2xl border p-4 shadow-sm ${isCancel ? "border-red-200 bg-red-50/40 dark:border-red-900/40 dark:bg-red-900/10" : isPayment ? "border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-900/10" : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"}`}>
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className={`text-sm font-black ${titleCls}`}>{title}</div>
+                                                                        <div className="mt-0.5 text-[11px] font-semibold text-slate-400">{l.date ? formatDate(l.date) : "—"}</div>
+                                                                    </div>
+                                                                    <div className="shrink-0 text-right">
+                                                                        {isPayment ? (
+                                                                            <div className="text-base font-black text-emerald-600">− {formatTL(l.credit)}</div>
+                                                                        ) : isCancel || isEarning ? (
+                                                                            <div className={`text-base font-black ${isEarning ? "text-amber-600" : "text-red-600"}`}>+ {formatTL(l.debit)}</div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                </div>
+                                                                {l.desc && <div className="mt-1 break-words text-xs text-slate-500">{l.desc}</div>}
+                                                                {isJob && d && (
+                                                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                                                        <div className="col-span-2 text-xs font-bold text-slate-500">
+                                                                            Alan: {jobArea(l.raw) > 0 ? `${jobArea(l.raw).toFixed(2)} m²` : "—"}
+                                                                        </div>
+                                                                        <label className="text-[10px] font-bold uppercase text-slate-400">
+                                                                            Fiyat tipi
+                                                                            <select
+                                                                                value={d.price_type}
+                                                                                onChange={(e) => updateDraft(l.raw, { price_type: e.target.value })}
+                                                                                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-bold normal-case text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                                                                            >
+                                                                                <option value="manuel">Manuel</option>
+                                                                                <option value="m2">m² bazlı</option>
+                                                                                <option value="adet">Adet bazlı</option>
+                                                                            </select>
+                                                                        </label>
+                                                                        <label className="text-[10px] font-bold uppercase text-slate-400">
+                                                                            Birim fiyat
+                                                                            <input
+                                                                                type="number"
+                                                                                value={d.unit_rate}
+                                                                                disabled={!isAuto}
+                                                                                onChange={(e) => updateDraft(l.raw, { unit_rate: e.target.value })}
+                                                                                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-right text-xs disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900"
+                                                                                placeholder="Birim"
+                                                                            />
+                                                                        </label>
+                                                                        <label className="col-span-2 text-[10px] font-bold uppercase text-slate-400">
+                                                                            Hakediş (₺)
+                                                                            <input
+                                                                                type="number"
+                                                                                value={d.installer_fee}
+                                                                                onChange={(e) => updateDraft(l.raw, { installer_fee: e.target.value })}
+                                                                                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-right text-sm font-black text-red-600 focus:border-red-400 focus:ring-1 focus:ring-red-400 dark:border-slate-700 dark:bg-slate-900"
+                                                                            />
+                                                                        </label>
+                                                                        {dirty && (
+                                                                            <button
+                                                                                type="button"
+                                                                                disabled={rowSavingId === l.raw.id}
+                                                                                onClick={() => void saveJobFee(l.raw)}
+                                                                                className="col-span-2 rounded-lg bg-red-600 px-3 py-2 text-xs font-black text-white hover:bg-red-700 disabled:opacity-50"
+                                                                            >
+                                                                                {rowSavingId === l.raw.id ? "Kaydediliyor..." : "Kaydet"}
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                                <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 dark:border-slate-800">
+                                                                    <span className="text-[10px] font-bold uppercase text-slate-400">Bakiye</span>
+                                                                    <span className={`text-sm font-black ${l.balance > 0 ? "text-red-600 dark:text-red-400" : l.balance < 0 ? "text-blue-600 dark:text-blue-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                                                                        {formatTL(l.balance)}{l.balance < 0 ? " (Avans)" : ""}
+                                                                    </span>
+                                                                </div>
+                                                                {isPayment && (
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={saving}
+                                                                        onClick={() => void cancelPayment(l.raw)}
+                                                                        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+                                                                    >
+                                                                        <X className="h-3.5 w-3.5" />
+                                                                        Ödemeyi İptal Et
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div className="grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-center dark:border-slate-700 dark:bg-slate-800">
+                                                        <div>
+                                                            <div className="text-[10px] font-bold uppercase text-slate-500">Hakediş</div>
+                                                            <div className="text-sm font-black text-red-600">{formatTL(bal.earned)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] font-bold uppercase text-slate-500">Ödenen</div>
+                                                            <div className="text-sm font-black text-emerald-600">{formatTL(bal.paid)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] font-bold uppercase text-slate-500">Kalan</div>
+                                                            <div className={`text-sm font-black ${remaining > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatTL(remaining)}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                                                     <div className="overflow-x-auto">
                                                         <table className="w-full min-w-[800px] text-sm">
                                                             <thead>

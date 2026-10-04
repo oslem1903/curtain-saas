@@ -1,9 +1,10 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase, setAppReadOnlyMode } from "../supabaseClient";
 import { normalizeRole, type RoleState } from "../auth/roles";
-import { isTrialExpired } from "../utils/trialLicense";
+import { isTrialExpired, pickPrimaryMembership } from "../utils/trialLicense";
+import { friendlyInviteJoinError } from "../utils/inviteJoin";
 import { clearStorageUrlCache } from "../utils/storageUrl";
 
 type CompanyState = {
@@ -21,6 +22,8 @@ type CompanyState = {
     trial_end: string | null;
     trial_ends_at: string | null;
     is_pilot: boolean | null;
+    /** Migration 026: ozel erisim bitisi (NULL = suresiz). 026 calistirilmadan once undefined. */
+    pilot_until?: string | null;
     onboarding_completed?: boolean;
     onboarding_completed_at?: string | null;
     subscription_status?: string;
@@ -80,7 +83,9 @@ function normalizeEnabledModules(modules: string[]) {
     return Array.from(normalized);
 }
 
-type AuthStatus = "loading" | "unauthenticated" | "ready" | "unauthorized" | "locked";
+// needs_setup: oturum var, profil var ama hiçbir firmaya üyelik yok (kodsuz kayıt
+// sonrası işletme henüz oluşturulmadı ya da davet henüz kabul edilmedi).
+type AuthStatus = "loading" | "unauthenticated" | "ready" | "unauthorized" | "locked" | "needs_setup" | "access_error";
 type LockReason = "inactive_user" | "inactive_member" | "inactive_company" | "expired_trial" | "read_only" | "device_limit" | "unknown";
 
 export function getDeviceId() {
@@ -106,6 +111,7 @@ type AuthContextValue = {
     lockReason: LockReason | null;
     refreshAuth: () => Promise<void>;
     isPasswordRecovery: boolean;
+    accessError: string | null;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -158,6 +164,9 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string, ms = 6000): Prom
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+    const [accessError, setAccessError] = useState<string | null>(null);
+    const loadQueue = useRef<Promise<void> | null>(null);
+    const lastUserId = useRef<string | null>(null);
     const [status, setStatus] = useState<AuthStatus>("loading");
     const [user, setUser] = useState<User | null>(null);
     const [role, setRole] = useState<RoleState>("unknown");
@@ -168,7 +177,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // İlk yükleme tamamlandı mı? Arka plan refresh'lerinde loading ekranı gösterme.
     const hasLoadedOnce = useRef(false);
 
-    const loadAuth = async () => {
+    const loadAuthNow = useCallback(async () => {
+        let completingInvite = false;
+        setAccessError(null);
         const isFirstLoad = !hasLoadedOnce.current;
         try {
             if (isFirstLoad) {
@@ -176,11 +187,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setLockReason(null);
             }
 
-            const { data: sessionData } = await withTimeout(supabase.auth.getSession(), "Oturum kontrolu");
+            const { data: sessionData, error: sessionError } = await withTimeout(supabase.auth.getSession(), "Oturum kontrolu");
+            if (sessionError) throw sessionError;
             const sessionUser = sessionData.session?.user ?? null;
 
+            const identityChanged = lastUserId.current !== (sessionUser?.id ?? null);
+            lastUserId.current = sessionUser?.id ?? null;
             setUser(sessionUser);
-            if (isFirstLoad) {
+            if (isFirstLoad || identityChanged) {
+                setStatus("loading");
                 setCompany(null);
                 setRole("unknown");
                 setMemberRole("unknown");
@@ -191,8 +206,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 // kullaniciya onceki firmanin adresleri sizmasin).
                 clearStorageUrlCache();
                 hasLoadedOnce.current = false;
+                setCompany(null);
+                setRole("unknown");
+                setMemberRole("unknown");
+                setAppReadOnlyMode(false);
                 setStatus("unauthenticated");
                 return;
+            }
+
+            if (sessionUser.user_metadata?.perdepro_invite) {
+                completingInvite = true;
+                const { error } = await withTimeout(supabase.rpc("complete_pending_invite_for_current_user"), "Davet tamamlama", 15000);
+                if (error) throw error;
+                completingInvite = false;
             }
 
             const { data: rpcProfile, error: rpcProfileError } = await retryOnError(() =>
@@ -200,47 +226,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
 
         let profile = Array.isArray(rpcProfile) ? rpcProfile[0] : rpcProfile;
-        let profileError = rpcProfileError;
-
+        // RPC eski kurulumda yoksa yalnizca Auth ID ile ara; e-posta yetki kaniti degildir.
+        if (rpcProfileError && !["PGRST202", "42883"].includes(rpcProfileError.code)) throw rpcProfileError;
         if (!profile?.role) {
             const byUserId = await withTimeout(
-                supabase
-                    .from("profiles")
-                    .select("role,is_active")
-                    .eq("user_id", sessionUser.id)
-                    .maybeSingle(),
-                "Profil kontrolu",
+                supabase.from("profiles").select("role,is_active").eq("user_id", sessionUser.id).maybeSingle(), "Profil kontrolu",
             );
-
-            if (byUserId.data?.role) {
-                profile = byUserId.data;
-                profileError = byUserId.error;
-            }
+            if (byUserId.error) throw byUserId.error;
+            profile = byUserId.data;
         }
-
-        if (!profile?.role && sessionUser.email) {
-            const byEmail = await withTimeout(
-                supabase
-                    .from("profiles")
-                    .select("role,is_active")
-                    .ilike("email", sessionUser.email)
-                    .maybeSingle(),
-                "Profil e-posta kontrolu",
-            );
-
-            if (byEmail.data?.role) {
-                profile = byEmail.data;
-                profileError = byEmail.error;
-            }
-        }
-
-        if (rpcProfileError && !profile?.role) {
-            profileError = rpcProfileError;
-        }
-
-        if (profileError || !profile) {
+        if (!profile) {
             hasLoadedOnce.current = false;
-            setStatus("unauthorized");
+            setStatus("needs_setup");
             return;
         }
 
@@ -258,15 +255,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (profileRole === "super_admin") {
             const demoCompanyId = localStorage.getItem("demo_company_id");
             if (demoCompanyId) {
-                const { data: demoCompany } = await withTimeout(
+                const { data: demoCompany, error: demoError } = await withTimeout(
                     supabase
                         .from("companies")
-                        .select("id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url")
+                        .select("*") // 026 oncesi/sonrasi kolon farklarina dayanikli (pilot_until)
                         .eq("id", demoCompanyId)
                         .maybeSingle(),
                     "Demo firma kontrolu",
                 );
 
+                if (demoError) throw demoError;
                 if (demoCompany?.id) {
                     setCompany(demoCompany as CompanyState);
                     setAppReadOnlyMode(localStorage.getItem("demo_read_only") !== "false");
@@ -283,23 +281,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-            const { data: member, error: memberError } = await retryOnError(() =>
+            const { data: memberRows, error: memberError } = await retryOnError(() =>
                 withTimeout(
                     supabase
                         .from("company_members")
-                        .select("company_id,role,is_active,companies(id,name,is_active,read_only,plan_status,subscription_plan,max_users,max_devices,enabled_modules,package_code,branch_limit,trial_end,trial_ends_at,is_pilot,onboarding_completed,onboarding_completed_at,subscription_status,license_expires_at,payment_reference,billing_note,phone,email,address,tax_office,tax_no,logo_url)")
-                        .eq("user_id", sessionUser.id)
-                        .order("created_at", { ascending: true })
-                        .limit(1)
-                        .maybeSingle(),
+                        .select("company_id,role,is_active,created_at,companies(*)")
+                        .eq("user_id", sessionUser.id),
                     "Firma uyeligi kontrolu",
                 ),
             );
+        if (memberError) throw memberError;
+        if (!Array.isArray(memberRows)) throw new Error("Membership response missing");
+        const member = pickPrimaryMembership(memberRows as any[] | null) as any;
+
+        // Sorgu BAŞARILI ve gerçekten hiç üyelik yok: hesap kurulumu ekranı.
+        // (Geçici ağ hatasında burası çalışmaz; aşağıdaki fail-closed dal korunur.)
+        if (!memberError && Array.isArray(memberRows) && memberRows.length === 0) {
+            setAppReadOnlyMode(false);
+            hasLoadedOnce.current = false;
+            setStatus("needs_setup");
+            return;
+        }
 
         if (memberError || !member?.company_id) {
             hasLoadedOnce.current = false;
-            setStatus("unauthorized");
-            return;
+            throw new Error("Access data incomplete");
         }
 
         if (member.is_active === false) {
@@ -314,8 +320,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (!activeCompany?.id) {
             hasLoadedOnce.current = false;
-            setStatus("unauthorized");
-            return;
+            throw new Error("Access data incomplete");
         }
 
         setCompany(activeCompany);
@@ -389,27 +394,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             hasLoadedOnce.current = true;
             setStatus("ready");
         } catch (error) {
-            console.error("Auth load failed:", error);
-            if (isFirstLoad) {
-                setUser(null);
-                setCompany(null);
-                setRole("unknown");
-                setMemberRole("unknown");
-                setLockReason(null);
-                setAppReadOnlyMode(false);
-                hasLoadedOnce.current = false;
-                setStatus("unauthenticated");
-            }
-            // Arka plan auth yenileme hatası (sekme değişimi vb.):
-            // Mevcut oturum durumunu koru, kullanıcıyı login'e yönlendirme.
+            console.error("Auth access check failed", error);
+            setCompany(null);
+            setRole("unknown");
+            setMemberRole("unknown");
+            setLockReason(null);
+            setAppReadOnlyMode(false);
+            hasLoadedOnce.current = false;
+            setAccessError(completingInvite ? friendlyInviteJoinError(error) : "Hesap ve firma bilgileriniz şu anda kontrol edilemiyor. Bağlantınızı kontrol edip tekrar deneyin.");
+            setStatus("access_error");
         }
-    };
+    }, []);
+
+    // Davet oncesindeki eski sorgu, kabul sonrasi yenilemenin ustune yazmasin.
+    const loadAuth = useCallback(() => {
+        const next = (loadQueue.current ?? Promise.resolve()).then(loadAuthNow);
+        loadQueue.current = next;
+        void next.finally(() => { if (loadQueue.current === next) loadQueue.current = null; });
+        return next;
+    }, [loadAuthNow]);
 
     useEffect(() => {
         let alive = true;
 
         async function run() {
-            if (alive) await loadAuth();
+            if (alive && !loadQueue.current) await loadAuth();
         }
 
         run();
@@ -437,27 +446,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             alive = false;
             data.subscription.unsubscribe();
         };
-    }, []);
-
-    useEffect(() => {
-        if (status !== "loading") return;
-
-        const timer = window.setTimeout(() => {
-            if (user) {
-                setStatus("ready");
-                return;
-            }
-            setUser(null);
-            setCompany(null);
-            setRole("unknown");
-            setMemberRole("unknown");
-            setLockReason(null);
-            setAppReadOnlyMode(false);
-            setStatus("unauthenticated");
-        }, 6500);
-
-        return () => window.clearTimeout(timer);
-    }, [status, user]);
+    }, [loadAuth]);
 
     const companyEnabledModules = company?.enabled_modules;
     const companyPackageCode = company?.package_code;
@@ -491,7 +480,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         lockReason,
         refreshAuth: loadAuth,
         isPasswordRecovery,
-    }), [company, enabledModules, lockReason, memberRole, role, status, user, isPasswordRecovery]);
+        accessError,
+    }), [company, enabledModules, lockReason, memberRole, role, status, user, isPasswordRecovery, accessError, loadAuth]);
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

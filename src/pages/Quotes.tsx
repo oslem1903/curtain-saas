@@ -1,3 +1,4 @@
+import { decorativeRail, railDescription } from "../utils/decorativeRail";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePersistedState } from "../hooks/usePersistedState";
@@ -86,6 +87,7 @@ function productLabel(t: string | null | undefined): string {
 // aşamasında zaten doğru hesaplanıp appointments.estimated_area_m2'ye yazılmış değer kullanılır.
 // Fallback yalnızca bu alan hiç yoksa (çok eski/elle eklenmiş kayıtlar) devreye girer.
 function areaM2Of(row: QuoteRow): number {
+  if (row.product_type === "dekoratif_ray") return decorativeRail(row.width_cm ?? 0).areaM2;
   if (row.estimated_area_m2 != null) return row.estimated_area_m2;
   return ((row.width_cm ?? 0) / 100) * ((row.height_cm ?? 0) / 100);
 }
@@ -93,7 +95,18 @@ function areaM2Of(row: QuoteRow): number {
 function calcEstimate(row: QuoteRow): number {
   const qty = Math.max(1, row.quantity ?? 1);
   const price = row.unit_price ?? 0;
-  return areaM2Of(row) * qty * price;
+  return quoteLineMetrics(row, qty, price, row.supplier_unit_cost ?? 0).lineTotal;
+}
+
+// Tekliften siparişe aktarımda gösterilen miktar ile maliyet/toplam aynı ray
+// hesabını kullanır; diğer ürünlerde areaM2Of mevcut ölçüm alanını korur.
+function quoteLineMetrics(row: QuoteRow, qty: number, unitPrice: number, supplierUnitCost: number) {
+  const areaM2 = areaM2Of(row);
+  return {
+    areaM2,
+    lineTotal: areaM2 * qty * unitPrice,
+    supplierLineTotal: areaM2 * qty * supplierUnitCost,
+  };
 }
 
 function fmtTL(n: number): string {
@@ -255,9 +268,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         // areaM2Of(): ölçü aşamasında hesaplanmış, ürün-türüne-göre-doğru alan (bkz. calcEstimate
         // üstündeki not) — width_cm*height_cm ile YENIDEN hesaplanmaz (tül/fon'un pile+dikiş payı
         // kuralını, stor/zebra'nın min-ölçü+yuvarlama kuralını sessizce kaybederdi).
-        const areaM2    = areaM2Of(row);
-        const lineTotal = areaM2 * qty * unitPrice;
-        const supplierLineTotal = areaM2 * qty * supplierUnitCost;
+        const { areaM2, lineTotal, supplierLineTotal } = quoteLineMetrics(row, qty, unitPrice, supplierUnitCost);
 
         totalLineTotal += lineTotal;
         totalSupplierLineTotal += supplierLineTotal;
@@ -295,6 +306,10 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
         const productOptions: Record<string, any> = {};
         if (row.rounded_width_cm != null) productOptions.rounded_width_cm = row.rounded_width_cm;
         if (row.rounded_height_cm != null) productOptions.rounded_height_cm = row.rounded_height_cm;
+        if (row.product_type === "dekoratif_ray") {
+          productOptions.rounded_width_cm = decorativeRail(row.width_cm ?? 0).roundedWidth;
+          productOptions.rounded_height_cm = 0;
+        }
         if (isTulFon) productOptions.pile = /Pile: S/.test(noteStr) ? "S" : /Pile: 3/.test(noteStr) ? "3" : "2";
         if (Object.keys(fieldInfo).length > 0) productOptions.field_info = fieldInfo;
 
@@ -302,7 +317,8 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           company_id: ctx.company_id,
           product_type: row.product_type || "stor",
           width_cm: row.width_cm ?? 100,
-          height_cm: row.height_cm ?? 200,
+          height_cm: row.product_type === "dekoratif_ray" ? 0 : row.height_cm ?? 200,
+          area_m2: areaM2,
           qty,
           unit_price: unitPrice,
           line_total: lineTotal,
@@ -676,7 +692,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
                       <span className="text-slate-500">{productLabel(row.product_type)}</span>
                     </div>
                     <div className="flex items-center gap-4 text-xs text-slate-500">
-                      <span>{row.width_cm}x{row.height_cm} cm • {Math.max(1, row.quantity ?? 1)} adet • Birim miktarı: {areaM2Of(row).toFixed(2)}</span>
+                      <span>{row.product_type === "dekoratif_ray" ? railDescription(row.width_cm ?? 0) : `${row.width_cm}x${row.height_cm} cm`} • {Math.max(1, row.quantity ?? 1)} adet • Birim miktarı: {areaM2Of(row).toFixed(2)}</span>
                       <span className="font-black text-slate-800 dark:text-slate-200">{fmtTL(calcEstimate(row))}</span>
                     </div>
                   </div>

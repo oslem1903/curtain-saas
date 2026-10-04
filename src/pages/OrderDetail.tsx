@@ -1,3 +1,4 @@
+import { decorativeRail, railDescription } from "../utils/decorativeRail";
 import { useMemo, useState, useEffect, useRef, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
@@ -283,7 +284,11 @@ function computeLineItem(params: {
     let line_total = effectiveArea * unit * qty;
 
     // Ürün tipine özgü kurallar (NewOrder ile birebir) ----------------------
-    if (["rustik", "dekoratif_ray", "katlamali_mekanizma"].includes(params.product_type || "")) {
+    if (params.product_type === "dekoratif_ray") {
+        const rail = decorativeRail(w, qty, unit);
+        effectiveArea = rail.areaM2;
+        line_total = rail.total;
+    } else if (["rustik", "katlamali_mekanizma"].includes(params.product_type || "")) {
         effectiveArea = Math.ceil(w / 25) * 25 / 100;
         line_total = effectiveArea * unit * qty;
     } else if (["ip_perde", "aksesuar"].includes(params.product_type || "")) {
@@ -966,13 +971,13 @@ export default function OrderDetail() {
 
     function buildItemPayload(photoUrl?: string | null) {
         const w = safeNumber(pWidth);
-        const h = safeNumber(pHeight);
+        const h = pType === "dekoratif_ray" ? 0 : safeNumber(pHeight);
         const q = Math.max(1, safeNumber(pQty, 1));
         const u = safeNumber(pPrice);
         const purchaseUnit = safeNumber(pPurchaseCost);
         const computed = computeLineItem({ width_cm: w, height_cm: h, qty: q, unit_price: u, supplier_unit_cost: purchaseUnit, min_area: pMinArea, rounding_rule: pRounding, waste_rate: pWaste, product_type: pType, pile: pPile, mechanism: pMechanism, control_type: pControlType });
 
-        if (w <= 0 || h <= 0) throw new Error("En ve boy 0'dan büyük olmalı.");
+        if (w <= 0 || (pType !== "dekoratif_ray" && h <= 0)) throw new Error(pType === "dekoratif_ray" ? "En 0'dan büyük olmalı." : "En ve boy 0'dan büyük olmalı.");
         if (u <= 0) throw new Error("Birim fiyat 0'dan büyük olmalı.");
 
         const cleanNote = pNote.trim();
@@ -993,6 +998,7 @@ export default function OrderDetail() {
             supplier_total_cost: computed.supplier_total_cost,
             profit: computed.profit,
             product_options: {
+                ...(pType === "dekoratif_ray" ? { rounded_width_cm: decorativeRail(w).roundedWidth, rounded_height_cm: 0 } : {}),
                 product_name: pModelName.trim() || "",
                 model_name: pModelName.trim() || "",
                 color_name: pColorName.trim() || "",
@@ -2086,8 +2092,8 @@ export default function OrderDetail() {
                                     <option value="diger">Diğer</option>
                                 </select>
                                 <input type="number" min={0} placeholder="En (cm) *" value={pWidth} onChange={e => setPWidth(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
-                                <input type="number" min={0} placeholder="Boy (cm) *" value={pHeight} onChange={e => setPHeight(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
-                                <input type="number" min={0} placeholder="Birim Fiyat (₺/m²) *" value={pPrice} onChange={e => setPPrice(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
+                                {pType !== "dekoratif_ray" && <input type="number" min={0} placeholder="Boy (cm) *" value={pHeight} onChange={e => setPHeight(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />}
+                                <input type="number" min={0} placeholder={pType === "dekoratif_ray" ? "Birim Fiyat (₺/mtül) *" : "Birim Fiyat (₺/m²) *"} value={pPrice} onChange={e => setPPrice(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                                 <input placeholder="Oda / Bölüm" value={pRoom} onChange={e => setPRoom(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
@@ -2097,7 +2103,7 @@ export default function OrderDetail() {
                                         <option key={s.id} value={s.id}>{s.name || "İsimsiz"}</option>
                                     ))}
                                 </select>
-                                <input type="number" min={0} placeholder="Alış maliyeti (₺/m²)" value={pPurchaseCost} onChange={e => setPPurchaseCost(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
+                                <input type="number" min={0} placeholder={pType === "dekoratif_ray" ? "Alış maliyeti (₺/mtül)" : "Alış maliyeti (₺/m²)"} value={pPurchaseCost} onChange={e => setPPurchaseCost(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                                 <input type="number" min={1} placeholder="Adet" value={pQty} onChange={e => setPQty(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
@@ -2227,8 +2233,8 @@ export default function OrderDetail() {
                                         const roundedHeight = (it.product_options as any)?.rounded_height_cm as number | undefined;
                                         const rowPhotos = itemPhotos[it.id] || [];
                                         const detailRows: Array<[string, string]> = [
-                                            ["Gerçek Ölçü", `${it.width_cm ?? "—"}×${it.height_cm ?? "—"} cm`],
-                                            ...(roundedWidth != null && roundedHeight != null ? [["Yuvarlanmış Üretim Ölçüsü", `${roundedWidth}×${roundedHeight} cm`] as [string, string]] : []),
+                                            ["Gerçek Ölçü", it.product_type === "dekoratif_ray" ? railDescription(it.width_cm ?? 0) : `${it.width_cm ?? "—"}×${it.height_cm ?? "—"} cm`],
+                                            ...(it.product_type !== "dekoratif_ray" && roundedWidth != null && roundedHeight != null ? [["Yuvarlanmış Üretim Ölçüsü", `${roundedWidth}×${roundedHeight} cm`] as [string, string]] : []),
                                             ["Adet", String(it.qty ?? 1)],
                                             ...(fieldInfo.color_name ? [["Renk / Kartela Kodu", fieldInfo.color_name] as [string, string]] : []),
                                             ...(fieldInfo.model_name ? [["Model", fieldInfo.model_name] as [string, string]] : []),
@@ -2257,7 +2263,7 @@ export default function OrderDetail() {
                                                 </div>
                                             </td>
                                             <td className="px-4 py-5 text-sm font-bold text-slate-600">{it.room || "—"}</td>
-                                            <td className="px-4 py-5 text-center font-mono text-xs">{it.width_cm}×{it.height_cm} <span className="text-slate-400">x{it.qty ?? 1}</span></td>
+                                            <td className="px-4 py-5 text-center font-mono text-xs">{it.product_type === "dekoratif_ray" ? railDescription(it.width_cm ?? 0) : `${it.width_cm}×${it.height_cm}`} <span className="text-slate-400">x{it.qty ?? 1}</span></td>
                                             <td className="px-4 py-5 text-sm font-bold text-slate-700 dark:text-slate-200">
                                                 {it.supplier_id ? (
                                                     <button

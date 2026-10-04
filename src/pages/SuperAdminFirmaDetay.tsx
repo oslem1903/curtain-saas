@@ -18,6 +18,9 @@ import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { supabase, setDemoTenantContext } from "../supabaseClient";
 import { cn } from "../utils/cn";
+import CompanyAccessManager from "../components/CompanyAccessManager";
+import { formatTrialDateTR } from "../utils/trialLicense";
+import { type CompanyAccessDetail, accessErrorMessage, copyText, getCompanyAccess } from "../utils/superAdminAccess";
 
 type Tab = "ozet" | "destek" | "cihazlar" | "hatalar" | "yedeklemeler" | "mudahale";
 
@@ -97,6 +100,20 @@ export default function SuperAdminFirmaDetay() {
     const [demoSessionActive, setDemoSessionActive] = useState(false);
     const [demoCountdown, setDemoCountdown] = useState(300); // 5 minutes
     const [performingAction, setPerformingAction] = useState<string | null>(null);
+    const [access, setAccess] = useState<CompanyAccessDetail | null>(null);
+    const [accessNote, setAccessNote] = useState("");
+    const [showAccessManager, setShowAccessManager] = useState(false);
+    const [idCopied, setIdCopied] = useState(false);
+
+    async function loadAccess(id: string) {
+        try {
+            setAccess(await getCompanyAccess(id));
+            setAccessNote("");
+        } catch (accessErr) {
+            setAccess(null);
+            setAccessNote(accessErrorMessage(accessErr, "Erişim bilgisi yüklenemedi."));
+        }
+    }
 
     useEffect(() => {
         if (!companyId) return;
@@ -137,6 +154,7 @@ export default function SuperAdminFirmaDetay() {
 
             if (compErr || !comp) throw new Error("Firma bulunamadı");
             setCompany(comp);
+            void loadAccess(companyId);
 
             // Load stats in parallel
             const [userCount, deviceCount, activeDevices, openTickets, lastError, lastLogin, lastBackup] =
@@ -363,6 +381,30 @@ export default function SuperAdminFirmaDetay() {
                             </div>
                             <div>
                                 <h1 className="text-2xl font-black text-slate-900 dark:text-white">{company.name}</h1>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                    <span className="font-mono break-all">ID: {company.id}</span>
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            const ok = await copyText(company.id);
+                                            setIdCopied(ok);
+                                            window.setTimeout(() => setIdCopied(false), 1500);
+                                        }}
+                                        className="rounded-lg border border-slate-200 px-2 py-0.5 font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                                    >
+                                        {idCopied ? "Kopyalandı" : "ID kopyala"}
+                                    </button>
+                                </div>
+                                {access ? (
+                                    <div className="mt-1 text-xs text-slate-500">
+                                        {access.admins.filter((a) => a.is_active).length > 1 ? "Yöneticiler: " : "Yönetici: "}
+                                        <span className="font-bold text-slate-700 dark:text-slate-200">
+                                            {access.admins.filter((a) => a.is_active).map((a) => a.email || a.full_name || a.user_id.slice(0, 8)).join(", ") || "Aktif yönetici yok"}
+                                        </span>
+                                    </div>
+                                ) : accessNote ? (
+                                    <div className="mt-1 text-xs font-semibold text-amber-700">{accessNote}</div>
+                                ) : null}
                                 <div className="flex items-center gap-2 mt-2">
                                     <span
                                         className={cn(
@@ -386,6 +428,14 @@ export default function SuperAdminFirmaDetay() {
 
                         {/* Action Buttons */}
                         <div className="flex flex-wrap gap-2 justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setShowAccessManager(true)}
+                                className="flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700"
+                            >
+                                <Clock size={16} />
+                                Süre / Özel Erişim
+                            </button>
                             <button
                                 onClick={handleDemoSession}
                                 disabled={performingAction === "demo" || demoSessionActive}
@@ -419,16 +469,21 @@ export default function SuperAdminFirmaDetay() {
                     </div>
 
                     {/* Trial Info */}
-                    {company.plan_status === "trial" && (company.trial_end || company.trial_ends_at) && (
+                    {/* trial_ends_at tek doğruluk kaynağıdır (trial_end donuk kolon; bkz. trialLicense.ts). */}
+                    {(company.plan_status === "trial" || company.plan_status === "expired") && company.trial_ends_at && (
                         <div className="mt-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3">
                             <p className="text-sm text-blue-700 dark:text-blue-300 font-medium">
-                                Deneme süresi:{" "}
-                                {format(new Date(company.trial_end || company.trial_ends_at!), "d MMMM yyyy", {
-                                    locale: tr,
-                                })}
+                                Deneme bitişi: {formatTrialDateTR(company.trial_ends_at, { withTime: true })}
+                                {access ? (access.writable ? " · Yazma açık" : " · Salt okunur") : ""}
                             </p>
                         </div>
                     )}
+                    {access?.special_access_active ? (
+                        <div className="mt-2 rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 p-3 text-sm font-medium text-violet-700 dark:text-violet-300">
+                            Özel erişim: {access.pilot_until ? `${formatTrialDateTR(access.pilot_until, { withTime: true })} tarihine kadar` : "süresiz"}
+                            {access.pilot_note ? ` — ${access.pilot_note}` : ""}
+                        </div>
+                    ) : null}
                 </div>
 
                 {/* Stats Grid */}
@@ -489,6 +544,14 @@ export default function SuperAdminFirmaDetay() {
                 </div>
 
                 {activeTab === "mudahale" && <AdminInterventionPanel companyId={company.id} />}
+                {showAccessManager ? (
+                    <CompanyAccessManager
+                        companyId={company.id}
+                        companyName={company.name}
+                        onClose={() => setShowAccessManager(false)}
+                        onChanged={loadCompanyDetails}
+                    />
+                ) : null}
                 {/* Tab Content */}
                 <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
                     {activeTab === "ozet" && (

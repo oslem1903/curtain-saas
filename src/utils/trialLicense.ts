@@ -33,10 +33,24 @@ const ISTANBUL_TZ = "Europe/Istanbul";
 
 export type TrialCompanyLike = {
   is_pilot?: boolean | null;
+  /** Migration 026: ozel erisim (pilot) bitisi. NULL = suresiz. Kolon yoksa (026 oncesi) undefined. */
+  pilot_until?: string | null;
   plan_status?: string | null;
   trial_ends_at?: string | null;
   license_expires_at?: string | null;
 };
+
+/**
+ * Ozel erisim (is_pilot) su an gecerli mi? Migration 026 ile is_pilot suresiz
+ * ya da pilot_until'e kadar gecerlidir. SQL tarafindaki kosulla ayni:
+ * is_pilot AND (pilot_until IS NULL OR pilot_until >= now()).
+ */
+export function isSpecialAccessActive(company: TrialCompanyLike | null | undefined, now: number = Date.now()): boolean {
+  if (!company?.is_pilot) return false;
+  if (!company.pilot_until) return true;
+  const until = new Date(company.pilot_until).getTime();
+  return Number.isFinite(until) && until >= now;
+}
 
 /**
  * Bir firmanin denemesi (gercekten, engelleyici anlamda) dolmus mu?
@@ -55,7 +69,7 @@ export type TrialCompanyLike = {
  */
 export function isTrialExpired(company: TrialCompanyLike | null | undefined): boolean {
   if (!company) return false;
-  if (company.is_pilot) return false;
+  if (isSpecialAccessActive(company)) return false;
 
   const status = String(company.plan_status ?? "").toLowerCase();
   if (status === "expired") return true;
@@ -98,7 +112,7 @@ export type TrialDisplayInfo = {
   trialEndsAt: Date | null;
   /** Europe/Istanbul takvim gunune gore kalan tam gun sayisi (negatif olabilir). null = trial_ends_at yok. */
   daysLeft: number | null;
-  /** Kesin ana gore (bkz. isTrialExpired) — is_pilot=true ise HER ZAMAN false. */
+  /** Kesin ana gore (bkz. isTrialExpired) — ozel erisim gecerliyse HER ZAMAN false. */
   isExpired: boolean;
 };
 
@@ -145,4 +159,22 @@ export function formatTrialDateTR(d: Date | string | null, opts: { withTime?: bo
     month: "long",
     year: "numeric",
   }).format(date);
+}
+
+/** Kullanici birden fazla firmaya uye ise (ornegin eski + yeni deneme hesabi)
+ * tum ekranlarin AYNI uyeligi secmesi icin TEK secici: once aktif uyelikler,
+ * sonra suresi dolmamis firmalar, sonra en yeni uyelik. */
+export function pickPrimaryMembership<
+  T extends { created_at?: string | null; is_active?: boolean | null; companies?: any },
+>(rows: T[] | null | undefined): T | null {
+  if (!rows || rows.length === 0) return null;
+  const companyOf = (r: T): TrialCompanyLike | null =>
+    (Array.isArray(r.companies) ? r.companies[0] : r.companies) ?? null;
+  const score = (r: T) =>
+    (r.is_active === false ? 0 : 2) + (isTrialExpired(companyOf(r)) ? 0 : 1);
+  return [...rows].sort((a, b) => {
+    const d = score(b) - score(a);
+    if (d !== 0) return d;
+    return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+  })[0];
 }

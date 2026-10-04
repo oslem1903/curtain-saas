@@ -1,3 +1,4 @@
+import { decorativeRail, railDescription } from "../utils/decorativeRail";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
@@ -39,7 +40,7 @@ type SupplierPriceRow = {
     product_category?: string | null; product_type?: string | null; unit_cost: number | null; unit_price?: number | null;
 };
 type Status = "new_order" | "draft" | "measured" | "quoted" | "approved" | "production" | "installation_ready" | "installation_waiting" | "installation_planned" | "installing" | "installation_completed" | "delivered_closed" | "completed" | "open" | "paid" | "partial";
-type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "dikey_tul" | "dikey_stor" | "diger";
+type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "dikey_tul" | "dikey_stor" | "dekoratif_ray" | "diger";
 type OrderItemUI = {
     key: string; product_id: string; product_name: string; model_name: string; color_name: string;
     supplier_id: string; supplier_cost: number; product_type: ProductType; room: string;
@@ -52,7 +53,11 @@ function uid() { return Math.random().toString(16).slice(2) + Date.now().toStrin
 function safeNumber(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function roundByRule(value: number, roundingRule: number) { const rule = Math.max(1, safeNumber(roundingRule, 1)); return Math.ceil(value / rule) * rule; }
 
-function calcAreaM2ByProduct(widthCm: number, heightCm: number, product: ProductRow | null) {
+function calcAreaM2ByProduct(widthCm: number, heightCm: number, product: ProductRow | null, productType?: string) {
+    if (productType === "dekoratif_ray") {
+        const { roundedWidth, areaM2: area } = decorativeRail(widthCm);
+        return { roundedWidth, roundedHeight: 0, area };
+    }
     const roundingRule = Math.max(1, safeNumber(product?.rounding_rule, 10));
     const minArea = Math.max(0, safeNumber(product?.min_area, 0));
     const roundedWidth = roundByRule(Math.max(1, widthCm), roundingRule);
@@ -74,6 +79,7 @@ function formatTL(n: number) {
 
 function productLabel(t: ProductType) {
     switch (t) {
+        case "dekoratif_ray": return "Dekoratif Ray";
         case "plicell": return "Plicell"; case "stor": return "Stor"; case "zebra": return "Zebra";
         case "tul": return "Tül"; case "fon": return "Fon"; case "jalousie": return "Jaluzi";
         case "dikey_tul": return "Dikey Tül"; case "dikey_stor": return "Dikey Stor"; case "picasso": return "Picasso";
@@ -81,7 +87,7 @@ function productLabel(t: ProductType) {
     }
 }
 
-function normalizeCategory(value: string | null | undefined) { return (value ?? "").trim().toLocaleLowerCase("tr-TR"); }
+function normalizeCategory(value: string | null | undefined) { const normalized = (value ?? "").trim().toLocaleLowerCase("tr-TR"); return normalized === "dekoratif ray" ? "dekoratif_ray" : normalized; }
 function normalizeText(value: string | null | undefined) { return (value ?? "").trim().toLocaleLowerCase("tr-TR"); }
 
 function findProductByType(products: ProductRow[], type: string) {
@@ -107,6 +113,7 @@ function parseSupplierName(value: string | null | undefined) {
 
 function normalizeProductType(value: string | null | undefined): ProductType {
     const normalized = String(value ?? "").trim().toLocaleLowerCase("tr-TR");
+    if (normalized === "dekoratif ray" || normalized === "dekoratif_ray") return "dekoratif_ray";
     if (normalized === "tül" || normalized === "tul") return "tul";
     if (normalized === "jaluzi" || normalized === "jalousie") return "jalousie";
     if (["stor", "zebra", "fon", "picasso", "plicell", "dikey_tul", "dikey_stor"].includes(normalized)) return normalized as ProductType;
@@ -733,15 +740,15 @@ export default function NewOrder() {
     const itemsComputed = useMemo(() => {
         return items.map((it) => {
             const width = Math.max(0, safeNumber(it.width_cm));
-            const height = Math.max(0, safeNumber(it.height_cm));
+            const height = it.product_type === "dekoratif_ray" ? 0 : Math.max(0, safeNumber(it.height_cm));
             const qty = Math.max(1, safeNumber(it.qty, 1));
             const unit = Math.max(0, safeNumber(it.unit_price));
             const supplierCost = Math.max(0, safeNumber(it.supplier_cost));
             const matchedProduct = findProductByType(products, it.product_type);
-            let { roundedWidth, roundedHeight, area } = calcAreaM2ByProduct(width, height, matchedProduct);
-            let line_total = calcLineTotalByProduct(area, qty, unit, matchedProduct);
+            let { roundedWidth, roundedHeight, area } = calcAreaM2ByProduct(width, height, matchedProduct, it.product_type);
+            let line_total = it.product_type === "dekoratif_ray" ? decorativeRail(width, qty, unit).total : calcLineTotalByProduct(area, qty, unit, matchedProduct);
             let fabric_width_cm: number | null = null;
-            let calculation_note = "";
+            let calculation_note = it.product_type === "dekoratif_ray" ? railDescription(width) : "";
             if (it.product_type === "tul" || it.product_type === "fon") {
                 // S pile, 1'e 3 perde ile ayni carpani kullanir.
                 const pm = it.pile === "2" ? 2 : 3;
@@ -828,8 +835,8 @@ export default function NewOrder() {
             notes: params.notes || `Siparis faturasi - ${params.customerName}`,
         };
         const invoiceItems = params.items.map((it) => ({
-            description: `${productLabel(it.product_type)} - ${it.width_cm}x${it.height_cm} cm`,
-            quantity: it.qty,
+            description: `${productLabel(it.product_type)} - ${it.product_type === "dekoratif_ray" ? railDescription(it.width_cm) + ` × ${it.qty} adet` : `${it.width_cm}x${it.height_cm} cm`}`,
+            quantity: it.product_type === "dekoratif_ray" ? decorativeRail(it.width_cm).areaM2 * it.qty : it.qty,
             unit_price: it.unit_price,
             tax_rate: taxRate,
             line_total: it.line_total,
@@ -886,7 +893,7 @@ export default function NewOrder() {
         }
         for (const it of itemsComputed) {
             if (!it.width_cm || it.width_cm <= 0) { setErr(`${it.product_name || it.product_type}: Genişlik 0'dan büyük olmalı`); return; }
-            if (!it.height_cm || it.height_cm <= 0) { setErr(`${it.product_name || it.product_type}: Yükseklik 0'dan büyük olmalı`); return; }
+            if (it.product_type !== "dekoratif_ray" && (!it.height_cm || it.height_cm <= 0)) { setErr(`${it.product_name || it.product_type}: Yükseklik 0'dan büyük olmalı`); return; }
             if (!it.qty || it.qty <= 0) { setErr(`${it.product_name || it.product_type}: Miktar 0'dan büyük olmalı`); return; }
         }
         // Odeme plani taslagini SIPARIS OLUSTURULMADAN ONCE dogrula — kotu
@@ -922,7 +929,7 @@ export default function NewOrder() {
             const orderId = orderRow.id;
             void logAction("order_created", "order", orderId, { source: "new_order" });
 
-            const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
+            const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, area_m2: it.area, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { rounded_width_cm: it.roundedWidth, rounded_height_cm: it.roundedHeight, product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
             // Tek tek insert edilir: order_items.select() batch-insert'te DB'nin dönüş sırasını
             // input sırasıyla aynı garanti etmiyor — saha bilgisi fotoğrafını doğru order_item'a
             // bağlamak için insertedItems'ın itemsPayload ile aynı, uygulama tarafından garanti
@@ -1371,11 +1378,11 @@ export default function NewOrder() {
                                         <div className="sm:col-span-2">
                                             <select value={item.product_type} onChange={(e) => applyProductTypeToItem(item.key, e.target.value as ProductType)} className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none">
                                                 <option value="stor">Stor</option><option value="zebra">Zebra</option><option value="tul">Tül</option>
-                                                <option value="fon">Fon</option><option value="plicell">Plicell</option><option value="jalousie">Jaluzi</option><option value="picasso">Picasso</option>
+                                                <option value="dekoratif_ray">Dekoratif Ray</option><option value="fon">Fon</option><option value="plicell">Plicell</option><option value="jalousie">Jaluzi</option><option value="picasso">Picasso</option>
                                             </select>
                                         </div>
                                         <div className="sm:col-span-2"><input type="number" value={item.width_cm} onChange={(e) => updateItem(item.key, { width_cm: safeNumber(e.target.value) })} className="w-full px-2 py-2.5 rounded-lg border border-slate-200 text-center font-bold" placeholder="En" /></div>
-                                        <div className="sm:col-span-2"><input type="number" value={item.height_cm} onChange={(e) => updateItem(item.key, { height_cm: safeNumber(e.target.value) })} className="w-full px-2 py-2.5 rounded-lg border border-slate-200 text-center font-bold" placeholder="Boy" /></div>
+                                        <div className="sm:col-span-2">{item.product_type === "dekoratif_ray" ? <span className="text-xs text-slate-500">Boy kullanılmaz</span> : <input type="number" value={item.height_cm} onChange={(e) => updateItem(item.key, { height_cm: safeNumber(e.target.value) })} className="w-full px-2 py-2.5 rounded-lg border border-slate-200 text-center font-bold" placeholder="Boy" />}</div>
                                         <div className="sm:col-span-1"><input type="number" value={item.qty} onChange={(e) => updateItem(item.key, { qty: safeNumber(e.target.value, 1) })} className="w-full px-1 py-2.5 rounded-lg border border-slate-200 text-center" placeholder="Adet" /></div>
                                         <div className="sm:col-span-1 relative"><input type="number" value={item.unit_price} onChange={(e) => updateItem(item.key, { unit_price: safeNumber(e.target.value) })} className="w-full pl-2 pr-5 py-2.5 rounded-lg border border-slate-200 text-right font-black" /><span className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400">₺</span></div>
                                         <div className="sm:col-span-1 flex items-center justify-center"><button onClick={() => removeItem(item.key)} className="p-2 text-slate-300 hover:text-red-500"><Trash2 size={18} /></button></div>
@@ -1409,7 +1416,7 @@ export default function NewOrder() {
                                         )}
                                     </div>
                                     <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
-                                        <span className="text-slate-500">{itemsComputed[idx].fabric_width_cm ? `${itemsComputed[idx].fabric_width_cm} cm kumaş` : `${itemsComputed[idx].area.toFixed(2)} m²`}</span>
+                                        <span className="text-slate-500">{itemsComputed[idx].fabric_width_cm ? `${itemsComputed[idx].fabric_width_cm} cm kumaş` : item.product_type === "dekoratif_ray" ? railDescription(item.width_cm) : `${itemsComputed[idx].area.toFixed(2)} m²`}</span>
                                         <span className="font-bold">{formatTL(itemsComputed[idx].line_total)}</span>
                                     </div>
                                     {itemsComputed[idx].calculation_note ? <div className="text-[11px] text-slate-500">{itemsComputed[idx].calculation_note}</div> : null}

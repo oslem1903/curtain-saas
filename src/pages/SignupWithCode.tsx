@@ -1,8 +1,12 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { CheckCircle2, Loader2, Lock, Mail, ShieldCheck, User, XCircle } from "lucide-react";
 
 import { supabase } from "../supabaseClient";
+import { useAuth } from "../context/AuthContext";
+import { getAuthRedirectUrl } from "../utils/authRedirect";
+import { inviteSignupMetadata, friendlyInviteJoinError } from "../utils/inviteJoin";
+import { scrollFieldIntoView } from "../components/AuthShell";
 
 type InviteRole = "admin" | "accountant" | "installer" | "measurement";
 
@@ -71,7 +75,7 @@ function roleLabel(role?: string | null) {
 }
 
 function normalizeMessage(message?: string | null) {
-    return (message || "").toLocaleLowerCase("tr-TR");
+    return (message || "").toLowerCase();
 }
 
 function getErrorInfo(error: unknown): Omit<JoinDebug, "step" | "label"> {
@@ -94,103 +98,29 @@ function getErrorInfo(error: unknown): Omit<JoinDebug, "step" | "label"> {
     };
 }
 
-function isAlreadyRegistered(error: unknown) {
-    const lower = normalizeMessage(getErrorInfo(error).message);
-    return (
-        lower.includes("already registered") ||
-        lower.includes("already been registered") ||
-        lower.includes("user already registered")
-    );
-}
-
 function shouldTrySignupAfterSignIn(error: unknown) {
-    const lower = normalizeMessage(getErrorInfo(error).message);
-    return lower.includes("invalid login credentials") || lower.includes("user not found");
+    return /invalid login credentials|user not found/.test(normalizeMessage(getErrorInfo(error).message));
 }
-
 function createJoinError(step: JoinStep, error: unknown): JoinFlowError {
-    const info = getErrorInfo(error);
-    const nextError = new Error(info.message) as JoinFlowError;
-    nextError.joinStep = step;
-    nextError.originalMessage = info.message;
-    nextError.code = info.code;
-    nextError.status = info.status;
-    nextError.details = info.details;
-    nextError.hint = info.hint;
-    return nextError;
+    return Object.assign(new Error(getErrorInfo(error).message), getErrorInfo(error), { joinStep: step });
+}
+function friendlyInviteError(message: string) { return friendlyInviteJoinError({ message }); }
+
+function friendlySignupError(message: string) {
+    return friendlyInviteJoinError({ message });
 }
 
-function friendlyInviteError(message: string) {
-    const lower = normalizeMessage(message);
-    if (lower.includes("get_invite_by_token") || lower.includes("schema cache")) {
-        return "Davet sistemi veritabanında eksik. Güncel SQL fix dosyasını Supabase SQL Editor'da çalıştırın.";
-    }
-    if (lower.includes("bulunamadi") || lower.includes("bulunamad?") || lower.includes("gecersiz") || lower.includes("geçersiz")) {
-        return "Davet bağlantısı geçersiz. Lütfen yöneticinizden yeni davet isteyin.";
-    }
-    if (lower.includes("kullanilmis") || lower.includes("kullanılmış")) {
-        return "Bu davet bağlantısı daha önce kullanılmış. Lütfen yöneticinizden yeni davet isteyin.";
-    }
-    if (lower.includes("suresi dol") || lower.includes("süresi dol")) {
-        return "Bu davetin süresi dolmuş. Lütfen yöneticinizden yeni davet isteyin.";
-    }
-    if (lower.includes("kullanıcı limit") || lower.includes("kullanici limit")) {
-        return "Bu firmanın kullanıcı limiti dolu. Yeni kişi eklenebilmesi için firma yöneticisinin lisansı yükseltmesi veya kullanılmayan bir kullanıcıyı pasif yapması gerekir.";
-    }
-    return message || "Davet doğrulanamadı.";
-}
-
-function friendlySignupError(message: string, step?: JoinStep) {
-    const lower = normalizeMessage(message);
-
-    if (step === "auth_sign_up" && lower.includes("database error finding user")) {
-        return "Supabase Auth kayıt aşamasında hata verdi: Database error finding user. Bu hata profiles/company_members/user_invites adımına geçmeden önce oluşuyor; auth.users trigger/policy fix SQL dosyasını çalıştırın.";
-    }
-    if (step === "auth_sign_in" && lower.includes("email not confirmed")) {
-        return "Bu e-posta için hesap var ancak e-posta doğrulaması bekliyor. E-postadaki doğrulamayı tamamlayıp aynı davet bağlantısından tekrar giriş yapın.";
-    }
-    if (step === "auth_sign_in" && lower.includes("database error querying schema")) {
-        return "Supabase Auth giriş aşamasında veritabanı şema hatası verdi. Bu frontend değil; auth.users trigger/hook/function fix SQL dosyasını çalıştırın.";
-    }
-    if (step === "auth_sign_in" && lower.includes("invalid login credentials")) {
-        return "Bu e-posta için daha önce hesap oluşturulmuş ve girilen şifre mevcut hesapla eşleşmedi. Şifremi unuttum ile şifrenizi sıfırlayın, sonra aynı e-posta ve davet koduyla tekrar deneyin.";
-    }
-    if (step === "auth_sign_in" && lower.includes("şifre sıfırlama maili")) {
-        return message;
-    }
-    if (isAlreadyRegistered({ message })) {
-        return "Bu e-posta zaten kayıtlı. Daveti kabul etmek için mevcut şifrenizle devam edin.";
-    }
-    if (lower.includes("password")) return "Şifre en az 6 karakter olmalı.";
-    if (lower.includes("email")) return "Lütfen geçerli bir e-posta adresi girin.";
-    if (lower.includes("accept_invite_for_current_user") || lower.includes("schema cache")) {
-        return "Davet kabul fonksiyonu veritabanında kurulu değil. Güncel SQL fix dosyasını çalıştırın.";
-    }
-    if (lower.includes("company_id") && lower.includes("ambiguous")) {
-        return "Davet kabul fonksiyonunda veritabanı isim çakışması var. Supabase SQL Editor'da supabase_invite_accept_company_id_ambiguity_hotfix.sql dosyasını çalıştırın.";
-    }
-    if (lower.includes("42702")) {
-        return "Davet kabul fonksiyonunda veritabanı isim çakışması var. Supabase SQL Editor'da supabase_invite_accept_company_id_ambiguity_hotfix.sql dosyasını çalıştırın.";
-    }
-    if (lower.includes("farkli") || lower.includes("farklı")) {
-        return "Bu davet farklı bir e-posta adresi için oluşturulmuş.";
-    }
-    if (lower.includes("kullanıcı limit") || lower.includes("kullanici limit")) {
-        return "Bu firmanın kullanıcı limiti dolu. Yeni kişi eklenebilmesi için firma yöneticisinin lisansı yükseltmesi veya kullanılmayan bir kullanıcıyı pasif yapması gerekir.";
-    }
-    if (lower.includes("firma lisansı") || lower.includes("firma lisansi")) {
-        return "Firma lisansı aktif değil veya sadece okuma modunda. Yeni kullanıcı eklemek için firmayı aktif hale getirin.";
-    }
-    return message || "Kayıt tamamlanamadı.";
-}
-
-function passwordResetRedirectUrl() {
-    return `${window.location.origin}${window.location.pathname}#/reset-password`;
+function signupRedirect() {
+    return getAuthRedirectUrl("/auth/callback");
 }
 
 export default function SignupWithCode() {
     const { token } = useParams<{ token: string }>();
     const nav = useNavigate();
+    const { refreshAuth } = useAuth();
+    // Zaten oturum açmış (ör. "Hesap kurulumu" ekranından gelen) kullanıcı:
+    // e-posta oturumdan alınır, şifre tekrar istenmez.
+    const [sessionEmail, setSessionEmail] = useState<string | null>(null);
 
     const [invite, setInvite] = useState<InviteInfo | null>(null);
     const [email, setEmail] = useState("");
@@ -201,16 +131,16 @@ export default function SignupWithCode() {
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
     const [success, setSuccess] = useState(false);
-    const [joinDebug, setJoinDebug] = useState<JoinDebug | null>(null);
-    const [joinTrace, setJoinTrace] = useState<string[]>([]);
+    const [verificationRequired, setVerificationRequired] = useState(false);
+    const [, setJoinDebug] = useState<JoinDebug | null>(null);
+    const [, setJoinTrace] = useState<string[]>([]);
 
     const tokenValue = token?.trim() || "";
     const isCodeMode = !tokenValue;
 
     const inviteState = useMemo(() => {
         if (!invite) return { usable: isCodeMode, message: "" };
-        if (invite.used_at) return { usable: false, message: "Bu davet bağlantısı daha önce kullanılmış." };
-        if (new Date(invite.expires_at).getTime() < Date.now()) {
+        if (!invite.used_at && new Date(invite.expires_at).getTime() < Date.now()) {
             return { usable: false, message: "Bu davetin süresi dolmuş." };
         }
         if (!["admin", "accountant", "installer", "measurement"].includes(invite.role)) {
@@ -259,6 +189,19 @@ export default function SignupWithCode() {
 
     useEffect(() => {
         let alive = true;
+        supabase.auth.getSession().then(({ data }) => {
+            const current = data.session?.user?.email?.trim().toLowerCase() || null;
+            if (!alive || !current) return;
+            setSessionEmail(current);
+            setEmail((previous) => previous || current);
+        });
+        return () => {
+            alive = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        let alive = true;
 
         async function loadInvite() {
             setLoadingInvite(true);
@@ -268,9 +211,6 @@ export default function SignupWithCode() {
             setJoinTrace([]);
 
             if (!tokenValue) {
-                setLoadingInvite(false);
-                return;
-                setErr("Davet bağlantısı eksik. Kayıt yalnızca davet bağlantısı ile yapılabilir.");
                 setLoadingInvite(false);
                 return;
             }
@@ -317,7 +257,7 @@ export default function SignupWithCode() {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw failJoinStep("auth_verify_session", error);
 
-        const sessionEmail = data.user?.email?.trim().toLocaleLowerCase("tr-TR");
+        const sessionEmail = data.user?.email?.trim().toLowerCase();
         if (!data.user || sessionEmail !== cleanEmail) {
             throw failJoinStep(
                 "auth_verify_session",
@@ -353,7 +293,7 @@ export default function SignupWithCode() {
         recordJoinStep("rpc_accept_invite", "başladı");
         const { error } = isCodeMode
             ? await supabase.rpc("accept_invite_code_for_current_user", {
-                p_email: email.trim().toLocaleLowerCase("tr-TR"),
+                p_email: email.trim().toLowerCase(),
                 p_code: inviteCode.trim().toUpperCase(),
                 p_full_name: fullName.trim() || null,
             })
@@ -365,176 +305,42 @@ export default function SignupWithCode() {
         recordJoinStep("rpc_accept_invite", "tamam");
     }
 
-    async function sendPasswordResetForExistingUser(cleanEmail: string) {
-        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-            redirectTo: passwordResetRedirectUrl(),
-        });
-
-        if (error) {
-            const info = getErrorInfo(error);
-            recordJoinStep("auth_sign_in", "uyarı", {
-                ...info,
-                reset_message: "Şifre sıfırlama maili gönderilemedi.",
-            });
-            return false;
+    async function authenticateInviteUser(cleanEmail: string, continuing = false) {
+        const { data: current, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw failJoinStep("auth_existing_session", sessionError);
+        const activeEmail = current.session?.user.email?.trim().toLowerCase();
+        if (activeEmail === cleanEmail) return "SUCCESS";
+        if (activeEmail) {
+            const { error } = await supabase.auth.signOut({ scope: "local" });
+            if (error) throw failJoinStep("auth_existing_session", error);
         }
 
-        recordJoinStep("auth_sign_in", "uyarı", {
-            message: "Mevcut kullanıcı için şifre sıfırlama maili gönderildi.",
-            email: cleanEmail,
-        });
-        return true;
-    }
-
-    async function authenticateInviteUser(cleanEmail: string, activeInvite: InviteInfo) {
-        recordJoinStep("auth_existing_session", "başladı");
-        const currentUserResult = await supabase.auth.getUser();
-        if (currentUserResult.error) {
-            recordJoinStep("auth_existing_session", "uyarı", getErrorInfo(currentUserResult.error));
+        // Once giris: onaylanmis eski hesapta signUp sahte kullanici dondurebilir.
+        const signedIn = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+        if (!signedIn.error) return "SUCCESS";
+        if (signedIn.error.code === "email_not_confirmed" || signedIn.error.message.toLowerCase().includes("email not confirmed")) {
+            return "VERIFICATION_REQUIRED";
         }
+        if (continuing || !shouldTrySignupAfterSignIn(signedIn.error)) throw failJoinStep("auth_sign_in", signedIn.error);
 
-        const activeEmail = currentUserResult.data.user?.email?.trim().toLocaleLowerCase("tr-TR");
-        if (activeEmail === cleanEmail) {
-            recordJoinStep("auth_existing_session", "tamam", { email: activeEmail });
-            return;
-        }
-
-        recordJoinStep("auth_existing_session", "tamam", {
-            active_email: activeEmail || null,
-            invite_email: cleanEmail,
-        });
-
-        if (activeEmail && activeEmail !== cleanEmail) {
-            await supabase.auth.signOut();
-            recordJoinStep("auth_existing_session", "uyarı", {
-                message: "Farklı kullanıcı oturumu kapatıldı.",
-                active_email: activeEmail,
-            });
-        }
-
-        if (isCodeMode) {
-            recordJoinStep("auth_sign_up", "başladı", { email: cleanEmail, role: activeInvite.role });
-            const codeSignUpResult = await supabase.auth.signUp({
-                email: cleanEmail,
-                password,
-                options: {
-                    data: {
-                        full_name: fullName.trim() || cleanEmail.split("@")[0],
-                        role: activeInvite.role || "installer",
-                    },
-                },
-            });
-
-            if (!codeSignUpResult.error) {
-                if (!codeSignUpResult.data.user) {
-                    throw failJoinStep("auth_sign_up", new Error("Supabase kullanıcı kaydı oluşturamadı."));
-                }
-
-                recordJoinStep("auth_sign_up", "tamam", {
-                    user_id: codeSignUpResult.data.user.id,
-                    session_created: Boolean(codeSignUpResult.data.session),
-                });
-
-                if (!codeSignUpResult.data.session) {
-                    throw failJoinStep(
-                        "auth_sign_up",
-                        new Error(
-                            "Hesap oluşturuldu ancak Supabase e-posta doğrulaması istedi. Supabase Auth ayarlarında e-posta onayı kapalı olmalı ya da kullanıcı e-postasını onayladıktan sonra mevcut şifresiyle devam etmelidir.",
-                        ),
-                    );
-                }
-
-                return;
-            }
-
-            recordJoinStep("auth_sign_up", "uyarı", getErrorInfo(codeSignUpResult.error));
-
-            if (!isAlreadyRegistered(codeSignUpResult.error)) {
-                throw failJoinStep("auth_sign_up", codeSignUpResult.error);
-            }
-
-            recordJoinStep("auth_sign_in", "başladı", { email: cleanEmail });
-            const existingSignInResult = await supabase.auth.signInWithPassword({
-                email: cleanEmail,
-                password,
-            });
-
-            if (existingSignInResult.error) {
-                const resetSent = await sendPasswordResetForExistingUser(cleanEmail);
-                throw failJoinStep(
-                    "auth_sign_in",
-                    new Error(
-                        resetSent
-                            ? "Bu e-posta daha önce kayıt olmuş. Girilen şifre mevcut hesapla eşleşmedi; şifre sıfırlama maili gönderildi. Şifrenizi sıfırladıktan sonra aynı e-posta ve davet koduyla tekrar deneyin."
-                            : "Bu e-posta daha önce kayıt olmuş. Girilen şifre mevcut hesapla eşleşmedi; giriş ekranındaki Şifremi unuttum akışı ile şifrenizi sıfırlayın, sonra aynı e-posta ve davet koduyla tekrar deneyin.",
-                    ),
-                );
-            }
-
-            recordJoinStep("auth_sign_in", "tamam", { user_id: existingSignInResult.data.user?.id });
-            return;
-        }
-
-        recordJoinStep("auth_sign_in", "başladı", { email: cleanEmail });
-        const signInResult = await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password,
-        });
-
-        if (!signInResult.error) {
-            recordJoinStep("auth_sign_in", "tamam", { user_id: signInResult.data.user?.id });
-            return;
-        }
-
-        recordJoinStep("auth_sign_in", "uyarı", getErrorInfo(signInResult.error));
-
-        if (!shouldTrySignupAfterSignIn(signInResult.error)) {
-            throw failJoinStep("auth_sign_in", signInResult.error);
-        }
-
-        recordJoinStep("auth_sign_up", "başladı", { email: cleanEmail, role: invite?.role });
-        const signUpResult = await supabase.auth.signUp({
-            email: cleanEmail,
-            password,
+        const redirectTo = signupRedirect();
+        const signedUp = await supabase.auth.signUp({
+            email: cleanEmail, password,
             options: {
-                data: {
-                    full_name: fullName.trim() || cleanEmail.split("@")[0],
-                    role: activeInvite.role || "installer",
-                },
+                ...(redirectTo ? { emailRedirectTo: redirectTo } : {}),
+                data: inviteSignupMetadata(tokenValue, inviteCode, fullName.trim() || cleanEmail.split("@")[0]),
             },
         });
-
-        if (signUpResult.error) {
-            if (isAlreadyRegistered(signUpResult.error)) {
-                throw failJoinStep(
-                    "auth_sign_up",
-                    new Error("Bu e-posta zaten kayıtlı. Mevcut şifrenizle giriş yaparak daveti kabul edin."),
-                );
-            }
-            throw failJoinStep("auth_sign_up", signUpResult.error);
+        if (signedUp.error) throw failJoinStep("auth_sign_up", signedUp.error);
+        if (!signedUp.data.user) throw failJoinStep("auth_sign_up", new Error("Kayıt tamamlanamadı."));
+        if (signedUp.data.user.identities?.length === 0) {
+            throw failJoinStep("auth_sign_in", new Error("invalid login credentials"));
         }
-
-        if (!signUpResult.data.user) {
-            throw failJoinStep("auth_sign_up", new Error("Supabase kullanıcı kaydı oluşturamadı."));
-        }
-
-        recordJoinStep("auth_sign_up", "tamam", {
-            user_id: signUpResult.data.user.id,
-            session_created: Boolean(signUpResult.data.session),
-        });
-
-        if (!signUpResult.data.session) {
-            throw failJoinStep(
-                "auth_sign_up",
-                new Error(
-                    "Hesap oluşturuldu ancak Supabase e-posta doğrulaması istedi. E-postayı doğruladıktan sonra aynı davet bağlantısından mevcut şifrenizle devam edin.",
-                ),
-            );
-        }
+        return signedUp.data.session ? "SUCCESS" : "VERIFICATION_REQUIRED";
     }
 
-    async function handleJoin(e: React.FormEvent) {
-        e.preventDefault();
+    async function handleJoin(e?: React.FormEvent) {
+        e?.preventDefault();
         if (loading) return;
 
         setErr("");
@@ -546,15 +352,16 @@ export default function SignupWithCode() {
             return;
         }
 
-        const cleanEmail = email.trim().toLocaleLowerCase("tr-TR");
+        const cleanEmail = email.trim().toLowerCase();
         if (!cleanEmail) return setErr("E-posta zorunlu.");
         if (isCodeMode && !inviteCode.trim()) return setErr("Davet kodu zorunlu.");
-        if (!isCodeMode && invite && cleanEmail !== invite.email.trim().toLocaleLowerCase("tr-TR")) {
+        if (!isCodeMode && invite && cleanEmail !== invite.email.trim().toLowerCase()) {
             setErr("Bu davet farklı bir e-posta adresi için oluşturulmuş. Lütfen davetteki e-posta ile devam edin.");
             return;
         }
 
-        if (password.length < 6) {
+        const usingCurrentSession = Boolean(sessionEmail && sessionEmail === cleanEmail);
+        if (!usingCurrentSession && password.length < 6) {
             setErr("Şifre en az 6 karakter olmalı.");
             return;
         }
@@ -564,21 +371,28 @@ export default function SignupWithCode() {
         try {
             const activeInvite = isCodeMode ? await lookupInviteByCode(cleanEmail) : invite;
             if (!activeInvite) throw failJoinStep("invite_lookup", new Error("Davet doğrulanamadı."));
-            if (activeInvite.used_at) throw failJoinStep("invite_lookup", new Error("Bu davet daha önce kullanılmış."));
-            if (new Date(activeInvite.expires_at).getTime() < Date.now()) throw failJoinStep("invite_lookup", new Error("Bu davetin süresi dolmuş."));
-            if (cleanEmail !== activeInvite.email.trim().toLocaleLowerCase("tr-TR")) {
+            if (!activeInvite.used_at && new Date(activeInvite.expires_at).getTime() < Date.now()) throw failJoinStep("invite_lookup", new Error("Bu davetin süresi dolmuş."));
+            if (cleanEmail !== activeInvite.email.trim().toLowerCase()) {
                 throw failJoinStep("invite_lookup", new Error("Bu davet farklı bir e-posta adresi için oluşturulmuş."));
             }
-            await authenticateInviteUser(cleanEmail, activeInvite);
+            const authStatus = await authenticateInviteUser(cleanEmail, verificationRequired);
+            if (authStatus === "VERIFICATION_REQUIRED") {
+                setErr(verificationRequired ? "Doğrulama henüz tamamlanmamış. E-postanızdaki bağlantıya tıklayıp yeniden deneyin." : "");
+                setVerificationRequired(true);
+                return;
+            }
+
             await verifySessionEmail(cleanEmail);
             await acceptInviteForCurrentUser();
+            // Oturum zaten açıksa auth olayı tetiklenmez: firma bilgisini yenile.
+            await refreshAuth();
 
+            setVerificationRequired(false);
             setSuccess(true);
-            window.setTimeout(() => nav("/app/dashboard", { replace: true }), 1500);
+            window.setTimeout(() => nav("/", { replace: true }), 1500);
         } catch (e: unknown) {
             const joinError = e as JoinFlowError;
-            const step = joinError.joinStep;
-            setErr(friendlySignupError(joinError.originalMessage || joinError.message, step));
+            setErr(friendlySignupError(joinError.originalMessage || joinError.message));
         } finally {
             setLoading(false);
         }
@@ -590,6 +404,31 @@ export default function SignupWithCode() {
                 <div className="flex items-center gap-3 text-slate-500 dark:text-slate-300 font-semibold">
                     <Loader2 className="w-5 h-5 animate-spin" />
                     Davet kontrol ediliyor...
+                </div>
+            </div>
+        );
+    }
+
+    if (verificationRequired) {
+        return (
+            <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center">
+                <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl p-10 shadow-xl border border-blue-100 dark:border-slate-800">
+                    <Mail className="w-16 h-16 text-blue-500 mx-auto mb-5" />
+                    <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-3">E-postanızı doğrulayın</h2>
+                    <p className="text-slate-500 dark:text-slate-400 leading-relaxed font-medium mb-6">
+                        Güvenliğiniz için e-posta adresinize bir doğrulama bağlantısı gönderdik. Lütfen gelen kutunuzu (veya spam klasörünüzü) kontrol edin.
+                    </p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                        Bağlantıyı açtığınızda firma üyeliğiniz tamamlanır. Başka cihazda doğruladıysanız bu ekrana dönüp devam edebilirsiniz.
+                    </p>
+                    {err ? <p role="alert" className="mb-4 text-sm text-red-600">{err}</p> : null}
+                    <button
+                        disabled={loading}
+                        onClick={() => void handleJoin()}
+                        className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors"
+                    >
+                        {loading ? "Kontrol ediliyor..." : "Doğruladım, devam et"}
+                    </button>
                 </div>
             </div>
         );
@@ -610,15 +449,18 @@ export default function SignupWithCode() {
     }
 
     return (
-        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
+        <div
+            className="min-h-[100dvh] overflow-y-auto bg-slate-50 dark:bg-slate-950 flex justify-center items-start sm:items-center px-4"
+            style={{ paddingTop: "max(1.25rem, env(safe-area-inset-top))", paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+        >
             <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl overflow-hidden">
                 <div className="bg-slate-900 p-8 text-white">
                     <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center mb-4">
                         <ShieldCheck className="w-7 h-7" />
                     </div>
-                    <h1 className="text-2xl font-black">Kodla Katıl</h1>
+                    <h1 className="text-2xl font-black">Davet kodum var</h1>
                     <p className="opacity-75 mt-2 text-sm">
-                        E-posta adresiniz ve davet kodunuzla kendi Şifrenizi belirleyin.
+                        Size davet kodu verilen işletmeye katılın. Bu yol yeni işletme veya yeni deneme oluşturmaz; işletmenin mevcut hakları geçerlidir.
                     </p>
                 </div>
 
@@ -630,38 +472,7 @@ export default function SignupWithCode() {
                                 <span>{err}</span>
                             </div>
 
-                            {joinDebug ? (
-                                <div className="rounded-2xl border border-red-100 bg-red-50/60 p-4 text-xs text-red-800 space-y-1">
-                                    <div>
-                                        <span className="font-black">Teknik aşama:</span> {joinDebug.label}
-                                    </div>
-                                    <div>
-                                        <span className="font-black">Orijinal hata:</span> {joinDebug.message}
-                                    </div>
-                                    {joinDebug.code || joinDebug.status ? (
-                                        <div>
-                                            <span className="font-black">Kod:</span> {joinDebug.code || "-"}{" "}
-                                            <span className="font-black">Durum:</span> {joinDebug.status || "-"}
-                                        </div>
-                                    ) : null}
-                                    {joinDebug.details ? <div>Detay: {joinDebug.details}</div> : null}
-                                    {joinDebug.hint ? <div>İpucu: {joinDebug.hint}</div> : null}
-                                </div>
-                            ) : null}
                         </div>
-                    ) : null}
-
-                    {joinTrace.length ? (
-                        <details className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-3 text-xs text-slate-500 dark:text-slate-300">
-                            <summary className="cursor-pointer font-bold text-slate-700 dark:text-slate-100">
-                                Join işlem adımları
-                            </summary>
-                            <div className="mt-2 space-y-1">
-                                {joinTrace.map((line) => (
-                                    <div key={line}>{line}</div>
-                                ))}
-                            </div>
-                        </details>
                     ) : null}
 
                     {invite ? (
@@ -688,6 +499,7 @@ export default function SignupWithCode() {
                                     placeholder="Ad soyad"
                                     value={fullName}
                                     onChange={(event) => setFullName(event.target.value)}
+                                    onFocus={scrollFieldIntoView}
                                     disabled={loading || !inviteState.usable}
                                 />
                             </div>
@@ -703,6 +515,7 @@ export default function SignupWithCode() {
                                         placeholder="ABC-123"
                                         value={inviteCode}
                                         onChange={(event) => setInviteCode(event.target.value.toUpperCase())}
+                                        onFocus={scrollFieldIntoView}
                                         disabled={loading}
                                         required
                                     />
@@ -719,28 +532,37 @@ export default function SignupWithCode() {
                                     className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-primary-500"
                                     value={email}
                                     onChange={(event) => setEmail(event.target.value)}
+                                    onFocus={scrollFieldIntoView}
+                                    autoCapitalize="none"
                                     disabled={loading || !inviteState.usable}
                                     required
                                 />
                             </div>
                         </label>
 
-                        <label className="block">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Şifre</span>
-                            <div className="mt-1.5 relative">
-                                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                <input
-                                    type="password"
-                                    className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-primary-500"
-                                    placeholder="En az 6 karakter"
-                                    value={password}
-                                    onChange={(event) => setPassword(event.target.value)}
-                                    disabled={loading || !inviteState.usable}
-                                    required
-                                    minLength={6}
-                                />
+                        {sessionEmail && sessionEmail === email.trim().toLowerCase() ? (
+                            <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-4 py-3 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                Oturumunuz açık; şifre tekrar istenmez.
                             </div>
-                        </label>
+                        ) : (
+                            <label className="block">
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Şifre</span>
+                                <div className="mt-1.5 relative">
+                                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                                    <input
+                                        type="password"
+                                        className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-primary-500"
+                                        placeholder="En az 6 karakter"
+                                        value={password}
+                                        onChange={(event) => setPassword(event.target.value)}
+                                        onFocus={scrollFieldIntoView}
+                                        disabled={loading || !inviteState.usable}
+                                        required
+                                        minLength={6}
+                                    />
+                                </div>
+                            </label>
+                        )}
 
                         <button
                             type="submit"
@@ -748,16 +570,16 @@ export default function SignupWithCode() {
                             className="w-full h-12 rounded-2xl bg-primary-600 hover:bg-primary-700 text-white font-black shadow-lg shadow-primary-600/20 transition inline-flex items-center justify-center gap-2 disabled:opacity-60"
                         >
                             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
-                            {loading ? "Hesap hazırlanıyor..." : "Kodu Onayla ve Şifreyi Belirle"}
+                            {loading ? "Hesap hazırlanıyor..." : sessionEmail ? "Kodu Onayla ve Katıl" : "Kodu Onayla ve Şifreyi Belirle"}
                         </button>
                     </form>
 
                     <button
                         type="button"
-                        onClick={() => nav("/login")}
+                        onClick={() => nav(sessionEmail ? "/setup" : "/login")}
                         className="w-full text-sm font-bold text-slate-500 hover:text-slate-900 dark:hover:text-white"
                     >
-                        Zaten hesabım var, girişe dön
+                        {sessionEmail ? "Geri dön" : "Giriş ekranına dön"}
                     </button>
                 </div>
             </div>

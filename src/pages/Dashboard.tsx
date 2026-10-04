@@ -105,6 +105,8 @@ type DashboardData = {
   // kullanan Dashboard tahsilat ozeti. Yukaridaki todayCollections/
   // overdueCollections/weekCollections ("Yaklaşan İşler"in 7-gunluk
   // penceresi + "Günün Özeti" gelir dusuncesi icin) BILEREK DEGISTIRILMEDI.
+  collectedToday: number;
+  collectedTodayCount: number;
   todayDueCollections: DueRow[];
   weekDueCollections: DueRow[];
   monthDueCollections: DueRow[];
@@ -123,6 +125,8 @@ const emptyData: DashboardData = {
   todayMeasurements: [],
   todayInstallations: [],
   todayCollections: [],
+  collectedToday: 0,
+  collectedTodayCount: 0,
   overdueCollections: [],
   weekCollections: [],
   supplierDue: [],
@@ -518,12 +522,61 @@ export const Dashboard = () => {
         status: collectionRowStatus(bucketForDueDate(r.dueDate, todayForBuckets), r.status === "partial"),
       }));
 
-      const todayMeasurements = appointments.filter((a) => {
+      // "Ölçü Gir" ile kaydedilen ölçüler status=done/done=true ve start_at'siz
+      // gelir; yukaridaki (acik, start_at'li randevu) sorgusu onlari saymaz.
+      // Bugun TAMAMLANAN ölçüleri ayrica cekip (grup basina 1) ekliyoruz.
+      // Bugun ALINAN tahsilat da payments tablosundan okunur ("vadesi bugun"
+      // olan tutardan ayri bir kavram).
+      const tomorrowStr = dateOnly(addDays(todayStart, 1));
+      let measuredQuery = supabase
+        .from("appointments")
+        .select("id,title,type,status,done,start_at,scheduled_at,address,assigned_to,note,customer:customers(name,phone)")
+        .eq("company_id", ctx.company_id)
+        .eq("type", "measurement")
+        .eq("done", true)
+        .gte("done_at", todayStart.toISOString())
+        .lte("done_at", todayEnd.toISOString());
+      if (scopedAppointments) measuredQuery = measuredQuery.eq("assigned_to", workerId);
+      const [measuredRes, paidTodayRes] = await Promise.allSettled([
+        measuredQuery,
+        supabase
+          .from("payments")
+          .select("id,amount,reverses_payment_id")
+          .eq("company_id", ctx.company_id)
+          .gte("payment_date", todayStr)
+          .lt("payment_date", tomorrowStr),
+      ]);
+      const measuredToday: AppointmentRow[] = [];
+      if (measuredRes.status === "fulfilled" && !measuredRes.value.error) {
+        const seen = new Set<string>();
+        ((measuredRes.value.data ?? []) as any[]).forEach((row) => {
+          const group = /\[Grup: ([^\]]+)\]/.exec(String(row.note ?? ""))?.[1] ?? row.id;
+          if (seen.has(group)) return;
+          seen.add(group);
+          measuredToday.push(row as AppointmentRow);
+        });
+      }
+      let collectedToday = 0;
+      let collectedTodayCount = 0;
+      if (paidTodayRes.status === "fulfilled" && !paidTodayRes.value.error) {
+        ((paidTodayRes.value.data ?? []) as any[]).forEach((row) => {
+          const amt = Number(row.amount ?? 0);
+          collectedToday += row.reverses_payment_id ? -amt : amt;
+          if (!row.reverses_payment_id) collectedTodayCount += 1;
+        });
+      }
+
+      const plannedTodayMeasurements = appointments.filter((a) => {
         const iso = isoOf(a);
         if (!iso) return false;
         const time = new Date(iso).getTime();
         return time >= todayStart.getTime() && time <= todayEnd.getTime() && isMeasurement(a) && !isClosed(a.status, a.done);
       });
+
+      const todayMeasurements = [
+        ...plannedTodayMeasurements,
+        ...measuredToday.filter((m) => !plannedTodayMeasurements.some((p) => p.id === m.id)),
+      ];
 
       const todayInstallAppts = appointments.filter((a) => {
         const iso = isoOf(a);
@@ -660,6 +713,8 @@ export const Dashboard = () => {
         todayMeasurements,
         todayInstallations: [...todayInstallAppts, ...todayJobs],
         todayCollections,
+        collectedToday,
+        collectedTodayCount,
         overdueCollections: customerDue.filter((row) => row.due < todayStr),
         weekCollections: customerDue.filter((row) => row.due > todayStr && row.due <= weekEnd),
         supplierDue: supplierDueRows.filter((row) => row.due >= todayStr && row.due <= weekEnd),
@@ -881,7 +936,7 @@ export const Dashboard = () => {
             <MetricCard title="Ölçüler" value={String(data.todayMeasurements.length)} note="Bugünkü ölçü adedi" icon={Ruler} tone="blue" onClick={() => go("/appointments/new")} />
             <MetricCard title="Montajlar" value={String(data.todayInstallations.length)} note="Bugünkü montaj adedi" icon={Hammer} tone="emerald" onClick={() => go("/route/today")} />
             <MetricCard title="Geciken Tahsilat" value={money(overdueCollectionsAmount)} note={`${data.overdueCollections.length} kayıt`} icon={AlertTriangle} tone="red" onClick={() => go(collectionsTarget)} />
-            <MetricCard title="Bugün Tahsilat" value={money(todayDueAmount)} note={`${data.todayDueCollections.length} kayıt`} icon={CreditCard} tone="orange" onClick={() => go(collectionsTarget)} />
+            <MetricCard title="Bugün Tahsilat" value={money(data.collectedToday)} note={`${data.collectedTodayCount} tahsilat alındı · vadesi bugün: ${money(todayDueAmount)}`} icon={CreditCard} tone="orange" onClick={() => go(collectionsTarget)} />
             <MetricCard title="Bu Hafta Tahsilat" value={money(weekDueAmount)} note={`${data.weekDueCollections.length} kayıt`} icon={Clock} tone="indigo" onClick={() => go(collectionsTarget)} />
             <MetricCard title="Bu Ay Tahsilat" value={money(monthDueAmount)} note={`${data.monthDueCollections.length} kayıt`} icon={Clock3} tone="blue" onClick={() => go(collectionsTarget)} />
             <MetricCard title="Tedarikçi Ödemeleri" value={money(supplierDueTotal)} note={`${data.supplierOverdue.length} geciken, ${data.supplierDue.length} vadesi gelen`} icon={Truck} tone="violet" onClick={() => go("/suppliers")} />

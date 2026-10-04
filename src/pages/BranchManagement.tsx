@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
+import { pickPrimaryMembership } from "../utils/trialLicense";
 import { Building2, Plus, Loader2, RefreshCw, Briefcase, Wallet, Calendar, ShieldCheck } from "lucide-react";
 
 type BranchStat = {
@@ -34,11 +35,11 @@ export default function BranchManagement() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const { data: cm } = await supabase
-                .from("company_members")
-                .select("company_id")
-                .eq("user_id", user.id)
-                .maybeSingle();
+            const { data: cmRows } = await supabase
+.from("company_members")
+.select("company_id,is_active,created_at,companies(*)")
+.eq("user_id", user.id);
+const cm = pickPrimaryMembership(cmRows as any[] | null) as { company_id?: string } | null;
 
             if (!cm?.company_id) return;
             setCompanyId(cm.company_id);

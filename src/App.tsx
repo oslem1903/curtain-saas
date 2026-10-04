@@ -11,6 +11,9 @@ import SuperAdminGuard from "./components/SuperAdminGuard";
 import ModuleGate from "./components/ModuleGate";
 import SignupWithCode from "./pages/SignupWithCode";
 import Login from "./pages/Login";
+import SelfSignup from "./pages/SelfSignup";
+import AccountSetup from "./pages/AccountSetup";
+import AuthCallback from "./pages/AuthCallback";
 import ResetPassword from "./pages/ResetPassword";
 import Unauthorized from "./pages/Unauthorized";
 import Locked from "./pages/Locked";
@@ -113,8 +116,9 @@ function HomeRedirect() {
   if (status === "loading") return <div style={{ padding: 16 }}>Yönlendirme hazırlanıyor...</div>;
   if (isPasswordRecovery) return <Navigate to="/reset-password" replace />;
   if (status === "unauthenticated") return <Navigate to="/login" replace />;
-  if (status === "unauthorized") return <Navigate to="/unauthorized" replace />;
+  if ((status === "unauthorized" || status === "access_error")) return <Navigate to="/unauthorized" replace />;
   if (status === "locked") return <Navigate to="/locked" replace />;
+  if (status === "needs_setup") return <Navigate to="/setup" replace />;
 
   return <Navigate to={defaultPathForRole(role)} replace />;
 }
@@ -191,6 +195,9 @@ export default function App() {
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<SelfSignup />} />
+                <Route path="/setup" element={<AccountSetup />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/unauthorized" element={<Unauthorized />} />
                 <Route path="/locked" element={<Locked />} />

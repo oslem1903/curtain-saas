@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { pickPrimaryMembership } from "./utils/trialLicense";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URI;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -51,13 +52,13 @@ export async function getEffectiveTenantContext() {
         };
     }
 
-    const { data: cm, error: cmErr } = await supabase
+    const { data: cmRows, error: cmErr } = await supabase
         .from("company_members")
-        .select("company_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+        .select("company_id,is_active,created_at,companies(*)")
+        .eq("user_id", user.id);
 
     if (cmErr) throw cmErr;
+    const cm = pickPrimaryMembership(cmRows as any[] | null) as { company_id?: string } | null;
     if (!cm?.company_id) throw new Error("Firma bağlantısı bulunamadı.");
 
     return {
@@ -79,7 +80,8 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const method = init.method.toUpperCase();
         if (["POST", "PATCH", "PUT", "DELETE"].includes(method)) {
             const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
-            if (!urlStr.includes("/auth/v1/")) {
+            const accessRpc = /\/rest\/v1\/rpc\/(get_current_auth_context|register_device_and_touch_login|complete_pending_invite_for_current_user|accept_invite_code_for_current_user|accept_invite_for_current_user|get_invite_by_token|get_invite_by_email_code)$/.test(new URL(urlStr, window.location.href).pathname);
+            if (!urlStr.includes("/auth/v1/") && !accessRpc) {
                 showPurchaseRequired();
                 // supabase-js (postgrest) hata metnini gövdedeki `message` alanından okur;
                 // `error` alanı kullanılırsa kullanıcıya "undefined" gösterilir.
@@ -111,6 +113,20 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         if (reportable && !response.ok) {
             // No request bodies, query strings, credentials or customer values.
             console.error(`Veritabanı isteği başarısız: ${endpoint} (HTTP ${response.status})`);
+            // Sunucu, deneme/abonelik süresi dolduğu için yazmayı reddettiyse mevcut
+            // satın alma/abonelik ekranını göster (istemci henüz salt okunura geçmemiş olabilir).
+            if (response.status >= 400 && response.status < 500) {
+                void response
+                    .clone()
+                    .text()
+                    .then((body) => {
+                        if (body.includes("PERDEPRO_SUBSCRIPTION_READ_ONLY")) {
+                            setAppReadOnlyMode(true);
+                            showPurchaseRequired();
+                        }
+                    })
+                    .catch(() => undefined);
+            }
         }
         return response;
     } catch (error) {
@@ -123,7 +139,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+        detectSessionInUrl: false,
         storageKey: "perdepro-auth",
     },
     global: {

@@ -1,3 +1,4 @@
+import { decorativeRail, railDescription } from "../utils/decorativeRail";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Eye, Plus, Printer, Save, Send, ShoppingCart, Trash2 } from "lucide-react";
@@ -216,8 +217,8 @@ export default function InvoiceDetail() {
         setOrderId(orderId);
         setItems(
             (order.order_items ?? []).map((item: any) => ({
-                description: `${item.product_type || "Urun"} - ${item.width_cm || 0}x${item.height_cm || 0} cm`,
-                quantity: Number(item.qty || 1),
+                description: item.product_type === "dekoratif_ray" ? `Dekoratif Ray - ${railDescription(Number(item.width_cm || 0))} × ${Number(item.qty || 1)} adet` : `${item.product_type || "Urun"} - ${item.width_cm || 0}x${item.height_cm || 0} cm`,
+                quantity: item.product_type === "dekoratif_ray" ? decorativeRail(Number(item.width_cm || 0)).areaM2 * Number(item.qty || 1) : Number(item.qty || 1),
                 unit_price: Number(item.unit_price || 0),
                 tax_rate: 20,
             })),
