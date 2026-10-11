@@ -2,6 +2,10 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
+
+// Surum bilgisinin TEK kaynagi package.json'dur (ortam degiskeni/Vercel ayari kullanilmaz).
+const APP_VERSION: string = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')).version
 
 // https://vite.dev/config/
 export default defineConfig(({ mode, command }) => {
@@ -10,7 +14,7 @@ export default defineConfig(({ mode, command }) => {
     throw new Error('Supabase bağlantı ayarları eksik: VITE_SUPABASE_URL ve VITE_SUPABASE_ANON_KEY gerekli.');
   }
   return {
-  define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(env.VITE_APP_VERSION || '1.0.4.1') },
+  define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION) },
   plugins: [
     react(),
     tailwindcss(),
