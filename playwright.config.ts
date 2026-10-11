@@ -49,8 +49,8 @@ export default defineConfig({
   },
   projects: [
     // Public (oturumsuz) — sadece login.spec.ts
-    { name: "public-desktop", use: { ...devices["Desktop Chrome"] }, testMatch: /login\.spec\.ts/ },
-    { name: "public-mobile", use: { ...devices["Pixel 5"] }, testMatch: /login\.spec\.ts/ },
+    { name: "public-desktop", use: { ...devices["Desktop Chrome"] }, testMatch: /(login|signup)\.spec\.ts/ },
+    { name: "public-mobile", use: { ...devices["Pixel 5"] }, testMatch: /(login|signup)\.spec\.ts/ },
     // Authed (storageState ile) — *.authed.spec.ts
     { name: "auth-desktop", use: { ...devices["Desktop Chrome"], ...authedUse }, testMatch: /\.authed\.spec\.ts/ },
     { name: "auth-mobile", use: { ...devices["Pixel 5"], ...authedUse }, testMatch: /\.authed\.spec\.ts/ },

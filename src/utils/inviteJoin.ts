@@ -11,7 +11,7 @@ export function friendlyInviteJoinError(error: unknown): string {
     if (/email_not_verified|email not confirmed/.test(raw)) return "Önce e-postanıza gelen bağlantıyla adresinizi doğrulayın, ardından devam edin.";
     if (/invite_expired|suresi dol|süresi dol/.test(raw)) return "Davetin süresi dolmuş. Firma yöneticinizden yeni bir davet isteyin.";
     if (/invite_email_mismatch|farkli|farklı/.test(raw)) return "Bu davet başka bir e-posta adresine ait. Davet edilen hesapla giriş yapın.";
-    if (/invite_used|kullanilmis|kullanılmış/.test(raw)) return "Bu davet daha önce kullanılmış. Firma yöneticinizden yeni bir davet isteyin.";
+    if (/invite_used|kullanilmis|kullanılmış/.test(raw)) return "Bu davet daha önce kullanılmış. Mevcut hesabınızla giriş yapın veya şifrenizi sıfırlayın.";
     if (/invite_invalid|bulunamad|gecersiz|geçersiz/.test(raw)) return "Davet bulunamadı. E-posta adresinizi ve davet kodunu kontrol edin.";
     if (/member_inactive|profile_inactive/.test(raw)) return "Hesabınızın erişimi durdurulmuş. Firma yöneticinizle iletişime geçin.";
     if (/company_unavailable|firma aktif|firma lisans/.test(raw)) return "Firma şu anda yeni üyelik kabul edemiyor. Firma yöneticinizle iletişime geçin.";

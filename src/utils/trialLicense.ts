@@ -49,7 +49,7 @@ export function isSpecialAccessActive(company: TrialCompanyLike | null | undefin
   if (!company?.is_pilot) return false;
   if (!company.pilot_until) return true;
   const until = new Date(company.pilot_until).getTime();
-  return Number.isFinite(until) && until >= now;
+  return Number.isFinite(until) && until > now;
 }
 
 /**
@@ -67,9 +67,9 @@ export function isSpecialAccessActive(company: TrialCompanyLike | null | undefin
  * supabase_migration_011_trial_ends_at_single_source.sql). trial_ends_at
  * doluysa gecmis mi diye kesin an karsilastirmasi yapilir.
  */
-export function isTrialExpired(company: TrialCompanyLike | null | undefined): boolean {
+export function isTrialExpired(company: TrialCompanyLike | null | undefined, now: number = Date.now()): boolean {
   if (!company) return false;
-  if (isSpecialAccessActive(company)) return false;
+  if (isSpecialAccessActive(company, now)) return false;
 
   const status = String(company.plan_status ?? "").toLowerCase();
   if (status === "expired") return true;
@@ -78,11 +78,13 @@ export function isTrialExpired(company: TrialCompanyLike | null | undefined): bo
     // Ucretli lisans: bitis tarihi girilmisse ve gecmisse sure dolmustur.
     // Tarih bos ise (suresiz/elle yonetilen lisans) kilitlenmez.
     if (!company.license_expires_at) return false;
-    return new Date(company.license_expires_at).getTime() < Date.now();
+    const licenseEnd = new Date(company.license_expires_at).getTime();
+    return !Number.isFinite(licenseEnd) || licenseEnd <= now;
   }
 
   if (!company.trial_ends_at) return true;
-  return new Date(company.trial_ends_at).getTime() < Date.now();
+  const trialEnd = new Date(company.trial_ends_at).getTime();
+  return !Number.isFinite(trialEnd) || trialEnd <= now;
 }
 
 /** İki tarihi Europe/Istanbul TAKVIM gunu olarak karsilastirip tam gun farkini dondurur.
@@ -132,7 +134,7 @@ export function getTrialDisplayInfo(company: TrialCompanyLike | null | undefined
     isTrialPlan: true,
     trialEndsAt,
     daysLeft,
-    isExpired: isTrialExpired(company),
+    isExpired: isTrialExpired(company, now.getTime()),
   };
 }
 

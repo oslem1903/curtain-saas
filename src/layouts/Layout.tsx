@@ -149,6 +149,7 @@ type ReminderItem =
 type TrialInfo = {
   plan: string;
   trialEndsAt: Date | null;
+  isTrialPlan?: boolean;
   isExpired: boolean;
   daysLeft: number | null;
   /** Pilot firmalar deneme kilidinden muaf: uyarı gösterilmez. */
@@ -260,10 +261,10 @@ function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) 
           <ShieldAlert className="w-9 h-9" />
         </div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
-          Deneme sureniz doldu
+          7 günlük deneme süreniz doldu
         </h1>
         <p className="mt-3 text-slate-600 dark:text-slate-300 leading-relaxed">
-          Giriş yapabilirsiniz, ancak yeni kayit, guncelleme, silme ve odeme islemleri lisans alana kadar kapatildi.
+          Verilerinizi görüntüleyebilir ve dışa aktarabilirsiniz. Yeni kayıt, güncelleme ve silme işlemleri lisans alınana kadar kapalıdır. Verileriniz silinmedi.
         </p>
         {endedAt ? (
           <div className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-50 dark:bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
@@ -372,6 +373,52 @@ export const Layout = () => {
   const [isExpiredTrial, setIsExpiredTrial] = useState(false);
   const [trialInfo, setTrialInfo] = useState<TrialInfo | null>(null);
   const [showPurchaseScreen, setShowPurchaseScreen] = useState(false);
+  useEffect(() => {
+    if (!company?.id || realRole === "super_admin") return;
+    let alive = true;
+    let expiryTimer: number | null = null;
+    const verifyServerAccess = async () => {
+      const { data, error } = await supabase.rpc("company_subscription_access_snapshot", { p_company_id: company.id });
+      if (!alive) return;
+
+      if (error || !data || typeof data.access_allowed !== "boolean") {
+        const fallback = await supabase.rpc("company_subscription_access_allowed", { p_company_id: company.id });
+        if (!alive || fallback.error || typeof fallback.data !== "boolean") return;
+        if (!fallback.data) {
+          setIsExpiredTrial(true);
+          // Süre dolunca veri görüntüleme/dışa aktarma açık kalır; yazma sunucuda engellidir.
+          setShowPurchaseScreen(false);
+          setAppReadOnlyMode(true);
+        }
+        return;
+      }
+
+      if (!data.access_allowed) {
+        setIsExpiredTrial(true);
+        setShowPurchaseScreen(false);
+        setAppReadOnlyMode(true);
+        return;
+      }
+
+      setIsExpiredTrial(false);
+      setShowPurchaseScreen(false);
+      setAppReadOnlyMode(Boolean(company.read_only));
+      if (expiryTimer != null) window.clearTimeout(expiryTimer);
+      const expiresAt = Date.parse(String(data.access_expires_at || ""));
+      const serverTime = Date.parse(String(data.server_time || ""));
+      if (Number.isFinite(expiresAt) && Number.isFinite(serverTime)) {
+        const delay = Math.max(0, expiresAt - serverTime);
+        expiryTimer = window.setTimeout(() => { void verifyServerAccess(); }, Math.min(delay, 2_147_000_000));
+      }
+    };
+    const interval = window.setInterval(() => { void verifyServerAccess(); }, 60_000);
+    void verifyServerAccess();
+    return () => {
+      alive = false;
+      if (expiryTimer != null) window.clearTimeout(expiryTimer);
+      window.clearInterval(interval);
+    };
+  }, [company?.id, company?.read_only, realRole, trialInfo?.isTrialPlan]);
   // Firmaya lisanslanmis tenant rolleri (companies.enabled_roles). Bos/yok ise
   // Solo Perdeci varsayilir -- role dropdown'u gormez.
   const [companyEnabledRoles, setCompanyEnabledRoles] = useState<string[]>([]);
@@ -432,7 +479,7 @@ export const Layout = () => {
                  const plan = comp.subscription_plan || comp.plan_status || 'trial';
                  const display = getTrialDisplayInfo(comp);
                  if (display.isTrialPlan) {
-                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isExpired: display.isExpired, daysLeft: display.daysLeft, isPilot: isSpecialAccessActive(comp as any) });
+                     setTrialInfo({ plan, trialEndsAt: display.trialEndsAt, isTrialPlan: display.isTrialPlan, isExpired: display.isExpired, daysLeft: display.daysLeft, isPilot: isSpecialAccessActive(comp as any) });
                      // Süper adminin KENDİ hesabı gerçek bir firmaya (company_members üzerinden,
                      // demo_company_id OLMADAN) bağlıysa VE o firmanın denemesi dolmuşsa, ctx.company_id
                      // buraya o firmanın ID'sini getirir — display.isExpired TRUE olur ve aşağıdaki
@@ -442,19 +489,16 @@ export const Layout = () => {
                      // ağa HİÇ gönderilmiyordu). Süper admin HER ZAMAN muaf olmalı — yalnızca "yazma
                      // demo modunda" değil, kendi hesabının durumundan BAĞIMSIZ olarak.
                      const isSuperAdminExempt = realRole === "super_admin";
-                     // Suresi dolan hesap salt okunur girer: satin alma ekrani sayfayi
-                     // kapatmaz, ustte uyari seridi gosterilir.
+                    // Süre bitince iş verilerine erişimi kapat; satın alma ekranı açık kalır.
                      if (display.isExpired && !isSuperAdminExempt) {
                          setIsExpiredTrial(true);
-                         setShowPurchaseScreen(false);
-                         setAppReadOnlyMode(true);
+                       setShowPurchaseScreen(false);
                      } else {
                          setIsExpiredTrial(false);
                          setShowPurchaseScreen(false);
-                         setAppReadOnlyMode(false);
                      }
                  } else {
-                     setTrialInfo({ plan, trialEndsAt: null, isExpired: false, daysLeft: null });
+                     setTrialInfo({ plan, trialEndsAt: null, isTrialPlan: false, isExpired: false, daysLeft: null });
                      // Ucretli lisans suresi dolduysa salt okunur (super admin muaf).
                      const licenseExpired = realRole !== "super_admin" && isTrialExpired(comp);
                      setIsExpiredTrial(licenseExpired);
@@ -911,7 +955,7 @@ export const Layout = () => {
 	          <div className="border-b border-slate-200 bg-white/90 px-4 py-2 text-xs font-bold text-slate-600 dark:border-slate-800 dark:bg-slate-900/90 dark:text-slate-300">
 	            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 	              <span>Paket: <span className="text-slate-900 dark:text-white">{packageDisplayName(company.package_code || company.subscription_plan)}</span></span>
-	              {company.trial_ends_at ? (
+                {company.trial_ends_at && !isSpecialAccessActive(company) ? (
 	                <span>Deneme bitiş: {formatTrialDateTR(company.trial_ends_at, { withTime: true })}</span>
 	              ) : null}
 	              {(() => {

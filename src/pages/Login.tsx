@@ -284,7 +284,7 @@ export default function Login() {
 
             <button type="button" onClick={() => nav("/signup")} className={authSecondaryButtonClass} disabled={loading}>
                 <Sparkles className="w-5 h-5" />
-                7 Gün Ücretsiz Dene
+                Kayıt ol — 7 gün ücretsiz dene
             </button>
             <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
                 Kredi kartı gerekmez. Kod beklemeden kendi hesabınızı açın.

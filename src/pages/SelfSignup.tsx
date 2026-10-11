@@ -193,7 +193,7 @@ export default function SelfSignup() {
             <AuthShell
                 title="E-postanızı doğrulayın"
                 icon={<MailCheck className="w-7 h-7" />}
-                subtitle="Deneme süreniz, e-postanız doğrulandıktan sonra işletmeniz oluşturulduğunda başlar."
+                subtitle="7 günlük deneme süreniz, e-postanız doğrulandıktan sonra işletmeniz oluşturulduğunda başlar."
                 footer={
                     <button
                         type="button"
@@ -336,7 +336,7 @@ export default function SelfSignup() {
                     {loading ? "Hesap oluşturuluyor..." : "Ücretsiz denemeyi başlat"}
                 </button>
                 <p className="text-center text-xs text-slate-500 dark:text-slate-400">
-                    7 günlük deneme süresi sunucuda tutulur. Süre bitince verileriniz silinmez; görüntülemeye devam edebilirsiniz.
+                    7 günlük deneme süresi sunucuda tutulur. Süre bitince verileriniz silinmez.
                 </p>
             </form>
         </AuthShell>

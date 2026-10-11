@@ -80,7 +80,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const method = init.method.toUpperCase();
         if (["POST", "PATCH", "PUT", "DELETE"].includes(method)) {
             const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
-            const accessRpc = /\/rest\/v1\/rpc\/(get_current_auth_context|register_device_and_touch_login|complete_pending_invite_for_current_user|accept_invite_code_for_current_user|accept_invite_for_current_user|get_invite_by_token|get_invite_by_email_code)$/.test(new URL(urlStr, window.location.href).pathname);
+            const accessRpc = /\/rest\/v1\/rpc\/(get_current_auth_context|register_device_and_touch_login|complete_pending_invite_for_current_user|claim_pending_invites_for_current_user|accept_invite_code_for_current_user|accept_invite_for_current_user|get_invite_by_token|get_invite_by_email_code)$/.test(new URL(urlStr, window.location.href).pathname);
             if (!urlStr.includes("/auth/v1/") && !accessRpc) {
                 showPurchaseRequired();
                 // supabase-js (postgrest) hata metnini gövdedeki `message` alanından okur;

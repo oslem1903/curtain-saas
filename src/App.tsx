@@ -21,6 +21,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { canAccess, type AppRole } from "./auth/roles";
 import { initLocalNotificationNavigation } from "./utils/localNotifications";
 import { isNativeAndroid } from "./utils/nativeRuntime";
+import { getNativeAuthCallbackHash } from "./utils/authRedirect";
 
 // ---------------------------------------------------------------------------
 // Rota bazli kod bolme (code-splitting): her sayfa ayri bir parcaya cikar ve
@@ -143,6 +144,23 @@ function AndroidBackButtonHandler() {
   return null;
 }
 
+function NativeAuthLinkHandler() {
+  useEffect(() => {
+    let alive = true;
+    const openAuthUrl = (rawUrl: string) => {
+      const hash = getNativeAuthCallbackHash(rawUrl);
+      if (alive && hash) window.location.hash = hash;
+    };
+    const listener = CapacitorApp.addListener("appUrlOpen", ({ url }) => openAuthUrl(url));
+    void CapacitorApp.getLaunchUrl().then((launch) => { if (launch?.url) openAuthUrl(launch.url); }).catch(() => undefined);
+    return () => {
+      alive = false;
+      void listener.then((handle) => handle.remove());
+    };
+  }, []);
+  return null;
+}
+
 function LocalNotificationNavigationHandler() {
   const navigate = useNavigate();
 
@@ -189,6 +207,7 @@ export default function App() {
           <ImpersonationProvider>
             <SupportModalProvider>
               <AndroidBackButtonHandler />
+              <NativeAuthLinkHandler />
               <LocalNotificationNavigationHandler />
               <PasswordRecoveryRedirect />
                 <Suspense fallback={<RouteFallback />}>

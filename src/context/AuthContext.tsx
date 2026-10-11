@@ -176,8 +176,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
     // İlk yükleme tamamlandı mı? Arka plan refresh'lerinde loading ekranı gösterme.
     const hasLoadedOnce = useRef(false);
+    // Kullanici basina yalnizca bir kez: e-postasi dogrulanmis hesabin kendi adresine
+    // yazilmis bekleyen davetleri kodsuz tamamlanir (sunucu e-posta eslesmesini dogrular).
+    const claimAttemptedFor = useRef<string | null>(null);
 
-    const loadAuthNow = useCallback(async () => {
+    const claimPendingInvites = useCallback(async (userId: string): Promise<boolean> => {
+        if (claimAttemptedFor.current === userId) return false;
+        claimAttemptedFor.current = userId;
+        try {
+            const { data, error } = await withTimeout(
+                supabase.rpc("claim_pending_invites_for_current_user"),
+                "Bekleyen davet kontrolu",
+                10000,
+            );
+            return !error && Array.isArray(data) && data.length > 0;
+        } catch {
+            // RPC henuz kurulu degil veya ag hatasi: normal hesap kurulumu ekranina duser.
+            return false;
+        }
+    }, []);
+
+    const loadAuthNow = useCallback(async (): Promise<void> => {
         let completingInvite = false;
         setAccessError(null);
         const isFirstLoad = !hasLoadedOnce.current;
@@ -236,6 +255,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             profile = byUserId.data;
         }
         if (!profile) {
+            if (await claimPendingInvites(sessionUser.id)) return loadAuthNow();
             hasLoadedOnce.current = false;
             setStatus("needs_setup");
             return;
@@ -297,6 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Sorgu BAŞARILI ve gerçekten hiç üyelik yok: hesap kurulumu ekranı.
         // (Geçici ağ hatasında burası çalışmaz; aşağıdaki fail-closed dal korunur.)
         if (!memberError && Array.isArray(memberRows) && memberRows.length === 0) {
+            if (await claimPendingInvites(sessionUser.id)) return loadAuthNow();
             setAppReadOnlyMode(false);
             hasLoadedOnce.current = false;
             setStatus("needs_setup");
@@ -324,8 +345,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setCompany(activeCompany);
-        setAppReadOnlyMode(Boolean(activeCompany.read_only) || isTrialExpired(activeCompany));
-        setMemberRole(normalizeRole(member.role) === "unknown" ? profileRole : normalizeRole(member.role));
+        const activeMemberRole = normalizeRole(member.role) === "unknown" ? profileRole : normalizeRole(member.role);
+        setRole(activeMemberRole);
+        setMemberRole(activeMemberRole);
 
         if (activeCompany.is_active === false || String(activeCompany.plan_status ?? "").toLowerCase() === "suspended") {
             setLockReason("inactive_company");
@@ -334,13 +356,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        if (isTrialExpired(activeCompany)) {
-            // Suresi dolan hesap kilitlenmez: salt okunur modda girer.
+        let serverSubscriptionAllowed: boolean | null = null;
+        try {
+            const { data, error } = await withTimeout(
+                supabase.rpc("company_subscription_access_allowed", { p_company_id: activeCompany.id }),
+                "Abonelik erisim kontrolu",
+            );
+            if (!error && typeof data === "boolean") serverSubscriptionAllowed = data;
+        } catch {
+            // Migration henuz yuklu degilse eski istemci kontrolu asagida yedek olarak kalir.
+        }
+
+        const subscriptionExpired = serverSubscriptionAllowed === false
+            || (serverSubscriptionAllowed === null && isTrialExpired(activeCompany));
+        if (subscriptionExpired) {
+            // Is verisi RLS tarafinda engellenir; hesap destek/lisans ekranina ulasabilir.
             setLockReason(activeCompany.read_only ? "read_only" : "expired_trial");
+            setAppReadOnlyMode(true);
             hasLoadedOnce.current = true;
             setStatus("ready");
             return;
         }
+        setAppReadOnlyMode(Boolean(activeCompany.read_only));
 
         // Sunucu taraflı lisans yoklaması + cihaz kaydı (her açılışta).
         // RPC henüz kurulmadıysa (migration çalıştırılmamış) sessizce geçilir —
@@ -404,7 +441,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setAccessError(completingInvite ? friendlyInviteJoinError(error) : "Hesap ve firma bilgileriniz şu anda kontrol edilemiyor. Bağlantınızı kontrol edip tekrar deneyin.");
             setStatus("access_error");
         }
-    }, []);
+    }, [claimPendingInvites]);
 
     // Davet oncesindeki eski sorgu, kabul sonrasi yenilemenin ustune yazmasin.
     const loadAuth = useCallback(() => {

@@ -1,7 +1,7 @@
 import { requestText } from "../utils/requestText";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, CheckCircle2, Clock, Copy, Eye, LogIn, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, X } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Copy, Eye, LogIn, Mail, MonitorSmartphone, PencilLine, Plus, Power, Search, Trash2, UserPlus, X } from "lucide-react";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 
@@ -13,14 +13,17 @@ import ImpersonationModal from "../components/ImpersonationModal";
 import CompanyAccessManager from "../components/CompanyAccessManager";
 import { formatTrialDateTR, isSpecialAccessActive } from "../utils/trialLicense";
 import { type CompanyAdmin, copyText, isMissingRpcError, listCompanyIdentities } from "../utils/superAdminAccess";
+import AssignUserToCompanyModal from "../components/AssignUserToCompanyModal";
 
 type CompanyStats = {
     id: string;
     name: string;
+    email: string | null;
     subscription_plan: string;
     plan_status: "active" | "trial" | "expired" | "suspended" | string;
     is_active: boolean;
     read_only: boolean;
+    trial_started_at: string | null;
     trial_end: string | null;
     user_count: number;
     open_tickets: number;
@@ -65,6 +68,24 @@ type DeviceLimitRequest = {
         user_agent?: string;
     } | null;
     profile?: { full_name: string | null } | null;
+};
+
+type CompanyMemberIdentity = {
+    user_id: string;
+    email: string | null;
+    full_name: string | null;
+    role: string;
+    is_active: boolean;
+};
+
+type AccountSearchResult = {
+    user_id: string;
+    email: string;
+    full_name: string | null;
+    email_confirmed_at: string | null;
+    profile_role: string | null;
+    is_active: boolean | null;
+    memberships: Array<{ company_id: string; company_name: string; role: string; is_active: boolean }>;
 };
 
 const planLabels: Record<string, string> = {
@@ -137,6 +158,7 @@ export default function SuperAdminCompanies() {
 
     // Modals
     const [addModalOpen, setAddModalOpen] = useState(false);
+    const [assignModalOpen, setAssignModalOpen] = useState(false);
     const [newCompanyForm, setNewCompanyForm] = useState({
         name: "",
         package_code: "solo",
@@ -152,12 +174,22 @@ export default function SuperAdminCompanies() {
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [editCompanyForm, setEditCompanyForm] = useState({
         name: "",
+        email: "",
         package_code: "solo",
         plan_status: "trial",
         max_devices: 3,
         read_only: false,
         is_active: true,
     });
+    const [companyMembers, setCompanyMembers] = useState<CompanyMemberIdentity[]>([]);
+    const [identityQuery, setIdentityQuery] = useState("");
+    const [identityResults, setIdentityResults] = useState<AccountSearchResult[]>([]);
+    const [accountSearchComplete, setAccountSearchComplete] = useState(false);
+    const [identityRole, setIdentityRole] = useState("admin");
+    const [confirmAdditionalMembership, setConfirmAdditionalMembership] = useState(false);
+    const [identityBusy, setIdentityBusy] = useState(false);
+    const [identityMessage, setIdentityMessage] = useState("");
+    const [createdInviteCode, setCreatedInviteCode] = useState("");
 
     useEffect(() => {
         loadCompanies();
@@ -234,10 +266,12 @@ export default function SuperAdminCompanies() {
                 return {
                     id: company.id,
                     name: company.name || "İsimsiz Firma",
+                    email: company.email || null,
                     subscription_plan: company.subscription_plan || company.plan_type || "starter",
                     plan_status: company.plan_status || (company.is_active === false ? "suspended" : "trial"),
                     is_active: company.is_active !== false,
                     read_only: company.read_only === true,
+                    trial_started_at: company.trial_started_at || company.trial_start || null,
                     trial_end: company.trial_ends_at || null,
                     user_count: userCount || 0,
                     is_pilot: company.is_pilot === true,
@@ -324,12 +358,110 @@ export default function SuperAdminCompanies() {
         setEditingCompany(company);
         setEditCompanyForm({
             name: company.name,
+            email: company.email || "",
             package_code: company.package_code || company.subscription_plan,
             plan_status: company.plan_status,
             max_devices: company.max_devices,
             read_only: company.read_only,
             is_active: company.is_active,
         });
+        setIdentityQuery("");
+        setIdentityResults([]);
+        setAccountSearchComplete(false);
+        setIdentityRole("admin");
+        setConfirmAdditionalMembership(false);
+        setIdentityMessage("");
+        setCreatedInviteCode("");
+        setCompanyMembers([]);
+        void loadCompanyMembers(company.id);
+    }
+
+    async function loadCompanyMembers(companyId: string) {
+        try {
+            const { data, error } = await supabase.rpc("super_admin_list_company_members", { p_company_id: companyId });
+            if (error) throw error;
+            setCompanyMembers(Array.isArray(data) ? data : []);
+        } catch {
+            setCompanyMembers([]);
+            setIdentityMessage("Bağlı kullanıcılar yüklenemedi. Sunucu güncellemesini kontrol edin.");
+        }
+    }
+
+    async function searchAccounts() {
+        const email = identityQuery.trim().toLowerCase();
+        if (email.length < 3) {
+            setIdentityMessage("Aramak için en az 3 karakter girin.");
+            return;
+        }
+        setIdentityBusy(true);
+        setIdentityMessage("");
+        setCreatedInviteCode("");
+        setAccountSearchComplete(false);
+        try {
+            const { data, error } = await supabase.rpc("super_admin_search_accounts_by_email", { p_email: email });
+            if (error) throw error;
+            setIdentityResults(Array.isArray(data) ? data : []);
+            setAccountSearchComplete(true);
+            if (!Array.isArray(data) || data.length === 0) setIdentityMessage("Bu e-posta ile mevcut hesap bulunamadı. Kontrollü davet oluşturabilirsiniz.");
+        } catch {
+            setIdentityMessage("Hesap araması tamamlanamadı. Sunucu güncellemesini kontrol edin.");
+        } finally {
+            setIdentityBusy(false);
+        }
+    }
+
+    async function linkAccount(account: AccountSearchResult) {
+        if (!editingCompany) return;
+        setIdentityBusy(true);
+        setIdentityMessage("");
+        try {
+            const { data, error } = await supabase.rpc("super_admin_link_company_user", {
+                p_company_id: editingCompany.id,
+                p_user_id: account.user_id,
+                p_role: identityRole,
+                p_confirm_other_memberships: confirmAdditionalMembership,
+            });
+            if (error) throw error;
+            if (data?.requires_confirmation) {
+                setIdentityMessage("Bu hesap başka firmalara zaten bağlı. Mevcut üyeliklerini koruyarak bu firmaya da eklemek için kutuyu işaretleyip tekrar seçin.");
+                return;
+            }
+            setIdentityMessage("Kullanıcı firma üyeliğine eklendi. Diğer firma üyelikleri korunmuştur.");
+            setConfirmAdditionalMembership(false);
+            await loadCompanyMembers(editingCompany.id);
+            await loadCompanies();
+        } catch (error) {
+            setIdentityMessage(error instanceof Error ? error.message : "Kullanıcı firma ile eşleştirilemedi.");
+        } finally {
+            setIdentityBusy(false);
+        }
+    }
+
+    async function createCompanyInvite() {
+        if (!editingCompany) return;
+        const email = identityQuery.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            setIdentityMessage("Davet için geçerli bir e-posta adresi girin.");
+            return;
+        }
+        setIdentityBusy(true);
+        setIdentityMessage("");
+        try {
+            const { data, error } = await supabase.rpc("super_admin_create_company_invite", {
+                p_company_id: editingCompany.id,
+                p_email: email,
+                p_role: identityRole,
+            });
+            if (error) throw error;
+            const invite = Array.isArray(data) ? data[0] : data;
+            if (!invite?.invite_code) throw new Error("Davet oluşturuldu ancak kod alınamadı.");
+            setCreatedInviteCode(invite.invite_code);
+            setIdentityMessage("Davet kodu oluşturuldu ve işlem geçmişine yazıldı.");
+        } catch (error) {
+            setIdentityMessage(error instanceof Error ? error.message : "Davet oluşturulamadı.");
+        } finally {
+            setIdentityBusy(false);
+        }
     }
 
     async function handleSaveEditCompany(e: React.FormEvent) {
@@ -343,20 +475,16 @@ export default function SuperAdminCompanies() {
         }
         setSavingId(editingCompany.id);
         try {
-            const patch: Record<string, any> = {
-                name: String(editCompanyForm.name ?? "").trim(),
-                package_code: editCompanyForm.package_code,
-                subscription_plan: editCompanyForm.package_code === "solo" ? "starter" : editCompanyForm.package_code,
-                plan_status: editCompanyForm.plan_status,
-                max_devices: Number(editCompanyForm.max_devices),
-                read_only: editCompanyForm.read_only,
-                is_active: editCompanyForm.is_active,
-            };
-
-            // Deneme bitişi burada DEĞİŞTİRİLMEZ: tek yol "Süre / Özel Erişim" (sunucu RPC'si,
-            // yetki kontrolü + işlem geçmişi). Böylece iki ayrı tarih alanı birbirini ezmez.
-
-            const { error } = await supabase.from("companies").update(patch).eq("id", editingCompany.id);
+            const { error } = await supabase.rpc("super_admin_update_company_details", {
+                p_company_id: editingCompany.id,
+                p_name: companyName,
+                p_contact_email: String(editCompanyForm.email ?? "").trim().toLowerCase() || null,
+                p_package_code: editCompanyForm.package_code,
+                p_plan_status: editCompanyForm.plan_status,
+                p_max_devices: Number(editCompanyForm.max_devices),
+                p_read_only: editCompanyForm.read_only,
+                p_is_active: editCompanyForm.is_active,
+            });
             if (error) throw error;
 
             alert(`"${editCompanyForm.name}" firmasının bilgileri güncellendi.`);
@@ -581,6 +709,15 @@ export default function SuperAdminCompanies() {
                         Yeni Müşteri Ekle
                     </button>
 
+                    <button
+                        type="button"
+                        onClick={() => setAssignModalOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-2xl border border-blue-200 bg-white px-4 py-2.5 text-sm font-black text-blue-700 transition hover:bg-blue-50 active:scale-95 dark:border-blue-900 dark:bg-slate-900 dark:text-blue-300"
+                    >
+                        <UserPlus size={18} />
+                        Kullanıcı Ekle
+                    </button>
+
                     <div className="relative w-full sm:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                         <input
@@ -611,19 +748,14 @@ export default function SuperAdminCompanies() {
                                         <h3 className="truncate text-xl font-black text-slate-900 dark:text-white">{company.name}</h3>
                                         <span className={cn(
                                             "rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest",
-                                            company.plan_status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" :
+                                            isSpecialAccessActive(company) || company.plan_status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" :
                                                 company.plan_status === "trial" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" :
                                                     company.plan_status === "expired" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" :
                                                         "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
                                         )}>
-                                            {company.plan_status}
+                                            {isSpecialAccessActive(company) ? "özel erişim aktif" : company.plan_status}
                                         </span>
                                         {company.read_only ? <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-600 dark:bg-slate-800 dark:text-slate-300">Read-only</span> : null}
-                                        {isSpecialAccessActive(company) ? (
-                                            <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-violet-700 dark:bg-violet-950 dark:text-violet-300">
-                                                {company.pilot_until ? `Özel erişim · ${formatTrialDateTR(company.pilot_until)}` : "Özel erişim · süresiz"}
-                                            </span>
-                                        ) : null}
                                     </div>
                                     <div className="mt-1 text-xs font-bold text-slate-500">
                                         Paket: {planLabels[company.package_code] || planLabels[company.subscription_plan] || company.subscription_plan}
@@ -716,8 +848,15 @@ export default function SuperAdminCompanies() {
                                 <span className="font-black text-slate-900 dark:text-white text-sm">{company.last_error_at ? format(new Date(company.last_error_at), "dd MMM", { locale: tr }) : "Yok"}</span>
                             </div>
                             <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40 col-span-2 sm:col-span-1">
-                                <span className="text-slate-400 font-bold block mb-0.5">Deneme Bitiş</span>
-                                <span className="font-black text-slate-900 dark:text-white text-sm">{company.trial_end ? formatTrialDateTR(company.trial_end, { withTime: true }) : "Yok"}</span>
+                                <span className="text-slate-400 font-bold block mb-0.5">{isSpecialAccessActive(company) ? "Özel erişim" : "Deneme"}</span>
+                                {isSpecialAccessActive(company) ? (
+                                    <span className="font-black text-slate-900 dark:text-white text-sm">{company.pilot_until ? formatTrialDateTR(company.pilot_until, { withTime: true }) : "Süresiz"}</span>
+                                ) : (
+                                    <span className="block text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                        Başlangıç: {company.trial_started_at ? formatTrialDateTR(company.trial_started_at, { withTime: true }) : "Yok"}<br />
+                                        Bitiş: {company.trial_end ? formatTrialDateTR(company.trial_end, { withTime: true }) : "Yok"}
+                                    </span>
+                                )}
                             </div>
                         </div>
 
@@ -976,6 +1115,14 @@ export default function SuperAdminCompanies() {
             </div>
 
             {/* Yeni Müşteri Ekle Modal */}
+            {assignModalOpen && (
+                <AssignUserToCompanyModal
+                    companies={companies.map((c) => ({ id: c.id, name: c.name }))}
+                    onClose={() => setAssignModalOpen(false)}
+                    onDone={loadCompanies}
+                />
+            )}
+
             {addModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
                     <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 max-h-[calc(100dvh-2rem)] overflow-y-auto">
@@ -1011,6 +1158,22 @@ export default function SuperAdminCompanies() {
                                     placeholder="Örn: Yılmaz Perde Dokuma Ltd."
                                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                                 />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1" htmlFor="edit_company_contact_email">
+                                    Firma iletişim e-postası
+                                </label>
+                                <input
+                                    id="edit_company_contact_email"
+                                    type="email"
+                                    autoComplete="email"
+                                    value={editCompanyForm.email}
+                                    onChange={(e) => setEditCompanyForm({ ...editCompanyForm, email: e.target.value })}
+                                    placeholder="iletisim@firma.com"
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                />
+                                <p className="mt-1 text-xs text-slate-500">Bu alan yalnızca firma iletişim bilgisidir; giriş hesabının e-postası değişmez.</p>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -1103,6 +1266,68 @@ export default function SuperAdminCompanies() {
                                 </button>
                             </div>
                         </form>
+
+                        <section className="mt-5 border-t border-slate-100 pt-5 dark:border-slate-800" aria-label="Firma kullanıcı eşleştirme">
+                            <h4 className="text-sm font-black text-slate-900 dark:text-white">Bağlı kullanıcılar</h4>
+                            <div className="mt-2 space-y-2">
+                                {companyMembers.map((member) => (
+                                    <div key={member.user_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm dark:bg-slate-800/60">
+                                        <span className="min-w-0 break-all font-semibold">{member.full_name || member.email || member.user_id}</span>
+                                        <span className="text-xs text-slate-500">{member.email} · {roleLabels[member.role] || member.role} · {member.is_active ? "Aktif" : "Pasif"}</span>
+                                    </div>
+                                ))}
+                                {companyMembers.length === 0 ? <p className="text-xs text-slate-500">Bu firmada listelenecek kullanıcı bulunamadı.</p> : null}
+                            </div>
+
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <label className="sr-only" htmlFor="company_account_email">Giriş hesabı e-postası</label>
+                                <input
+                                    id="company_account_email"
+                                    type="email"
+                                    autoComplete="off"
+                                    value={identityQuery}
+                                    onChange={(e) => {
+                                        setIdentityQuery(e.target.value);
+                                        setIdentityResults([]);
+                                        setAccountSearchComplete(false);
+                                        setIdentityMessage("");
+                                        setConfirmAdditionalMembership(false);
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void searchAccounts(); } }}
+                                    placeholder="Giriş hesabı e-postası"
+                                    className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                                />
+                                <select value={identityRole} onChange={(e) => setIdentityRole(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800" aria-label="Firma rolü">
+                                    {editableRoles.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
+                                </select>
+                                <button type="button" onClick={() => void searchAccounts()} disabled={identityBusy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60 dark:bg-slate-700">
+                                    <Search size={16} /> Bul
+                                </button>
+                            </div>
+                            {identityResults.map((account) => (
+                                <div key={account.user_id} className="mt-2 rounded-xl border border-slate-200 p-3 text-sm dark:border-slate-700">
+                                    <div className="font-bold">{account.full_name || account.email}</div>
+                                    <div className="text-xs text-slate-500">{account.email} · {account.email_confirmed_at ? "E-posta doğrulanmış" : "E-posta doğrulanmamış"}</div>
+                                    {account.memberships?.length ? <div className="mt-1 text-xs text-amber-700 dark:text-amber-300">Mevcut üyelikler: {account.memberships.map((m) => `${m.company_name} (${roleLabels[m.role] || m.role}${m.is_active ? "" : ", pasif"})`).join(", ")}</div> : null}
+                                    <button type="button" onClick={() => void linkAccount(account)} disabled={identityBusy || !account.email_confirmed_at || account.is_active === false || account.profile_role === "super_admin" || (account.memberships?.some((membership) => membership.company_id !== editingCompany?.id) && !confirmAdditionalMembership)} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">
+                                        <UserPlus size={15} /> Firmaya bağla
+                                    </button>
+                                </div>
+                            ))}
+                            {identityResults.some((account) => account.memberships?.some((membership) => membership.company_id !== editingCompany?.id)) ? (
+                                <label className="mt-3 flex items-start gap-2 text-xs font-semibold text-amber-800 dark:text-amber-200">
+                                    <input type="checkbox" checked={confirmAdditionalMembership} onChange={(e) => setConfirmAdditionalMembership(e.target.checked)} className="mt-0.5" />
+                                    Diğer firma üyeliklerini kaldırmadan bu firmaya ayrıca ekle.
+                                </label>
+                            ) : null}
+                            {identityMessage ? <p role="status" className="mt-3 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800">{identityMessage}</p> : null}
+                            {accountSearchComplete && identityResults.length === 0 ? (
+                                <button type="button" onClick={() => void createCompanyInvite()} disabled={identityBusy} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-blue-300 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-50 dark:border-blue-800 dark:text-blue-300">
+                                    <Mail size={15} /> Bu e-postaya davet kodu oluştur
+                                </button>
+                            ) : null}
+                            {createdInviteCode ? <div className="mt-2 rounded-lg bg-emerald-50 p-3 font-mono text-lg font-black text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">{createdInviteCode}</div> : null}
+                        </section>
                     </div>
                 </div>
             )}
@@ -1192,10 +1417,11 @@ export default function SuperAdminCompanies() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
-                                        Deneme Bitişi
+                                        {isSpecialAccessActive(editingCompany) ? "Temel deneme tarihleri (özel erişim aktif)" : "Deneme tarihleri"}
                                     </label>
                                     <div className="rounded-2xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
-                                        {editingCompany.trial_end ? formatTrialDateTR(editingCompany.trial_end, { withTime: true }) : "Yok"}
+                                        Başlangıç: {editingCompany.trial_started_at ? formatTrialDateTR(editingCompany.trial_started_at, { withTime: true }) : "Yok"}<br />
+                                        Bitiş: {editingCompany.trial_end ? formatTrialDateTR(editingCompany.trial_end, { withTime: true }) : "Yok"}
                                     </div>
                                     <button
                                         type="button"
