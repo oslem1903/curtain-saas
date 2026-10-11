@@ -11,6 +11,11 @@ export function nativePlatform(): NativePlatform {
   return platform === "ios" || platform === "android" ? platform : "web";
 }
 
+/** iOS veya Android uygulamasi (Capacitor). Mağaza kurallari nedeniyle satin alma yonlendirmesi gosterilmez. */
+export function isNativeApp() {
+  return nativePlatform() !== "web";
+}
+
 export function isNativeIos() {
   return nativePlatform() === "ios";
 }

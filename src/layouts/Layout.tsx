@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isNativeApp } from "../utils/nativeRuntime";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useActivityTracking } from "../hooks/useActivityTracking";
 import {
@@ -279,6 +280,7 @@ function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) 
             </div>
           ))}
         </div>
+        {!isNativeApp() && (
         <a
           href={getPurchaseUrl()}
           target="_blank"
@@ -288,6 +290,7 @@ function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) 
           <CreditCard className="w-5 h-5" />
           Satın Al
         </a>
+        )}
       </div>
     </div>
   );
@@ -898,6 +901,9 @@ export const Layout = () => {
               {hasModule("catalogs") && <NavItem to="/catalogs" icon={Palette} label="Kartela Yönetimi" onClick={closeMobileMenu} />}
               {hasModule("staff") && <NavItem to="/staff" icon={UserCog} label="Personel" onClick={closeMobileMenu} />}
               <NavItem to="/settings" icon={Settings} label="Ayarlar" onClick={closeMobileMenu} />
+              {import.meta.env.VITE_BILLING_ENABLED === "1" && (
+                <NavItem to="/subscription" icon={CreditCard} label="Abonelik" onClick={closeMobileMenu} />
+              )}
             </>
           )}
 
@@ -1000,6 +1006,7 @@ export const Layout = () => {
 	                  </button>
 	                </>
 	              ) : null}
+	              {!isNativeApp() && (
 	              <button
 	                type="button"
 	                onClick={() => window.open(getPurchaseUrl(), "_blank")}
@@ -1007,6 +1014,7 @@ export const Layout = () => {
 	              >
 	                Satın Al / Yükselt
 	              </button>
+	              )}
 	            </div>
 	          </div>
 	        ) : null}
@@ -1031,6 +1039,7 @@ export const Layout = () => {
             <div className="bg-red-600 text-white text-center py-2 px-4 shadow-md sticky top-0 z-30 flex items-center justify-center gap-3">
                 <span className="font-bold">Uyarı: LİSANS/DENEME SÜRENİZ DOLMUŞTUR</span>
                 <span className="text-sm">Hesabınız salt-okunur (read-only) moddadır. Yeni işlem yapılamaz.</span>
+                {!isNativeApp() && (
                 <a
                   href="#"
                   onClick={(e) => {
@@ -1042,6 +1051,7 @@ export const Layout = () => {
                 >
                     Özlem Cihan (Satış & Destek)
                 </a>
+                )}
             </div>
         )}
 	        <header className={cn("min-h-[64px] sm:min-h-[80px] pt-safe bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-3 lg:px-8 z-50 transition-all duration-300", !isExpiredTrial && "sticky top-0")}>
@@ -1316,7 +1326,7 @@ export const Layout = () => {
           {!(realRole === "super_admin" && !isActingAsTenant) && !showPurchaseScreen && trialInfo && !trialInfo.isPilot && !trialInfo.isExpired && trialInfo.daysLeft != null && trialInfo.daysLeft >= 0 && trialInfo.daysLeft <= 1 && (
             <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
               ⏳ Deneme süreniz {trialInfo.daysLeft === 0 ? "bugün" : "yarın"} doluyor
-              {trialInfo.trialEndsAt ? ` (${formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true })})` : ""}. Kesintisiz devam etmek için lisans satın alın.
+              {trialInfo.trialEndsAt ? ` (${formatTrialDateTR(trialInfo.trialEndsAt, { withTime: true })})` : ""}.{isNativeApp() ? "" : " Kesintisiz devam etmek için lisans satın alın."}
             </div>
           )}
           {realRole === "super_admin" && isActingAsTenant && trialInfo?.isExpired && (

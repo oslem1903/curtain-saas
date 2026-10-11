@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.billing_plans (
   price_minor integer NOT NULL CHECK (price_minor > 0),
   currency text NOT NULL DEFAULT 'TRY',
   package_code text NOT NULL,
+  iyzico_plan_ref text,
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -223,6 +224,42 @@ BEGIN
 END
 $fn$;
 
+
+-- Odeme formu tamamlandi ama tahsilat henuz dogrulanmadi: yalnizca BEKLEYEN kayit (ERISIM VERMEZ).
+CREATE OR REPLACE FUNCTION public.billing_register_pending(
+  p_channel text, p_company_id uuid, p_plan_code text, p_provider_subscription_ref text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+DECLARE v_id uuid;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'PERDEPRO_FORBIDDEN: yalnizca sunucu cagrisi'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.billing_plans WHERE code = p_plan_code AND is_active) THEN
+    RAISE EXCEPTION 'PERDEPRO_NOT_FOUND: plan';
+  END IF;
+  SELECT id INTO v_id FROM public.billing_subscriptions
+   WHERE channel = p_channel AND provider_subscription_ref = p_provider_subscription_ref;
+  IF v_id IS NOT NULL THEN RETURN jsonb_build_object('status','exists','subscription_id',v_id); END IF;
+  SELECT id INTO v_id FROM public.billing_subscriptions
+   WHERE company_id = p_company_id AND status IN ('pending','active','past_due') FOR UPDATE;
+  IF v_id IS NOT NULL THEN
+    -- Canli abonelik zaten var: yeni kanal referansi baglanir, durum DEGISMEZ (erisim acilmaz).
+    UPDATE public.billing_subscriptions
+       SET provider_subscription_ref = coalesce(provider_subscription_ref, p_provider_subscription_ref), updated_at = now()
+     WHERE id = v_id AND status = 'pending';
+    RETURN jsonb_build_object('status','exists_live','subscription_id',v_id);
+  END IF;
+  INSERT INTO public.billing_subscriptions(company_id, plan_code, channel, provider_subscription_ref, status)
+  VALUES (p_company_id, p_plan_code, p_channel, p_provider_subscription_ref, 'pending') RETURNING id INTO v_id;
+  RETURN jsonb_build_object('status','pending','subscription_id',v_id);
+END
+$fn$;
+
+-- Webhook'tan gelen abonelik referansindan firmayi bulur (yalnizca sunucu).
+CREATE OR REPLACE FUNCTION public.billing_lookup_subscription(p_channel text, p_provider_subscription_ref text)
+RETURNS TABLE(company_id uuid, plan_code text, status text) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $fn$
+  SELECT s.company_id, s.plan_code, s.status FROM public.billing_subscriptions s
+   WHERE s.channel = p_channel AND s.provider_subscription_ref = p_provider_subscription_ref LIMIT 1
+$fn$;
+
 REVOKE ALL ON FUNCTION public.billing_apply_charge(text,text,uuid,text,text,integer,text,text,jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.billing_record_failure(text,text,uuid,text,jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.billing_apply_refund(text,text,uuid,text,jsonb) FROM PUBLIC, anon, authenticated;
@@ -231,6 +268,10 @@ GRANT EXECUTE ON FUNCTION public.billing_apply_charge(text,text,uuid,text,text,i
 GRANT EXECUTE ON FUNCTION public.billing_record_failure(text,text,uuid,text,jsonb) TO service_role;
 GRANT EXECUTE ON FUNCTION public.billing_apply_refund(text,text,uuid,text,jsonb) TO service_role;
 GRANT EXECUTE ON FUNCTION public.billing_apply_cancel(text,text,uuid,jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.billing_register_pending(text,uuid,text,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.billing_register_pending(text,uuid,text,text) TO service_role;
+REVOKE ALL ON FUNCTION public.billing_lookup_subscription(text,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.billing_lookup_subscription(text,text) TO service_role;
 
 NOTIFY pgrst, 'reload schema';
 COMMIT;

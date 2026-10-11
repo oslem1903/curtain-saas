@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { isNativeApp } from "../utils/nativeRuntime";
+import { isSpecialAccessActive } from "../utils/trialLicense";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -818,7 +820,7 @@ export const Dashboard = () => {
         />
       )}
 
-      {trialInfo && !trialInfo.isExpired && company?.subscription_status === "trial" && (
+      {trialInfo && !trialInfo.isExpired && company?.subscription_status === "trial" && !(company && isSpecialAccessActive(company as any)) && (
         <div
           className={cn(
             "rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border flex items-start gap-3",
@@ -840,7 +842,7 @@ export const Dashboard = () => {
                   : `Deneme süreniz ${trialInfo.daysLeft} gün kaldı`}
             </p>
             <p className="text-xs sm:text-sm font-medium mt-1 opacity-90">
-              Bitiş tarihi: {formatTrialDate(trialInfo.trialEndsAt)} — Kesintisiz devam etmek için lisans satın alın
+              Bitiş tarihi: {formatTrialDate(trialInfo.trialEndsAt)} {isNativeApp() ? "" : " — Kesintisiz devam etmek için lisans satın alın"}
             </p>
           </div>
           <a

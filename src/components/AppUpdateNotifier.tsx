@@ -29,9 +29,8 @@ type UpdateRow = {
     android_download_url: string | null;
 };
 
-// Bu release'in arayüz sürümü build ortamındaki eski .env değerlerinden
-// etkilenmemeli; paket sürümüyle aynı sabit değer kullanılmalı.
-const CURRENT_VERSION = "1.0.4.1";
+// Sürümün tek kaynağı package.json'dur; vite.config.ts bunu derleme sırasında gömer.
+const CURRENT_VERSION = String(import.meta.env.VITE_APP_VERSION || "0.0.0");
 
 function getDeviceId() {
     const key = "curtain_saas_device_id";

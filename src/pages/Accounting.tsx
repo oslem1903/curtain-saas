@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { isNativeApp } from "../utils/nativeRuntime";
 import {
     Download,
     TrendingUp,
@@ -1446,7 +1447,7 @@ export const Accounting = () => {
                     </div>
                 </div>
                 ) : (
-                <ProBadge onUpgrade={() => window.open("https://wa.me/905308427870?text=" + encodeURIComponent("Merhaba, PerdePRO kullanıcısıyım. Muhasebe & Finans modülü için Professional paketine geçmek istiyorum."), "_blank", "noreferrer")} />
+                <ProBadge onUpgrade={() => { if (!isNativeApp()) window.open("https://wa.me/905308427870?text=" + encodeURIComponent("Merhaba, PerdePRO kullanıcısıyım. Muhasebe & Finans modülü için Professional paketine geçmek istiyorum."), "_blank", "noreferrer"); }} />
                 )}
             </div>
 

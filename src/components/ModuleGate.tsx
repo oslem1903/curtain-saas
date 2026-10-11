@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { isNativeApp } from "../utils/nativeRuntime";
 import { LockKeyhole } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -57,17 +58,21 @@ export default function ModuleGate({ module, children }: { module: string; child
             <h2 className="text-xl font-black">{label} — Paketinizde Yok</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6">
                 Mevcut paketiniz: <span className="font-bold">{currentPlan}</span>.
-                {requiredPlan
-                    ? ` Bu modül için ${requiredPlan} paketine geçmeniz gerekiyor.`
-                    : " Bu modülü kullanmak için paketinizi yükseltin."}
+                {isNativeApp()
+                    ? " Bu modül paketinize dahil değil."
+                    : requiredPlan
+                        ? ` Bu modül için ${requiredPlan} paketine geçmeniz gerekiyor.`
+                        : " Bu modülü kullanmak için paketinizi yükseltin."}
             </p>
-            <button
-                type="button"
-                className="mt-5 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white hover:bg-slate-700 active:scale-95 transition"
-                onClick={() => window.open(getUpgradeUrl(module), "_blank", "noreferrer")}
-            >
-                Satın Al / Yükselt
-            </button>
+            {!isNativeApp() && (
+                <button
+                    type="button"
+                    className="mt-5 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white hover:bg-slate-700 active:scale-95 transition"
+                    onClick={() => window.open(getUpgradeUrl(module), "_blank", "noreferrer")}
+                >
+                    Satın Al / Yükselt
+                </button>
+            )}
         </div>
     );
 }

@@ -33,6 +33,9 @@ const AppointmentDetail = lazy(() => import("./pages/AppointmentDetail"));
 const BranchManagement = lazy(() => import("./pages/BranchManagement"));
 const CatalogManagement = lazy(() => import("./pages/CatalogManagement"));
 const Collections = lazy(() => import("./pages/Collections"));
+const Subscription = lazy(() => import("./pages/Subscription"));
+// Satis/odeme ekranlari entegrasyon dogrulanana kadar KAPALI (VITE_BILLING_ENABLED=1 ile test ortaminda acilir).
+const BILLING_ENABLED = import.meta.env.VITE_BILLING_ENABLED === "1";
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Customers = lazy(() => import("./pages/Customers"));
 const DeploymentHistory = lazy(() => import("./pages/DeploymentHistory"));
@@ -532,6 +535,16 @@ export default function App() {
                   </RoleGate>
                 }
               />
+                {BILLING_ENABLED && (
+                  <Route
+                    path="subscription"
+                    element={
+                      <RoleGate allow={["admin", "accountant"]}>
+                        <Subscription />
+                      </RoleGate>
+                    }
+                  />
+                )}
                 <Route
                 path="supplier-ledger"
                 element={
