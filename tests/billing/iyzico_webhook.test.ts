@@ -1,99 +1,116 @@
-// node --import tsx --test tests/billing/iyzico_webhook.test.ts   (veya: npx tsx --test ...)
+// npx tsx --test tests/billing/iyzico_webhook.test.ts
+// Yalnizca IS MANTIGI birim testleri (sahte bagimliliklarla). iyzico sandbox/canli akis testi DEGILDIR.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { iyzicoAuthHeaders, successfulPaymentId, toMinorUnits, verifySubscriptionWebhookSignature } from "../../supabase/functions/_shared/iyzico.ts";
-import { handleIyzicoSubscriptionWebhook, type WebhookDeps } from "../../supabase/functions/_shared/iyzico_webhook.ts";
+import { iyzicoAuthHeaders, isVerifiedSuccess, toMinorUnits, verifyHppWebhookSignature } from "../../supabase/functions/_shared/iyzico.ts";
+import { handleIyzicoWebhook, verifyAndApply, type Intent, type VerifyDeps } from "../../supabase/functions/_shared/iyzico_webhook.ts";
 
-const MERCHANT = "merchant-test";
 const SECRET = "secret-test-key";
-const sign = (b: Record<string, string>) =>
-  createHmac("sha256", SECRET).update(MERCHANT + SECRET + b.iyziEventType + b.subscriptionReferenceCode + b.orderReferenceCode + b.customerReferenceCode).digest("hex");
+const hpp = { iyziEventType: "CHECKOUT_FORM_AUTH", iyziPaymentId: 777, token: "tok-1", paymentConversationId: "intent-1", status: "SUCCESS" };
+const sign = (b: typeof hpp) =>
+  createHmac("sha256", SECRET).update(SECRET + b.iyziEventType + String(b.iyziPaymentId) + b.token + b.paymentConversationId + b.status).digest("hex");
 
-const okBody = { iyziEventType: "subscription.order.success", subscriptionReferenceCode: "sub-1", orderReferenceCode: "ord-1", customerReferenceCode: "cus-1" };
+const intent: Intent = { id: "intent-1", company_id: "co-1", plan_code: "solo_monthly", amount_minor: 99900, currency: "TRY", status: "created" };
+const goodDetail = { status: "success", paymentStatus: "SUCCESS", paymentId: 777, paidPrice: "999.0", currency: "TRY", conversationId: "intent-1", fraudStatus: 1, token: "tok-1" };
 
-function deps(over: Partial<WebhookDeps> = {}) {
-  const calls: { applied: unknown[]; failed: unknown[] } = { applied: [], failed: [] };
-  const d: WebhookDeps = {
-    merchantId: MERCHANT,
+function deps(over: Partial<VerifyDeps> = {}) {
+  const calls = { applied: [] as unknown[], marked: [] as string[] };
+  const d: VerifyDeps & { secretKey: string } = {
     secretKey: SECRET,
-    getSubscription: async () => ({ orders: [{ referenceCode: "ord-1", price: "999.00", currencyCode: "TRY", orderStatus: "SUCCESS", paymentAttempts: [{ paymentStatus: "SUCCESS", paymentId: 777 }] }] }),
-    lookupSubscription: async () => ({ company_id: "co-1", plan_code: "solo_monthly", status: "pending" }),
+    retrieveDetail: async () => ({ ...goodDetail }),
+    getIntent: async (id) => (id === "intent-1" ? intent : null),
     applyCharge: async (a) => { calls.applied.push(a); return { status: "applied" }; },
-    recordFailure: async (a) => { calls.failed.push(a); return { status: "recorded" }; },
+    markIntent: async (_id, s) => { calls.marked.push(s); },
     ...over,
   };
   return { d, calls };
 }
 
-test("gecerli imza dogrulanir, yanlis/eksik imza reddedilir", async () => {
-  assert.equal(await verifySubscriptionWebhookSignature(MERCHANT, SECRET, okBody, sign(okBody)), true);
-  assert.equal(await verifySubscriptionWebhookSignature(MERCHANT, SECRET, okBody, sign(okBody).toUpperCase()), true);
-  assert.equal(await verifySubscriptionWebhookSignature(MERCHANT, SECRET, okBody, "deadbeef"), false);
-  assert.equal(await verifySubscriptionWebhookSignature(MERCHANT, SECRET, okBody, null), false);
-  assert.equal(await verifySubscriptionWebhookSignature(MERCHANT, SECRET, { ...okBody, orderReferenceCode: "x" }, sign(okBody)), false);
+test("HPP imzasi: gecerli kabul, yanlis/eksik/oynanmis red", async () => {
+  assert.equal(await verifyHppWebhookSignature(SECRET, hpp, sign(hpp)), true);
+  assert.equal(await verifyHppWebhookSignature(SECRET, hpp, sign(hpp).toUpperCase()), true);
+  assert.equal(await verifyHppWebhookSignature(SECRET, hpp, "deadbeef"), false);
+  assert.equal(await verifyHppWebhookSignature(SECRET, hpp, null), false);
+  assert.equal(await verifyHppWebhookSignature(SECRET, { ...hpp, iyziPaymentId: 1 }, sign(hpp)), false);
 });
 
-test("imzasiz webhook 401 doner ve hicbir islem yapmaz", async () => {
+test("imzasiz webhook 401; hicbir islem yapilmaz", async () => {
   const { d, calls } = deps();
-  const r = await handleIyzicoSubscriptionWebhook(d, null, okBody);
+  const r = await handleIyzicoWebhook(d, null, hpp);
   assert.equal(r.http, 401);
-  assert.equal(calls.applied.length + calls.failed.length, 0);
+  assert.equal(calls.applied.length, 0);
 });
 
-test("dogrulanmis basari: tutar iyzico'dan geri sorgulanip kurus olarak uygulanir", async () => {
+test("dogrulanmis odeme: tutar iyzico'dan alinip niyetle eslesince uygulanir ve niyet 'paid' olur", async () => {
   const { d, calls } = deps();
-  const r = await handleIyzicoSubscriptionWebhook(d, sign(okBody), okBody);
+  const r = await handleIyzicoWebhook(d, sign(hpp), hpp);
   assert.equal(r.http, 200);
   assert.equal(calls.applied.length, 1);
-  const a = calls.applied[0] as Record<string, unknown>;
+  const a = calls.applied[0] as { amountMinor: number; paymentId: string; eventId: string; intent: Intent };
   assert.equal(a.amountMinor, 99900);
   assert.equal(a.paymentId, "777");
-  assert.equal(a.companyId, "co-1");
-  assert.equal(a.eventId, "subscription.order.success:ord-1");
+  assert.equal(a.eventId, "payment:777");
+  assert.equal(a.intent.company_id, "co-1");
+  assert.deepEqual(calls.marked, ["paid"]);
 });
 
-test("webhook govdesinde tutar/firma gonderilse bile kullanilmaz (yalnizca sunucu verisi)", async () => {
-  const { d, calls } = deps();
-  const evil = { ...okBody, price: "0.01", companyId: "other-company" } as typeof okBody;
-  await handleIyzicoSubscriptionWebhook(d, sign(evil), evil);
-  const a = calls.applied[0] as Record<string, unknown>;
-  assert.equal(a.amountMinor, 99900);
-  assert.equal(a.companyId, "co-1");
-});
-
-test("odeme iyzico'da dogrulanamazsa 503 (yeniden denenir) ve erisim acilmaz", async () => {
-  const { d, calls } = deps({ getSubscription: async () => ({ orders: [{ referenceCode: "ord-1", orderStatus: "WAITING", paymentAttempts: [] }] }) });
-  const r = await handleIyzicoSubscriptionWebhook(d, sign(okBody), okBody);
-  assert.equal(r.http, 503);
+test("tutar niyetle uyusmazsa REDDEDILIR, erisim acilmaz", async () => {
+  const { d, calls } = deps({ retrieveDetail: async () => ({ ...goodDetail, paidPrice: "1.00" }) });
+  const out = await verifyAndApply(d, "tok-1", "intent-1");
+  assert.equal(out.status, "rejected");
   assert.equal(calls.applied.length, 0);
 });
 
-test("basarisiz siparis olayi yalnizca kaydedilir, uygulanmaz", async () => {
-  const body = { ...okBody, iyziEventType: "subscription.order.failure" };
-  const { d, calls } = deps();
-  const r = await handleIyzicoSubscriptionWebhook(d, sign(body), body);
+test("para birimi uyusmazsa reddedilir", async () => {
+  const { d, calls } = deps({ retrieveDetail: async () => ({ ...goodDetail, currency: "USD" }) });
+  const out = await verifyAndApply(d, "tok-1");
+  assert.equal(out.status, "rejected");
+  assert.equal(calls.applied.length, 0);
+});
+
+test("fraudStatus onaysiz veya paymentStatus basarisiz ise erisim acilmaz", async () => {
+  for (const patch of [{ fraudStatus: 0 }, { fraudStatus: -1 }, { paymentStatus: "FAILURE", status: "failure" }]) {
+    const { d, calls } = deps({ retrieveDetail: async () => ({ ...goodDetail, ...patch }) });
+    const out = await verifyAndApply(d, "tok-1");
+    assert.equal(out.status, "not_verified");
+    assert.equal(calls.applied.length, 0);
+  }
+});
+
+test("dogrulanamayan odeme webhook'ta 503 (yeniden denenir); acik basarisizlik 200", async () => {
+  const pending = deps({ retrieveDetail: async () => ({ ...goodDetail, fraudStatus: 0 }) });
+  assert.equal((await handleIyzicoWebhook(pending.d, sign(hpp), hpp)).http, 503);
+  const failed = deps({ retrieveDetail: async () => ({ ...goodDetail, status: "failure", paymentStatus: "FAILURE" }) });
+  const r = await handleIyzicoWebhook(failed.d, sign(hpp), hpp);
   assert.equal(r.http, 200);
-  assert.equal(calls.failed.length, 1);
+  assert.deepEqual(failed.calls.marked, ["failed"]);
+});
+
+test("baska niyetin tokeni veya bilinmeyen niyet uygulanamaz", async () => {
+  const { d, calls } = deps({ retrieveDetail: async () => ({ ...goodDetail, conversationId: "intent-OTHER" }) });
+  const mismatch = await verifyAndApply(d, "tok-1", "intent-1");
+  assert.equal(mismatch.status, "unknown_intent");
+  const unknown = await verifyAndApply(deps().d, "tok-1", undefined);
+  assert.equal(unknown.status, "applied"); // intent-1 gercek
+  const { d: d2 } = deps({ retrieveDetail: async () => ({ ...goodDetail, conversationId: "yok" }) });
+  assert.equal((await verifyAndApply(d2, "tok-1")).status, "unknown_intent");
   assert.equal(calls.applied.length, 0);
 });
 
-test("bilinmeyen abonelik veya olay turu 200 ile yok sayilir", async () => {
-  const unknown = deps({ lookupSubscription: async () => null });
-  const r1 = await handleIyzicoSubscriptionWebhook(unknown.d, sign(okBody), okBody);
-  assert.equal(r1.http, 200); assert.equal(unknown.calls.applied.length, 0);
-  const other = { ...okBody, iyziEventType: "subscription.something" };
-  const r2 = await handleIyzicoSubscriptionWebhook(deps().d, sign(other), other);
-  assert.equal(r2.http, 200); assert.equal((r2.body as { status: string }).status, "ignored");
+test("tekrar bildirim: ayni odeme icin RPC 'duplicate' donerse yeniden uzatma yapilmaz (niyet paid isaretlenmez)", async () => {
+  const { d, calls } = deps({ applyCharge: async () => ({ status: "duplicate" }) });
+  const out = await verifyAndApply(d, "tok-1");
+  assert.equal(out.status, "duplicate");
+  assert.deepEqual(calls.marked, []);
 });
 
-test("yardimcilar: paymentId secimi, kurus cevirme, IYZWSv2 imza bicimi", async () => {
-  assert.equal(successfulPaymentId({ orderStatus: "SUCCESS", paymentAttempts: [{ paymentStatus: "FAILED" }, { paymentStatus: "SUCCESS", paymentId: "p1" }] }), "p1");
-  assert.equal(successfulPaymentId({ orderStatus: "FAILED", paymentAttempts: [{ paymentStatus: "SUCCESS", paymentId: "p1" }] }), null);
+test("yardimcilar: kurus cevirme, dogrulanmis basari, IYZWSv2 imza bicimi", async () => {
   assert.equal(toMinorUnits("999.90"), 99990);
   assert.ok(Number.isNaN(toMinorUnits("abc")));
-  const h = await iyzicoAuthHeaders("api", "sec", "/v2/x", '{"a":1}', "rnd1");
-  const expectedSig = createHmac("sha256", "sec").update('rnd1/v2/x{"a":1}').digest("hex");
-  assert.equal(h.Authorization, "IYZWSv2 " + Buffer.from(`apiKey:api&randomKey:rnd1&signature:${expectedSig}`).toString("base64"));
-  assert.equal(h["x-iyzi-rnd"], "rnd1");
+  assert.equal(isVerifiedSuccess(goodDetail), true);
+  assert.equal(isVerifiedSuccess({ ...goodDetail, paymentId: undefined }), false);
+  const h = await iyzicoAuthHeaders("api", "sec", "/p", '{"a":1}', "rnd1");
+  const sig = createHmac("sha256", "sec").update('rnd1/p{"a":1}').digest("hex");
+  assert.equal(h.Authorization, "IYZWSv2 " + Buffer.from(`apiKey:api&randomKey:rnd1&signature:${sig}`).toString("base64"));
 });

@@ -25,6 +25,7 @@ export default function Subscription() {
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [available, setAvailable] = useState(true);
+  const [accepted, setAccepted] = useState(false);
   const native = isNativeApp();
   const canPurchase = !native && memberRole === "admin";
   const paymentParam = params.get("payment");
@@ -74,16 +75,15 @@ export default function Subscription() {
     setBusyPlan(code);
     setError("");
     try {
-      const { data, error: fnError } = await supabase.functions.invoke("billing-checkout", { body: { company_id: company.id, plan_code: code } });
-      if (fnError || !data?.checkoutFormContent) {
+      const { data, error: fnError } = await supabase.functions.invoke("billing-checkout", {
+        body: { company_id: company.id, plan_code: code, accepted_terms: accepted },
+      });
+      const pageUrl = typeof data?.paymentPageUrl === "string" && /^https:\/\//.test(data.paymentPageUrl) ? data.paymentPageUrl : "";
+      if (fnError || !pageUrl) {
         setError("Ödeme sayfası şu anda başlatılamadı. Lütfen daha sonra tekrar deneyin.");
         return;
       }
-      const w = window.open("", "_blank");
-      if (!w) { setError("Açılır pencere engellendi. İzin verip tekrar deneyin."); return; }
-      w.document.open();
-      w.document.write(`<!doctype html><meta charset="utf-8"><title>Ödeme</title><div id="iyzipay-checkout-form" class="responsive">${data.checkoutFormContent}</div>`);
-      w.document.close();
+      window.open(pageUrl, "_blank", "noopener");
     } finally {
       setBusyPlan(null);
     }
@@ -126,12 +126,22 @@ export default function Subscription() {
               {special && !company?.pilot_until ? "Süresiz" : formatTrialDateTR(sub?.current_period_end ?? company?.license_expires_at ?? company?.trial_ends_at ?? null, { withTime: true })}
             </dd>
           </div>
-          <div><dt className="text-slate-500">Yenileme</dt><dd className="font-bold">{sub ? (sub.cancel_at_period_end ? "İptal edildi" : "Otomatik") : "-"}</dd></div>
+          <div><dt className="text-slate-500">Yenileme</dt><dd className="font-bold">Otomatik yenileme yok</dd></div>
         </dl>
         {trial.isExpired && !special && planStatus !== "active" && (
           <p className="mt-3 text-sm text-slate-600">Verilerinizi görüntüleyebilir ve dışa aktarabilirsiniz; yeni kayıt ve değişiklikler abonelik açılana kadar kapalıdır.</p>
         )}
       </section>
+
+      {canPurchase ? (
+        <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-900">
+          <input type="checkbox" className="mt-1" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+          <span>
+            Seçtiğim dönem için <b>tek seferlik</b> ödeme yapmayı onaylıyorum. Aboneliğim <b>otomatik yenilenmez</b>, kartım kaydedilmez;
+            süre dolmadan yeniden satın alabilirim.
+          </span>
+        </label>
+      ) : null}
 
       {canPurchase ? (
         <section className="grid gap-3 sm:grid-cols-2">
@@ -147,14 +157,14 @@ export default function Subscription() {
                 <div className="mt-2 text-2xl font-black">{money(p.price_minor, p.currency)}</div>
                 <button
                   type="button"
-                  disabled={Boolean(busyPlan)}
+                  disabled={Boolean(busyPlan) || !accepted}
                   onClick={() => void startCheckout(p.code)}
                   className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
                 >
                   {busyPlan === p.code ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
                   Ödemeye geç
                 </button>
-                <p className="mt-2 text-xs text-slate-500">Ödeme, onayınızla ve sağlayıcının güvenli sayfasında yapılır; kart bilgisi PerdePRO'da saklanmaz.</p>
+                <p className="mt-2 text-xs text-slate-500">Tek seferlik ödemedir; sağlayıcının güvenli sayfasında yapılır, kart bilgisi PerdePRO'da saklanmaz.</p>
               </div>
             ))
           )}

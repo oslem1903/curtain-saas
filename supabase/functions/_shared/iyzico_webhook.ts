@@ -1,65 +1,64 @@
-// Saf is mantigi: bagimliliklar (iyzico sorgusu, veritabani RPC'leri) disaridan verilir; boylece birim testlenebilir.
-import {
-  type IyzicoOrder,
-  type IyzicoSubscriptionWebhook,
-  successfulPaymentId,
-  toMinorUnits,
-  verifySubscriptionWebhookSignature,
-} from "./iyzico.ts";
+// Saf is mantigi (bagimliliklar disaridan verilir; birim testlenebilir).
+// callback (tarayici) ve webhook (sunucu) AYNI dogrulama yolundan gecer: erisim yalnizca sunucuda dogrulanmis odemeyle acilir.
+import { type CheckoutDetail, type IyzicoHppWebhook, isVerifiedSuccess, toMinorUnits, verifyHppWebhookSignature } from "./iyzico.ts";
 
-export type WebhookDeps = {
-  merchantId: string;
-  secretKey: string;
-  /** iyzico'dan abonelik detayini sunucu tarafinda geri sorgular (webhook govdesine guvenilmez). */
-  getSubscription: (subscriptionRef: string) => Promise<{ orders?: IyzicoOrder[] } | null>;
-  lookupSubscription: (subscriptionRef: string) => Promise<{ company_id: string; plan_code: string; status: string } | null>;
-  applyCharge: (a: {
-    eventId: string; companyId: string; planCode: string; paymentId: string; amountMinor: number; currency: string; subscriptionRef: string; payload: unknown;
-  }) => Promise<{ status: string; reason?: string }>;
-  recordFailure: (a: { eventId: string; companyId: string; reason: string; payload: unknown }) => Promise<{ status: string }>;
+export type Intent = { id: string; company_id: string; plan_code: string; amount_minor: number; currency: string; status: string };
+
+export type VerifyDeps = {
+  /** iyzico'dan odeme sonucunu token ile SUNUCU tarafinda sorgular. */
+  retrieveDetail: (token: string) => Promise<CheckoutDetail | null>;
+  getIntent: (intentId: string) => Promise<Intent | null>;
+  applyCharge: (a: { eventId: string; intent: Intent; paymentId: string; amountMinor: number; currency: string; payload: unknown }) => Promise<{ status: string; reason?: string }>;
+  markIntent: (intentId: string, status: "paid" | "failed") => Promise<void>;
 };
+
+export type Outcome = { status: "applied" | "duplicate" | "rejected" | "not_verified" | "unknown_intent"; reason?: string };
+
+/** token -> sunucuda dogrula -> niyetle (fiyat/firma/plan) esle -> uygula. Istemci/webhook govdesindeki tutar kullanilmaz. */
+export async function verifyAndApply(deps: VerifyDeps, token: string, expectedIntentId?: string): Promise<Outcome> {
+  if (!token) return { status: "not_verified", reason: "no_token" };
+  const detail = await deps.retrieveDetail(token);
+  if (!detail) return { status: "not_verified", reason: "provider_unreachable" };
+
+  const intentId = String(detail.conversationId ?? "");
+  if (!intentId || (expectedIntentId && expectedIntentId !== intentId)) return { status: "unknown_intent", reason: "conversation_mismatch" };
+  const intent = await deps.getIntent(intentId);
+  if (!intent) return { status: "unknown_intent" };
+
+  if (!isVerifiedSuccess(detail)) {
+    const failed = String(detail.status).toLowerCase() === "failure" || String(detail.paymentStatus).toUpperCase() === "FAILURE";
+    if (failed) await deps.markIntent(intent.id, "failed");
+    // Bekleyen/belirsiz: erisim ACILMAZ; webhook yeniden denemesi bekler.
+    return { status: "not_verified", reason: failed ? "payment_failed" : "pending" };
+  }
+
+  const paid = toMinorUnits(detail.paidPrice);
+  if (!Number.isFinite(paid) || paid !== intent.amount_minor || String(detail.currency ?? "").toUpperCase() !== intent.currency.toUpperCase()) {
+    return { status: "rejected", reason: "amount_mismatch" };
+  }
+  const paymentId = String(detail.paymentId);
+  const r = await deps.applyCharge({
+    eventId: `payment:${paymentId}`, intent, paymentId, amountMinor: paid, currency: intent.currency, payload: { paymentId, intentId: intent.id },
+  });
+  if (r.status === "applied") await deps.markIntent(intent.id, "paid");
+  return { status: r.status as Outcome["status"], reason: r.reason };
+}
 
 export type WebhookResult = { http: number; body: Record<string, unknown> };
 
-export async function handleIyzicoSubscriptionWebhook(
-  deps: WebhookDeps,
+export async function handleIyzicoWebhook(
+  deps: VerifyDeps & { secretKey: string },
   headerSignature: string | null,
-  body: IyzicoSubscriptionWebhook,
+  body: IyzicoHppWebhook,
 ): Promise<WebhookResult> {
-  const valid = await verifySubscriptionWebhookSignature(deps.merchantId, deps.secretKey, body, headerSignature);
-  if (!valid) return { http: 401, body: { error: "invalid_signature" } };
-
+  if (!(await verifyHppWebhookSignature(deps.secretKey, body, headerSignature))) return { http: 401, body: { error: "invalid_signature" } };
   const type = String(body.iyziEventType ?? "");
-  const subRef = String(body.subscriptionReferenceCode ?? "");
-  const orderRef = String(body.orderReferenceCode ?? "");
-  if (!subRef || !orderRef) return { http: 400, body: { error: "missing_reference" } };
-  if (type !== "subscription.order.success" && type !== "subscription.order.failure") {
-    // Taninmayan olay: 200 doner (yeniden deneme yagmuru olmasin), islem yapilmaz.
-    return { http: 200, body: { status: "ignored", type } };
-  }
+  if (type !== "CHECKOUT_FORM_AUTH" && type !== "PWI_TKN_AUTH") return { http: 200, body: { status: "ignored", type } };
+  const token = String(body.token ?? "");
+  if (!token) return { http: 400, body: { error: "missing_token" } };
 
-  const local = await deps.lookupSubscription(subRef);
-  if (!local) return { http: 200, body: { status: "ignored", reason: "unknown_subscription" } };
-  const eventId = `${type}:${orderRef}`;
-
-  if (type === "subscription.order.failure") {
-    const r = await deps.recordFailure({ eventId, companyId: local.company_id, reason: "order_failure", payload: body });
-    return { http: 200, body: { status: r.status } };
-  }
-
-  // Basari: tutar/durum iyzico'dan geri sorgulanir; istemci/webhook govdesi tutar belirleyemez.
-  const detail = await deps.getSubscription(subRef);
-  const order = detail?.orders?.find((o) => o.referenceCode === orderRef);
-  const paymentId = successfulPaymentId(order);
-  if (!order || !paymentId) {
-    // Henuz dogrulanamadi: 5xx -> iyzico yeniden dener (erisim ACILMAZ).
-    return { http: 503, body: { status: "not_verified" } };
-  }
-  const amountMinor = toMinorUnits(order.price);
-  if (!Number.isFinite(amountMinor)) return { http: 200, body: { status: "rejected", reason: "bad_amount" } };
-  const r = await deps.applyCharge({
-    eventId, companyId: local.company_id, planCode: local.plan_code, paymentId, amountMinor,
-    currency: String(order.currencyCode ?? "TRY"), subscriptionRef: subRef, payload: body,
-  });
-  return { http: 200, body: { status: r.status, reason: r.reason } };
+  const out = await verifyAndApply(deps, token, body.paymentConversationId ? String(body.paymentConversationId) : undefined);
+  // Dogrulanamadi/bekliyor: 503 -> iyzico 15 dk arayla yeniden dener (erisim acilmaz).
+  if (out.status === "not_verified" && out.reason !== "payment_failed") return { http: 503, body: out };
+  return { http: 200, body: out };
 }

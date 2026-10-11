@@ -33,9 +33,11 @@ npx supabase functions deploy billing-webhook-iyzico --no-verify-jwt
 ```
 Gizli değerler (kendi terminalinizde; sohbete yazmayın):
 ```powershell
-npx supabase secrets set IYZICO_API_KEY=... IYZICO_SECRET_KEY=... IYZICO_MERCHANT_ID=... BILLING_ENABLED=1 APP_PUBLIC_URL=https://<test-site> IYZICO_BASE_URL=https://sandbox-api.iyzipay.com
+npx supabase secrets set IYZICO_API_KEY=... IYZICO_SECRET_KEY=... IYZICO_BASE_URL=<sandbox-adresi> BILLING_ENABLED=1 APP_PUBLIC_URL=https://<test-site>
 ```
-(`IYZICO_BASE_URL` sandbox adresi iyzico belgelerinden doğrulanmalıdır; varsayılan yalnızca sandbox'tır, canlı adres bilinçli verilir.)
+`IYZICO_BASE_URL` zorunludur (varsayılan yok). iyzico'nun resmi sayfaları yalnızca canlı adresi (`api.iyzipay.com`) gösteriyor; **sandbox adresini iyzico sandbox panelinden/destekten doğrulayın**, canlı adresi test ortamına vermeyin.
+
+Sandbox panelinde: Ayarlar → İşyeri Bildirimleri → webhook URL'si `https://<test-proje>.supabase.co/functions/v1/billing-webhook-iyzico`; imzalı bildirim (`X-IYZ-SIGNATURE-V3`) için entegrasyon@iyzico.com ile etkinleştirme.
 
 ## Test sitesi
 Vercel'de ayrı bir **Preview** ortam değişkeni seti (yalnızca `staging` dalı için): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (test projesinin), `VITE_BILLING_ENABLED=1`. Üretim projelerinin değişkenlerine dokunulmaz.
@@ -45,4 +47,4 @@ Vercel'de ayrı bir **Preview** ortam değişkeni seti (yalnızca `staging` dal�
 
 ## Gerçek uçtan uca test (hazır olunca)
 `scripts\staging\e2e-staging.mjs` — ortam değişkenleri `STAGING_URL`, `STAGING_SERVICE_KEY`, `STAGING_ANON_KEY` (kendi terminalinizde).
-Adımlar: 7 gün kilidi (doğrudan API) → iyzico sandbox ödeme (elle) → doğrulanmış webhook → erişim açılması → tekrar bildirim (çift uzatma yok).
+Adımlar: 7 gün kilidi (doğrudan API) → açık onay olmadan ödeme başlamaz → iyzico sandbox tek seferlik ödeme (elle) → doğrulanmış webhook/callback → erişim açılması → tek ödeme kaydı.

@@ -115,25 +115,27 @@ SET LOCAL ROLE service_role;
 SELECT public.billing_apply_charge('iyzico','evt-susp','32000000-0000-0000-0000-000000000103','solo_monthly','pay-s',99900,'TRY') AS sp \gset
 RESET ROLE;
 SELECT pg_temp.ok(:'sp'::jsonb->>'reason'='company_suspended','suspended company not reactivated by payment');
--- 10) bekleyen kayit (odeme formu bitti, tahsilat dogrulanmadi): erisim ACMAZ; ref ile firma bulunur; tekrar mukerrer yaratmaz
-INSERT INTO public.companies(id,name,plan_status,max_users,trial_ends_at) VALUES ('32000000-0000-0000-0000-000000000104','Pending Co','trial',5,now()-interval '1 day');
+-- 10) satin alma niyeti: fiyat sunucuda sabitlenir; istemci cagiramaz; niyet tek basina erisim ACMAZ
+INSERT INTO public.companies(id,name,plan_status,max_users,trial_ends_at) VALUES ('32000000-0000-0000-0000-000000000104','Intent Co','trial',5,now()-interval '1 day');
 SELECT set_config('request.jwt.claim.sub','32000000-0000-0000-0000-000000000001',true);
 SET LOCAL ROLE authenticated;
-SELECT pg_temp.err($q$SELECT public.billing_register_pending('iyzico','32000000-0000-0000-0000-000000000104','solo_monthly','sub-pend')$q$,'permission denied');
-SELECT pg_temp.err($q$SELECT * FROM public.billing_lookup_subscription('iyzico','sub-pend')$q$,'permission denied');
+SELECT pg_temp.err($q$SELECT public.billing_create_intent('iyzico','32000000-0000-0000-0000-000000000104','solo_monthly',NULL)$q$,'permission denied');
+SELECT pg_temp.err($q$SELECT * FROM public.billing_get_intent(gen_random_uuid())$q$,'permission denied');
+SELECT pg_temp.err($q$UPDATE public.billing_intents SET status='paid'$q$,'permission denied');
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub','',true);
 SET LOCAL ROLE service_role;
-SELECT public.billing_register_pending('iyzico','32000000-0000-0000-0000-000000000104','solo_monthly','sub-pend') AS pr1 \gset
-SELECT public.billing_register_pending('iyzico','32000000-0000-0000-0000-000000000104','solo_monthly','sub-pend') AS pr2 \gset
-SELECT company_id AS lk_company FROM public.billing_lookup_subscription('iyzico','sub-pend') \gset
+SELECT public.billing_create_intent('iyzico','32000000-0000-0000-0000-000000000104','solo_monthly',NULL) AS it \gset
 RESET ROLE;
-SELECT pg_temp.ok(:'pr1'::jsonb->>'status'='pending' AND :'pr2'::jsonb->>'status'='exists','pending registered once');
-SELECT pg_temp.ok(NOT public.company_subscription_allows_write('32000000-0000-0000-0000-000000000104'),'pending subscription gives NO access');
-SELECT pg_temp.ok(:'lk_company'='32000000-0000-0000-0000-000000000104','lookup maps provider ref to company');
+SELECT (:'it'::jsonb->>'intent_id')::uuid AS iid \gset
+SELECT pg_temp.ok((:'it'::jsonb->>'amount_minor')::int=99900 AND :'it'::jsonb->>'currency'='TRY','intent price comes from server plan');
+SELECT pg_temp.ok(NOT public.company_subscription_allows_write('32000000-0000-0000-0000-000000000104'),'intent alone gives NO access');
 SET LOCAL ROLE service_role;
-SELECT public.billing_apply_charge('iyzico','subscription.order.success:ord-9','32000000-0000-0000-0000-000000000104','solo_monthly','pay-9',99900,'TRY','sub-pend') AS pc \gset
+SELECT public.billing_apply_charge('iyzico','payment:pay-9','32000000-0000-0000-0000-000000000104','solo_monthly','pay-9',99900,'TRY',NULL) AS pc \gset
+SELECT public.billing_mark_intent(:'iid'::uuid,'paid');
+SELECT public.billing_mark_intent(:'iid'::uuid,'failed');
 RESET ROLE;
-SELECT pg_temp.ok(:'pc'::jsonb->>'status'='applied' AND public.company_subscription_allows_write('32000000-0000-0000-0000-000000000104'),'verified charge on pending subscription opens access');
-SELECT pg_temp.ok((SELECT count(*)=1 FROM public.billing_subscriptions WHERE company_id='32000000-0000-0000-0000-000000000104' AND status='active'),'pending became the single active subscription');
+SELECT pg_temp.ok(:'pc'::jsonb->>'status'='applied' AND public.company_subscription_allows_write('32000000-0000-0000-0000-000000000104'),'verified one-time payment opens access');
+SELECT pg_temp.ok((SELECT status='paid' FROM public.billing_intents WHERE id=:'iid'::uuid),'paid intent cannot be flipped to failed');
+SELECT pg_temp.ok((SELECT license_expires_at BETWEEN now()+interval '27 days' AND now()+interval '32 days' FROM public.companies WHERE id='32000000-0000-0000-0000-000000000104'),'one period only, no auto renewal');
 ROLLBACK;

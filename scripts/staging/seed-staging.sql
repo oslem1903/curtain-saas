@@ -4,9 +4,9 @@ INSERT INTO public.self_signup_settings (id, enabled, trial_days)
 VALUES (1, true, 7)
 ON CONFLICT (id) DO UPDATE SET trial_days = 7;
 
--- Plan fiyatlari TEST degeridir; iyzico_plan_ref iyzico SANDBOX panelinde olusturulan plan referans kodlariyla doldurulur.
-INSERT INTO public.billing_plans (code, name, period, price_minor, currency, package_code, iyzico_plan_ref)
+-- Plan fiyatlari TEST degeridir (kurus). iyzico tarafinda plan/urun kodu GEREKMEZ: tek seferlik odemede fiyat sunucudan gelir.
+INSERT INTO public.billing_plans (code, name, period, price_minor, currency, package_code)
 VALUES
-  ('solo_monthly', 'Solo Perdeci — Aylık', 'month', 99900,  'TRY', 'solo', NULL),
-  ('solo_yearly',  'Solo Perdeci — Yıllık', 'year',  999000, 'TRY', 'solo', NULL)
+  ('solo_monthly', 'Solo Perdeci — Aylık', 'month', 99900,  'TRY', 'solo'),
+  ('solo_yearly',  'Solo Perdeci — Yıllık', 'year',  999000, 'TRY', 'solo')
 ON CONFLICT (code) DO NOTHING;
