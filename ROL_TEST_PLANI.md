@@ -120,8 +120,11 @@ Her rol için ayrı bir tarayıcı profili / gizli pencere kullanın ki oturumla
 >   `E2E_B_EMAIL`, `E2E_B_PASSWORD` olarak konur (dosya Git'e girmez), sonra
 >   `node scripts/verify-storage-isolation.mjs`. Betik hesapları doğrulayıp (super admin değil,
 >   tek firma, firma adı "Test…"/"ZZ QA…") kendi yüklediği nesnelerle çapraz erişimi dener ve temizler.
-> - Bucket `public` bayrağı ve `storage.objects` politika listesi proje yönetimi erişimi
->   olmadan kontrol edilemedi (`supabase_storage_inspect_readonly.sql` çalıştırılmalı).
+> - **DB düzeyi DOĞRULANDI (2026-10-12, salt-okunur, yetkili hesapla):** 7 bucket `public=false`;
+>   `storage.objects` üzerinde yalnızca 4 `perdepro_objects_*` politikası, hepsi yalnızca
+>   `authenticated`; RLS açık; 74 nesnenin tamamının firma uuid'si yoldan çözülüyor.
+>   Kalan: iki gerçek oturumla çapraz erişim testi (8.4) — test hesapları oluşturuldu ama
+>   e-posta onayı bekliyor (bkz. QA_RAPOR_2 sonundaki güncelleme).
 
 ## 9. Bağlantı / dayanıklılık
 
