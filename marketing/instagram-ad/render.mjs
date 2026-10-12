@@ -3,12 +3,18 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 const FFMPEG = 'C:/Users/Oslem/AppData/Local/CapCut/Apps/9.5.0.4050/ffmpeg.exe';
-const root = path.resolve('.');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const publicDir = path.resolve(here, '../../public');
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
+const within = (base, p) => p === base || p.startsWith(base + path.sep);
 const srv = http.createServer((q, r) => {
-  const p = path.join(root, decodeURIComponent(q.url.split('?')[0]));
-  if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { r.writeHead(404); return r.end(); }
+  const url = decodeURIComponent(q.url.split('?')[0]);
+  // Yalnizca reklam klasoru ve repo public/ klasoru sunulur (kok dizin, .env vb. ASLA).
+  const [base, rel] = url.startsWith('/public/') ? [publicDir, url.slice('/public/'.length)] : [here, url.slice(1)];
+  const p = path.resolve(base, rel);
+  if (!within(base, p) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { r.writeHead(404); return r.end(); }
   r.writeHead(200, { 'content-type': mime[path.extname(p)] || 'application/octet-stream' });
   fs.createReadStream(p).pipe(r);
 }).listen(5201, '127.0.0.1');

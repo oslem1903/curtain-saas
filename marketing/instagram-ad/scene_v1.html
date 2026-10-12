@@ -7,7 +7,7 @@ const W=1080,H=1920,DUR=30;
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const FONT='"Segoe UI Variable Display","Segoe UI",Arial,sans-serif';
 const C={bg0:'#04202f',bg1:'#0a3a55',teal:'#22d3d6',teal2:'#13a9b8',white:'#ffffff',mute:'#a9c7d3',card:'#f3fafb',ink:'#0b2f44',note:['#fff6c9','#ffffff','#d7f4f6','#ffe3d0','#e8e4ff']};
-const logo=new Image();let logoReady=false;logo.onload=()=>logoReady=true;logo.src='logo.png';
+const logo=new Image();let logoReady=false;logo.onload=()=>logoReady=true;logo.src='../../public/perdepro-email-logo.png';
 const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,x));
 const seg=(t,a,b)=>clamp((t-a)/(b-a));
 const eo=x=>1-Math.pow(1-x,3), eio=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
