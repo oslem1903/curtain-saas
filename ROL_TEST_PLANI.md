@@ -112,9 +112,14 @@ Her rol için ayrı bir tarayıcı profili / gizli pencere kullanın ki oturumla
 | 8.3 | Tahsilat, cari, tedarikçi, bildirim | Karışma yok | |
 | 8.4 | **Fotoğraf** — B'nin fotoğraf adresini A'da aç | Erişilemez | |
 
-> ⚠️ 8.4 şu anda **BAŞARISIZ OLUR**. Storage bucket'ları hâlâ public
-> (bkz. `supabase_storage_tenant_isolation.sql`). Kod tarafı imzalı adrese
-> geçirildi; o SQL uygulanana kadar eski public adresler çalışmaya devam eder.
+> **Güncelleme 2026-10-12** (önceki not: "8.4 BAŞARISIZ OLUR, bucket'lar public" — artık geçersiz).
+> - Anonim erişim kapalı: 7 bucket'ta anon listeleme 0 kayıt, public indirme HTTP 400
+>   (`node scripts/verify-storage-isolation.mjs`, 14/14 PASS).
+> - **8.4 henüz iki gerçek oturumla DOĞRULANMADI** (firmalar arası: A'nın oturumuyla B'nin
+>   dosyası). Bunu çalıştırmak için iki ayrı test firmasının kullanıcı token'ı gerekir:
+>   `A_TOKEN=… A_COMPANY=… B_COMPANY=… node scripts/verify-storage-isolation.mjs`.
+> - Bucket `public` bayrağı ve `storage.objects` politika listesi proje yönetimi erişimi
+>   olmadan kontrol edilemedi (`supabase_storage_inspect_readonly.sql` çalıştırılmalı).
 
 ## 9. Bağlantı / dayanıklılık
 

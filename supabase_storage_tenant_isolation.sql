@@ -1,7 +1,10 @@
 -- =============================================================================
 -- PerdePRO — Storage (fotoğraf/görsel/ek dosya) firma izolasyonu
 --
--- !!! HENÜZ ÇALIŞTIRILMADI. Aşağıdaki "ÖNCE OKU"yu okumadan çalıştırmayın. !!!
+-- !!! Durum notu (2026-10-12): canlıda uygulanmış görünüyor (dce8a47 mesajı + anon
+-- !!! yoklama: listeleme 0, public indirme 400). Yeniden çalıştırmadan ÖNCE
+-- !!! supabase_storage_inspect_readonly.sql ile güncel durumu doğrulayın.
+-- !!! Aşağıdaki "ÖNCE OKU"yu okumadan çalıştırmayın. !!!
 --
 -- =============================================================================
 -- TESPİT (14.09.2026, CANLI üretim projesi ffhmzlcsgsgjonqqhgqq)

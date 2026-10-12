@@ -443,3 +443,19 @@ ONAYI DEĞİL.
 - Mobil (Android/Capacitor) build ve Google Play hazırlığı: HENÜZ BAŞLANMADI.
 - Gerçek tarayıcı E2E (sipariş/teklif/perde hesaplama/tahsilat/montaj akışları): oturum yenilenince
   yapılacak.
+
+## 16. GÜNCELLEME (2026-10-12) — bu dosyadaki bazı "UYGULANMADI" ifadeleri artık geçersiz
+Yukarıdaki bölümler 09 Eylül anının kaydıdır; aşağıdaki satırlar sonraki gelişmelerle eskidi.
+Tarihçeyi bozmamak için metin değiştirilmedi, düzeltme burada tutuluyor.
+
+| Eski ifade | Güncel durum | Kanıt düzeyi |
+|---|---|---|
+| Satır 32-33, 429: migration 011 + test-firma backfill "HENÜZ ÇALIŞTIRILMADI" | `dce8a47` (2026-09-16) mesajı migration 011'in uygulandığını belirtiyor | Yalnızca commit mesajı; canlı DB'den **doğrulanmadı** |
+| Satır 151, 429: migration 012 "HENÜZ ÇALIŞTIRILMADI" | `dce8a47`: 012 uygulandı | Yalnızca commit mesajı; **doğrulanmadı** |
+| Satır 429: migration 013 onay bekliyor | `dce8a47`: 013 uygulandı (check_subscription_active plan_status okuyor) | Yalnızca commit mesajı; **doğrulanmadı** |
+| Storage bucket'ları public (14.09 bulgusu) | Anon listeleme 0 kayıt, public indirme 400 (7 bucket) | Canlı anon yoklama 2026-10-12, `scripts/verify-storage-isolation.mjs` |
+| Satır 425-428: personel kartı sıradaki adım | Hâlâ yapılmadı | — |
+
+Not: 011-013'ün canlı DB'de var olduğunu kanıtlamak için proje yönetimi erişimi gerekir
+(`pg_get_functiondef('public.check_subscription_active(uuid)'::regprocedure)` ve
+`supabase_migration_012_*.sql` içindeki doğrulama sorguları). Bu oturumda o erişim yoktu.
