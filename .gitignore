@@ -66,3 +66,10 @@ android/app/build.gradle.bom-yedek
 
 # Store/installer release artifacts (aab/apk/exe, 100+ MB) — build outputs, not source
 store-release-*/
+
+# Marketing: kaynak scriptler/metinler takipte; render edilmis medya ve yakalanan kareler degil (~230 MB)
+marketing/**/*.mp4
+marketing/**/*.webm
+marketing/**/*.wav
+marketing/**/*.png
+marketing/**/*.jpg
