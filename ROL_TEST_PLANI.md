@@ -116,8 +116,10 @@ Her rol için ayrı bir tarayıcı profili / gizli pencere kullanın ki oturumla
 > - Anonim erişim kapalı: 7 bucket'ta anon listeleme 0 kayıt, public indirme HTTP 400
 >   (`node scripts/verify-storage-isolation.mjs`, 14/14 PASS).
 > - **8.4 henüz iki gerçek oturumla DOĞRULANMADI** (firmalar arası: A'nın oturumuyla B'nin
->   dosyası). Bunu çalıştırmak için iki ayrı test firmasının kullanıcı token'ı gerekir:
->   `A_TOKEN=… A_COMPANY=… B_COMPANY=… node scripts/verify-storage-isolation.mjs`.
+>   dosyası). İki ayrılmış test hesabı `.env.e2e` içine `E2E_A_EMAIL`, `E2E_A_PASSWORD`,
+>   `E2E_B_EMAIL`, `E2E_B_PASSWORD` olarak konur (dosya Git'e girmez), sonra
+>   `node scripts/verify-storage-isolation.mjs`. Betik hesapları doğrulayıp (super admin değil,
+>   tek firma, firma adı "Test…"/"ZZ QA…") kendi yüklediği nesnelerle çapraz erişimi dener ve temizler.
 > - Bucket `public` bayrağı ve `storage.objects` politika listesi proje yönetimi erişimi
 >   olmadan kontrol edilemedi (`supabase_storage_inspect_readonly.sql` çalıştırılmalı).
 
