@@ -63,3 +63,6 @@ _qa_out.txt
 .__wtest
 SHA256SUMS.txt
 android/app/build.gradle.bom-yedek
+
+# Store/installer release artifacts (aab/apk/exe, 100+ MB) — build outputs, not source
+store-release-*/
