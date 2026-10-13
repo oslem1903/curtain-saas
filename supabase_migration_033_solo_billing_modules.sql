@@ -315,6 +315,17 @@ GRANT EXECUTE ON FUNCTION public.billing_is_test_company(uuid) TO service_role;
 -- ---------------------------------------------------------------------------
 -- 3) Paket modulleri: istemcideki AuthContext ile ayni karar
 -- ---------------------------------------------------------------------------
+-- Modul korumasi YALNIZCA bu andan SONRA olusturulan firmalara uygulanir. Mevcut firmalar
+-- (musteri, pilot, Apple Test, mevcut denemeler) geriye donuk etkilenmez: mevcut fatura/kartela
+-- verilerini gizlemez ve yazma izinlerini degistirmez.
+CREATE TABLE IF NOT EXISTS public.module_enforcement (
+  id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  enforce_from timestamptz NOT NULL
+);
+INSERT INTO public.module_enforcement (id, enforce_from) VALUES (1, now()) ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.module_enforcement ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.module_enforcement FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.company_has_module(p_company_id uuid, p_module text)
 RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $fn$
 DECLARE
@@ -327,6 +338,8 @@ BEGIN
   IF auth.uid() IS NULL OR public.is_super_admin() THEN RETURN true; END IF;
   SELECT * INTO c FROM public.companies WHERE id = p_company_id;
   IF NOT FOUND THEN RETURN false; END IF;
+  -- Gecis kurali: koruma baslangicindan once olusturulan firmalar muaf.
+  IF c.created_at < (SELECT enforce_from FROM public.module_enforcement WHERE id = 1) THEN RETURN true; END IF;
 
   v_mods := coalesce(c.enabled_modules, ARRAY[]::text[]);
   IF array_length(v_mods, 1) IS NULL THEN

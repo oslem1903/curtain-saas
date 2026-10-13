@@ -20,7 +20,7 @@ DROP FUNCTION IF EXISTS public.billing_get_intent(uuid);
 DROP FUNCTION IF EXISTS public.billing_create_intent(text, uuid, text, uuid);
 DROP FUNCTION IF EXISTS public.billing_record_failure(text, text, uuid, text, jsonb);
 DROP FUNCTION IF EXISTS public.billing_apply_charge(text, text, uuid, text, text, integer, text, text, jsonb, boolean);
-DROP TABLE IF EXISTS public.billing_test_companies, public.billing_intents, public.billing_payments,
+DROP TABLE IF EXISTS public.module_enforcement, public.billing_test_companies, public.billing_intents, public.billing_payments,
   public.billing_events, public.billing_subscriptions, public.billing_plans;
 NOTIFY pgrst, 'reload schema';
 COMMIT;
