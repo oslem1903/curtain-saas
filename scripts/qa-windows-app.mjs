@@ -77,7 +77,8 @@ try {
   await page.waitForTimeout(3000);
   const sub = await page.locator('main').innerText().catch(() => '');
   rec('Abonelik ekrani acildi', /Abonelik/.test(sub), sub.slice(0, 60).replace(/\s+/g, ' '));
-  rec('Abonelik ekrani: otomatik yenileme yok bilgisi', /Otomatik yenileme yok|henüz etkin değil/i.test(sub));
+  rec('Abonelik ekrani: Acilisa Ozel Fiyatlar, 499 ve 4.990 TL, 2 ay avantajli', /Açılışa Özel Fiyatlar/.test(sub) && /499/.test(sub) && /4.990/.test(sub) && /2 ay avantajlı/.test(sub));
+  rec('Abonelik ekrani: odeme kapali (buton pasif)', /Ödeme yakında açılacak/.test(sub) && !/Ödemeye geç/.test(sub));
 
   rec('Sayfa hatasi (pageerror) yok', errors.length === 0, errors.join(' | '));
 } finally {
