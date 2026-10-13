@@ -20,8 +20,9 @@ Frontend yalnızca `company_subscription_access_allowed` ve `company_subscriptio
 Sunucu tarafı **yazma** koruması üretimde zaten `024/025`'teki `BEFORE INSERT/UPDATE/DELETE` tetikleyicileriyle
 (`enforce_company_subscription_write`) vardır.
 
-**Bu yüzden hazırlanan:** `supabase_migration_029a_subscription_rpcs_only.sql` — yalnızca iki RPC, 029'dan **birebir**
-(gövde md5 eşleşmesi doğrulandı: `92770fff…`, `13ccf7b3…`). Mevcut hiçbir nesneyi değiştirmez. Geri alma:
+**Bu yüzden hazırlanan:** `supabase_migration_029a_subscription_rpcs_only.sql` — yalnızca iki RPC. `access_allowed`
+029'dan **birebir** (md5 `92770fff…`); `snapshot` iki güvenlik düzeltmesiyle türetildi (md5 `49c628f6…`, bkz. §8).
+Mevcut hiçbir nesneyi değiştirmez. **Ürün kararı (kesin): tam 029 uygulanmaz.** Geri alma:
 `supabase_migration_029a_rollback.sql` (iki `DROP FUNCTION`). Tam 029'un kapsamı (SELECT kilidi, FORCE RLS) ayrıca
 tasarlanıp test edilmeden uygulanmamalıdır.
 
@@ -92,3 +93,59 @@ adı gösterilir). Beklenen: Apple Test (pilot, `trial_ends_at` 2026-10-31) → 
 | `*-ilk16.vercel.app` | Vercel SSO korumalı (erişim yok) |
 
 Kaynak: GitHub Deployments (`Production – oslem1903-curtain-saas`, `Production – curtain-saas`, son sha `5ee5425`).
+
+## 8. İkinci tur (2026-10-13): RPC/istemci incelemesi, düzeltmeler, yayın sürüm farkı
+
+**Erişim durumu:** Bu oturumda PerdePRO'ya yetkili Supabase oturumu YOKTU (Chrome OZI org'una düşüyor; "Lima" yok).
+Hiçbir şey uygulanmadı/değiştirilmedi; canlı karşılaştırma ve test adımları bekliyor.
+
+### 8.1 RPC gövdeleri ve yetkiler (statik inceleme)
+| Konu | Bulgu | Durum |
+|---|---|---|
+| `access_allowed` yetkisi | `REVOKE ... FROM PUBLIC, anon; GRANT ... TO authenticated`; çağıran süper admin veya firmanın aktif üyesi değilse **false** (hata değil) → başka firmanın aboneliği hakkında bilgi vermez | Uygun |
+| `snapshot` — NULL güvenliği | `is_super_admin()` profili olmayan kullanıcıda NULL döner; 029'daki `NOT is_super_admin() AND NOT EXISTS(...)` NULL olup `IF`'e girmezdi → **üyelik kontrolü atlanabilirdi** | `coalesce(...,false)` ile düzeltildi |
+| `snapshot` — varlık sızıntısı | Önce "firma var mı" (NOT_FOUND), sonra üyelik (FORBIDDEN): üye olmayan, firma id'sinin varlığını ayırt edebilirdi | Üyelik ÖNCE; var/yok aynı hata (42501) |
+| `false` sonucunun anlamı | Yalnızca "yazma kapalı". RPC hiçbir veri erişimini değiştirmez; SELECT politikalarına dokunmaz | Uygun |
+| Sınır koşulu | `access_allowed` `> now()`, 024/026 `allows_write` `>= now()` — yalnızca tam-an eşitlikte fark (pratik etkisiz) | Belgelendi |
+
+### 8.2 İstemci davranışı — ürün kararına AYKIRI bulgu ve düzeltme
+`AuthContext`/`Layout`, `access_allowed=false` iken uygulamayı **kilitlemez**, yalnızca salt-okunur moda alır
+(`setAppReadOnlyMode(true)`, durum `ready`; `lockReason` yalnızca bayrak). Ancak `supabaseClient.ts` `customFetch`
+salt-okunur modda **tüm POST'ları** engelliyordu. PostgREST RPC'leri ve Storage imzalama/listeleme de POST olduğu için:
+
+- `get_supplier_ledger` (Tedarikçi cari görüntüleme/PDF) ve `get_branch_stats` → süre bitince **bozulurdu**;
+- `createSignedUrl` (`POST /storage/v1/object/sign/…`) → fotoğraflar süre bitince **görüntülenemezdi**
+  (bucket'lar artık private; `SecureImage` imzasız adrese düşer).
+
+**Düzeltme:** `src/utils/readOnlyGuard.ts` (`isReadOnlyBlocked`) — GET/HEAD asla engellenmez; okuma RPC'leri
+(`get_supplier_ledger`, `get_branch_stats`) ve Storage `sign`/`list` izinli; INSERT/UPDATE/DELETE, yazan RPC'ler ve
+Storage yükleme/silme engelli. 6 yeni birim testi (`npm run test:calc`, toplam 38) geçti; `tsc -b` ve eslint temiz.
+
+### 8.3 Yazma koruması kapsamı (024/025)
+Statik: 029'un 45 tablosunun **tamamı** 024 (37 tablo) + 025 (8 tablo) `BEFORE INSERT/UPDATE/DELETE` tetikleyicileriyle
+kapsanıyor (`enforce_company_subscription_write`). Canlıda gerçekten kurulu olduğu ve **kapsam dışı `company_id`'li tablo**
+olup olmadığı `supabase_migration_029_live_diff_readonly.sql`'in `WRITE_GUARD_TRIGGER` / `UNGUARDED_COMPANY_TABLE`
+bölümleriyle doğrulanacak (**canlıda doğrulanmadı**).
+
+**Olası açık (taslak, UYGULANMADI):** Storage yazma politikaları (`perdepro_objects_insert/update/delete`) abonelik
+durumuna bakmıyor; tetikleyiciler yalnızca public tablolarda. `supabase_migration_029b_storage_write_guard.sql`
+yalnızca bu üç politikaya `company_subscription_allows_write(...)` ekler (SELECT'e ve `support-attachments`'a — destek
+sure bitince açık kalır — dokunmaz; FORCE RLS yok). Yalnızca doğrulama betiği süresi bitmiş QA firmasında yüklemenin
+engellenmediğini **kanıtlarsa** uygulanır.
+
+### 8.4 Yayındaki sürüm ve doğru Vercel projesi
+| | Yayındaki (production) | Yerel |
+|---|---|---|
+| Commit | `5ee5425` (master, 2026-10-04) | `release/1.0.14-access-trial7`, 18 commit ileride |
+| `package.json` sürümü | 1.0.12 (pakette `1.0.4.1` görünür: Vercel `VITE_APP_VERSION` eski değeri) | 1.0.14 |
+| `src/` farkı | — | 18 dosya, +934/−79 |
+| Abonelik RPC çağrısı | yok | var (029a eksikliğinde yedeğe düşer) |
+
+Vercel (scope `ilk16`, iki proje aynı repoyu derliyor):
+- `oslem1903-curtain-saas` → **çalışan**; `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_APP_VERSION` (Secret, 51 gün önce) Production+Preview.
+- `curtain-saas` → **boş sayfa**: `VITE_SUPABASE_URL` 2 gün önce eklendi (Config) ama son production derlemesi 10-04'te;
+  değişken derlemeden sonra geldiği için pakette URL yok. **Yeniden dağıtım (Redeploy) gerekir**; yeni `vite.config.ts`
+  korumasıyla (URL/anon eksikse derleme hata verir) tekrar bozulması engellenir.
+- `app.perdepro.com` iki projeye de atanmamış (NXDOMAIN).
+Bu üç madde (hangi proje canonical, domain atama, redeploy) **kalan yayın işidir**; bu oturumda değiştirilmedi.
+
