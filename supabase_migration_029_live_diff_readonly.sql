@@ -65,8 +65,25 @@ co AS (
                 ELSE c.trial_ends_at IS NOT NULL AND c.trial_ends_at > now() END))::text AS t
   FROM public.companies c
 ),
+stor AS (
+  SELECT 6 AS o, 'STORAGE_POLICY ' || policyname || ' | ' || cmd || ' | roles=' || roles::text
+         || ' | subscription_check=' || ((coalesce(qual,'') || coalesce(with_check,'')) ILIKE '%company_subscription%')::text AS t
+  FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects'
+),
+ung AS (
+  -- company_id'li ama yazma korumasi tetikleyicisi OLMAYAN public tablolar (kapsam kontrolu).
+  SELECT 7 AS o, 'UNGUARDED_COMPANY_TABLE ' || c.relname || ' rls=' || c.relrowsecurity::text AS t
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
+  WHERE c.relkind IN ('r','p')
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND p.proname LIKE 'enforce_company_subscription_write%')
+),
 r AS (
   SELECT * FROM fn UNION ALL SELECT * FROM guard UNION ALL SELECT * FROM pol
   UNION ALL SELECT * FROM pre UNION ALL SELECT * FROM co
+  UNION ALL SELECT * FROM stor UNION ALL SELECT * FROM ung
 )
 SELECT string_agg(t, E'\n' ORDER BY o, t) AS rapor FROM r;

@@ -8,7 +8,8 @@
 -- 45 tabloya FORCE ROW LEVEL SECURITY + RESTRICTIVE FOR ALL politika ekler. Guncel urun karari:
 -- sure bitince goruntuleme/disa aktarma ACIK, yazma sunucuda kapali (yazma korumasi 024/025'teki
 -- BEFORE INSERT/UPDATE/DELETE tetikleyicileriyle zaten vardir). Bu dosya 029'dan YALNIZCA iki
--- fonksiyonu BIREBIR alir (gövde md5 029 ile ayni: 92770fff..., 13ccf7b3...).
+-- fonksiyonu 029'dan alir: access_allowed BIREBIR (md5 92770fff...), snapshot iki guvenlik
+-- duzeltmesiyle turetilmistir (NULL-guvenligi, uyelik-once kontrol; gerekce fonksiyonun ustunde).
 --
 -- ETKI: Yeni nesne ekler; mevcut tablo/veri/politika/fonksiyon DEGISTIRMEZ. Surum 1.0.14
 --   istemcisi bu RPC'leri cagirir; yoksa yedek mantikla (isTrialExpired) calisir.
@@ -69,29 +70,45 @@ $fn$;
 REVOKE ALL ON FUNCTION public.company_subscription_access_allowed(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.company_subscription_access_allowed(uuid) TO authenticated;
 
--- ---- 029'dan birebir (satir 94-144): company_subscription_access_snapshot ----
+-- ---- company_subscription_access_snapshot: 029'dan TUREMIS (iki guvenlik duzeltmesiyle) ----
+-- 029 sürümündeki iki sorun düzeltildi:
+--  (1) NULL güvenliği: is_super_admin() profili olmayan kullanıcıda NULL döner; 029'daki
+--      "NOT is_super_admin() AND NOT EXISTS(...)" ifadesi NULL olup IF'e girmez ve kontrol atlanırdı.
+--      Burada coalesce(..., false) kullanılır.
+--  (2) Varlık sızıntısı: 029 önce "firma var mı" sorar (PERDEPRO_NOT_FOUND), sonra üyeliği; üye
+--      olmayan biri firma id'sinin var olup olmadığını ayırt edebilirdi. Burada ÜYELİK önce kontrol
+--      edilir; üye olmayan için var olan ve olmayan firma AYNI hatayı (42501) verir.
+-- Dönen JSON (company_id, access_allowed, access_kind, access_expires_at, server_time) 029 ile aynıdır.
+-- false sonucu yalnızca "yazma kapalı" demektir; görüntüleme/dışa aktarma bu fonksiyona bağlı değildir.
 CREATE OR REPLACE FUNCTION public.company_subscription_access_snapshot(p_company_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=public
 AS $fn$
 DECLARE
   v_company public.companies%ROWTYPE;
+  v_is_super boolean;
   v_special_active boolean;
   v_access_kind text;
   v_access_end timestamptz;
 BEGIN
-  IF auth.uid() IS NULL OR NOT public.is_super_admin() AND NOT EXISTS (
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'PERDEPRO_FORBIDDEN: Erişim durumu okunamadı.' USING ERRCODE='42501';
+  END IF;
+  v_is_super := coalesce(public.is_super_admin(), false);
+
+  IF NOT v_is_super AND NOT EXISTS (
     SELECT 1 FROM public.profiles p WHERE p.user_id=auth.uid() AND coalesce(p.is_active,true)
   ) THEN
     RAISE EXCEPTION 'PERDEPRO_FORBIDDEN: Erişim durumu okunamadı.' USING ERRCODE='42501';
   END IF;
-  SELECT * INTO v_company FROM public.companies WHERE id=p_company_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'PERDEPRO_NOT_FOUND: Firma bulunamadı.'; END IF;
-  IF NOT public.is_super_admin() AND NOT EXISTS (
+  IF NOT v_is_super AND NOT EXISTS (
     SELECT 1 FROM public.company_members m
     WHERE m.user_id=auth.uid() AND m.company_id=p_company_id AND coalesce(m.is_active,true)
   ) THEN
     RAISE EXCEPTION 'PERDEPRO_FORBIDDEN: Bu firmanın erişim durumu okunamaz.' USING ERRCODE='42501';
   END IF;
+
+  SELECT * INTO v_company FROM public.companies WHERE id=p_company_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PERDEPRO_NOT_FOUND: Firma bulunamadı.'; END IF;
 
   v_special_active := coalesce(v_company.is_pilot,false)
     AND (v_company.pilot_until IS NULL OR v_company.pilot_until>now());
