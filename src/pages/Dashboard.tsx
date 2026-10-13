@@ -379,7 +379,7 @@ function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any
 export const Dashboard = () => {
   const navigate = useNavigate();
   const { effectiveRole: role, realRole, viewingUserId } = useRole();
-  const { company, hasModule } = useAuth();
+  const { company, hasModule, readOnly } = useAuth();
   // Faz 2.6: Muhasebe modulu olan paketlerde "Tahsilatlar" mevcut /accounting
   // ekranina, olmayanlarda (Solo) yeni /collections ekranina yonlendirir.
   const collectionsTarget = useMemo(() => (hasModule("accounting") ? "/accounting" : "/collections"), [hasModule]);
@@ -751,7 +751,8 @@ export const Dashboard = () => {
     if (!company) return;
 
     const isAdmin = role === "admin" || realRole === "admin" || realRole === "super_admin";
-    const needsOnboarding = isAdmin && !company.onboarding_completed;
+    // Salt okunur (sure bitmis) hesapta sihirbaz tamamlanamaz (yazma kapali) ve icerigi kapatir.
+    const needsOnboarding = isAdmin && !company.onboarding_completed && !readOnly;
 
     if (needsOnboarding) {
       setShowOnboarding(true);
@@ -784,7 +785,7 @@ export const Dashboard = () => {
     }
 
     setTrialInfo(info);
-  }, [company, role, realRole]);
+  }, [company, role, realRole, readOnly]);
 
   const monthProfit = data.monthSales - data.monthCost;
   const supplierDueTotal = useMemo(() => [...data.supplierDue, ...data.supplierOverdue].reduce((sum, row) => sum + row.amount, 0), [data.supplierDue, data.supplierOverdue]);
