@@ -4,8 +4,8 @@
 |---|---|---|
 | Paket / Bundle ID | `com.curtainsaas.app` | `com.curtainsaas.app` |
 | Sürüm adı | 1.0.14 | 1.0.14 (`MARKETING_VERSION`) |
-| Sürüm kodu / build | **16** (`versionCode`) | **16** (`CURRENT_PROJECT_VERSION`) |
-| Önceki mağaza durumu | Play dahili test: 1.0.11 (kod 11) | TestFlight: 1.0.5 (build 1–3, Codemagic #11–#14) |
+| Sürüm kodu / build | **17** (`versionCode`) | **17** (`CURRENT_PROJECT_VERSION`) |
+| Önceki mağaza durumu | Play dahili test: 1.0.14 (kod 16, yanlış alan adı yedeği içerir) | TestFlight: 1.0.14 (build 16, aynı) |
 | Kaynak | `release/1.0.14-access-trial7` | aynı dal, Codemagic `perdepro-ios` iş akışı |
 
 ## Mağaza açıklaması (Türkçe, "Yenilikler")
