@@ -28,3 +28,25 @@
 ## Sürümde bulunan düzeltmelerin kaynağı
 Web 1.0.14 (production, commit `6d9ad37`) ile aynı kod tabanı: salt-okunur istemci koruması (`readOnlyGuard`),
 destek ekini talebe bağlayan RPC, onboarding sihirbazının salt-okunur hesapta açılmaması.
+
+## Yayın durumu (2026-10-13)
+
+| Hedef | Durum |
+|---|---|
+| Web production (`oslem1903-curtain-saas`) | Canlı, commit `6d9ad37`; mobil paketler aynı web kodunu içerir |
+| Google Play **dahili test** | **Yayında**: sürüm adı 1.0.14, **kod 16** (önceki: 1.0.11 / kod 11). AAB SHA-256 `b39615d9da1218df6b8f0a603ebe3a4c11aee3db1ffe4466826cda7857c4de6f`; kaynak commit `a895dd3` |
+| TestFlight | Codemagic **#15** (`perdepro-ios`, dal `release/1.0.14-access-trial7`, commit `a895dd3`, build 16) **kuyrukta** — Codemagic platformu "Degraded" |
+| Herkese açık mağaza (Play üretim / App Store) | **Gönderilmedi** (bilerek) |
+
+## app.perdepro.com (domain)
+- Vercel projesine eklendi (`oslem1903-curtain-saas`), doğrulama bekliyor.
+- DNS `natrohost.com` (Natro) üzerinde; Vercel'de DNS yönetimi yok. Eklenmesi gereken tek kayıt:
+
+  | Tür | Ad / Host | Değer | TTL |
+  |---|---|---|---|
+  | CNAME | `app` | `0aea56e7d0fe0ab2.vercel-dns-017.com.` | 3600 (veya varsayılan) |
+
+  (`cname.vercel-dns.com.` de kabul edilir.) Mevcut A / MX / TXT kayıtlarına dokunmayın; yalnızca `app` alt alanı eklenir.
+- Kayıt yayılınca Vercel HTTPS sertifikasını otomatik üretir. Sonrasında Supabase **Site URL**'i
+  `https://app.perdepro.com` yapın (yönlendirme izin listesine `https://app.perdepro.com/**` ve
+  `com.curtainsaas.app://**` zaten eklendi; geçersiz token ile doğrulandı).
