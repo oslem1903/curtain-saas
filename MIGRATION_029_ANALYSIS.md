@@ -1,6 +1,6 @@
 # Migration 029 — analiz, karar ve çalıştırma planı (2026-10-13)
 
-**Durum (2026-10-13 sonu):** tam 029 UYGULANMADI (kesin ürün kararı). **029a ve 029b üretime uygulandı** — bkz. §9.
+**Durum (2026-10-13 sonu):** tam 029 UYGULANMADI (kesin ürün kararı). **029a, 029b ve 029c üretime uygulandı; 1.0.14 production'da** — bkz. §9-§10.
 
 ## 1. Karar: 029 olduğu gibi değil, 029a (iki RPC)
 
@@ -199,6 +199,43 @@ Excel yedeği indirme geçti. **Bu bir yerel testtir; yayındaki sürümde henü
 
 ### 9.5 Yayın
 Sürüm: `package.json`=`package-lock.json`=Android `versionName`=derlenen paket **1.0.14** (eski `VITE_APP_VERSION` secret'ı
-artık yok sayılıyor). `git push` bu oturumda otomatik izin denetimi tarafından reddedildi; **release dalı push edilmedi,
-production'a yayınlanmadı, yayın sonrası canlı doğrulama yapılmadı.** `app.perdepro.com` DNS/domain işi açık.
+artık yok sayılıyor). (Bu paragraf §10 ile güncellendi: push ve yayın sonradan yapıldı.)
+
+## 10. Yayın ve canlı doğrulama (2026-10-13)
+
+**Push:** önceki ret Git sorunu değildi (0 geride, fast-forward, dry-run temiz); otomatik izin denetimi reddetmişti
+(gerekçe verilmedi). Kullanıcı sohbette açık izin verince `6d1456d..0b04c1b` ve `0b04c1b..d601f1f` normal push edildi (force yok).
+
+**Yayın:** `oslem1903-curtain-saas` Vercel projesi (kapsam `ilk16`). Yayın commit'i **`d601f1f`**; production dağıtımı
+`dpl_FxXpwRPfzcGP3EV1smxoLKV6H2SA` (Preview → `vercel promote`), alias `https://oslem1903-curtain-saas.vercel.app`.
+Doğrulama: canlı alias'taki **115 JS dosyasının tamamı** `d601f1f`'in yerel derlemesiyle bayt bayt aynı; paketlerde `1.0.14`
+var, eski `1.0.4.1` yok, Supabase `ffhmzlcsgsgjonqqhgqq`. Önceki production: `5ee5425` (1.0.12).
+
+**Yayın sırasında canlıda bulunan ek hatalar (düzeltildi):**
+| Bulgu | Düzeltme |
+|---|---|
+| `support_tickets` istemcide engelleniyordu (`SupportModal` POST) | `readOnlyGuard`: `support_tickets`, `support-attachments` yükleme, `create_support_ticket_as_locked_user` izinli |
+| Sunucuda `support_tickets` → `trg_support_tickets_tenant_write` → `enforce_tenant_write()` → `is_company_writable` bitmiş firmada **P0001** | **029c**: yalnız `support_tickets` için lisans kontrolü atlanır; `company_id` ve üyelik kontrolü korunur; diğer 23 tablo aynı |
+| Süresi bitmiş + onboarding tamamlanmamış hesapta sihirbaz tüm paneli kaplıyor, yazma kapalı olduğundan bitmiyor | `Dashboard`: salt-okunurken onboarding başlatılmaz |
+
+**Canlı test sonuçları (alias üzerinde, QA A/B, sabit farklı cihaz kimlikleri):**
+| Senaryo | Sonuç |
+|---|---|
+| Aktif: giriş, panel, müşteri yazma/silme, personel kartı→rol→kod→sil, e-posta yok | **Geçti (12/12)** |
+| Aktif (sunucu): RPC'ler, yetki, okuma/yazma, tedarikçi cari, Storage | **Geçti** |
+| Bitmiş (arayüz): giriş kilitlenmez, müşteri/tedarikçi/cari görünür, fotoğraf imzalı adres+indirme, Excel yedeği iner | **Geçti** |
+| Bitmiş (arayüz): istemci yazma ve yükleme engeli | **Geçti** |
+| Bitmiş: destek talebi gönderilir, ek Storage'a yüklenir | **Geçti** |
+| Bitmiş (sunucu): REST INSERT/UPDATE `P0001`, DELETE `42501`; Storage yükleme/silme engelli; `support-attachments` yükleme açık | **Geçti** |
+| Başka firma abonelik bilgisini okuyamaz (403), anon 401 | **Geçti** |
+
+**Geri yükleme:** B `trial_ends_at` = `2026-10-19 20:10:48.126191+00` (plan `trial`, aktif, `read_only=false`, `pilot=false`).
+QA verisi temizlendi (müşteri, tedarikçi soft-delete, Storage probe, 3 destek talebi + ek, eski QA cihaz kaydı).
+Apple Test ve gerçek müşteri kayıtlarına dokunulmadı.
+
+**Bilinen yan not (kapsam dışı):** normal kullanıcının `support_tickets` için UPDATE politikası yok; bu yüzden
+`screenshot_url`/teknik bilgi alanları aktif hesapta da güncellenmez (ek dosya Storage'da vardır). Süreyle ilgisiz.
+
+**Açık yayın işleri:** `app.perdepro.com` DNS/domain ataması; `curtain-saas` Vercel projesi Production'ı hâlâ eski derleme
+(boş sayfa) — silinmedi, yeniden dağıtım veya kaldırma kararı ayrı.
 
