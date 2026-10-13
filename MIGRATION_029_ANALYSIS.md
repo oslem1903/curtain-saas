@@ -88,7 +88,7 @@ adı gösterilir). Beklenen: Apple Test (pilot, `trial_ends_at` 2026-10-31) → 
 |---|---|
 | `https://oslem1903-curtain-saas.vercel.app` | **Çalışıyor**; paket PerdePRO Supabase'ine (`ffhmzlcsgsgjonqqhgqq`) bağlı; QA akışları geçti |
 | `https://curtain-saas.vercel.app` | **Boş sayfa**: `Invalid supabaseUrl` — Vercel projesi `curtain-saas` Production'da `VITE_SUPABASE_*` ortam değişkenleri eksik |
-| `https://app.perdepro.com` | **DNS yok** (NXDOMAIN); repoda tek belge referansı |
+| `https://app.perdepro.com` | Kullanıcıya ait olmayan alan adı; kaldırıldı (kullanılmıyor) |
 | `*-ilk16.vercel.app` | Vercel SSO korumalı (erişim yok) |
 
 Kaynak: GitHub Deployments (`Production – oslem1903-curtain-saas`, `Production – curtain-saas`, son sha `5ee5425`).
@@ -145,7 +145,7 @@ Vercel (scope `ilk16`, iki proje aynı repoyu derliyor):
 - `curtain-saas` → **boş sayfa**: `VITE_SUPABASE_URL` 2 gün önce eklendi (Config) ama son production derlemesi 10-04'te;
   değişken derlemeden sonra geldiği için pakette URL yok. **Yeniden dağıtım (Redeploy) gerekir**; yeni `vite.config.ts`
   korumasıyla (URL/anon eksikse derleme hata verir) tekrar bozulması engellenir.
-- `app.perdepro.com` iki projeye de atanmamış (NXDOMAIN).
+- `app.perdepro.com` kullanıcıya ait değil; hiçbir projeye atanmadı, kullanılmıyor.
 Bu üç madde (hangi proje canonical, domain atama, redeploy) **kalan yayın işidir**; bu oturumda değiştirilmedi.
 
 ## 9. Uygulama ve canlı doğrulama (2026-10-13, yetkili Supabase oturumu ile)
@@ -236,7 +236,7 @@ Apple Test ve gerçek müşteri kayıtlarına dokunulmadı.
 **Bilinen yan not (kapsam dışı):** normal kullanıcının `support_tickets` için UPDATE politikası yok; bu yüzden
 `screenshot_url`/teknik bilgi alanları aktif hesapta da güncellenmez (ek dosya Storage'da vardır). Süreyle ilgisiz.
 
-**Açık yayın işleri:** `app.perdepro.com` DNS/domain ataması; `curtain-saas` Vercel projesi Production'ı hâlâ eski derleme
+**Açık yayın işleri:** `curtain-saas` Vercel projesi Production'ı hâlâ eski derleme
 (boş sayfa) — silinmedi, yeniden dağıtım veya kaldırma kararı ayrı.
 
 ## 11. Destek eki bağlama (029d) — 2026-10-13

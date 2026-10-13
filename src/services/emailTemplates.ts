@@ -356,7 +356,7 @@ function formatPaymentMethod(method: string): string {
  */
 function getAppUrl(): string {
   // This should be configured based on environment
-  return import.meta.env.VITE_APP_URL || "https://app.perdepro.com";
+  return import.meta.env.VITE_APP_URL || "https://oslem1903-curtain-saas.vercel.app";
 }
 
 /**
