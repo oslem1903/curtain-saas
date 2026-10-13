@@ -36,7 +36,7 @@ destek ekini talebe bağlayan RPC, onboarding sihirbazının salt-okunur hesapta
 | Web production (`oslem1903-curtain-saas`) | Canlı, commit `6b44acb`; 118 JS parçası yerel derlemeyle bayt bayt aynı, `app.perdepro.com` yok |
 | Google Play **dahili test** | **Yayında**: sürüm adı 1.0.14, **kod 17** (16'dan sonraki; 16'da yanlış alan adı yedeği vardı). Kaynak commit `799f1f6` |
 | TestFlight build 16 | Codemagic #15: yüklendi, işlendi, Beta App Review gönderimi `WAITING_FOR_REVIEW` (App Store Connect'te oturum açık değil, durum Codemagic günlüğünden) |
-| TestFlight build 17 | Codemagic #16 (`799f1f6`) başlatıldı; sonuç bu belgede ayrıca kaydedilir |
+| TestFlight build 17 | Codemagic #16 (`799f1f6`): IPA yüklendi ve App Store Connect işlemesi tamamlandı. Beta App Review gönderimi **422 "Another build in the same train is already in beta review"** ile reddedildi (build 16 incelemede); build 16 sonuçlanınca build 17 App Store Connect'ten incelemeye gönderilmelidir. Codemagic durumu "finished with post-processing failed" |
 | Herkese açık mağaza (Play üretim / App Store) | **Gönderilmedi** (bilerek) |
 | Fiziksel cihaz testi | **Yapılmadı** (cihaz/emülatör yok) |
 
