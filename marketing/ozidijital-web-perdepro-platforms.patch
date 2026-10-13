@@ -1,0 +1,259 @@
+diff --git a/src/app/urunler/[slug]/page.tsx b/src/app/urunler/[slug]/page.tsx
+index 2996c2e..761f06e 100644
+--- a/src/app/urunler/[slug]/page.tsx
++++ b/src/app/urunler/[slug]/page.tsx
+@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
+ import Link from "next/link";
+ import CtaBand from "@/components/CtaBand";
+ import Faq from "@/components/Faq";
++import PlatformDownloads from "@/components/PlatformDownloads";
+ import ProductCard from "@/components/ProductCard";
+ import PricingPlans from "@/components/PricingPlans";
+ import ProductShowcase from "@/components/ProductShowcase";
+@@ -139,10 +140,15 @@ export default async function UrunDetayPage({ params }: Params) {
+               </p>
+ 
+               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
++                {product.platforms && (
++                  <Button href="#indir" variant="primary" className="w-full sm:w-auto">
++                    Windows için İndir
++                  </Button>
++                )}
+                 {product.trial && (
+                   <Button
+                     href={product.trial.href}
+-                    variant="primary"
++                    variant={product.platforms ? "secondary" : "primary"}
+                     className="w-full sm:w-auto"
+                   >
+                     {product.trial.label}
+@@ -226,6 +232,9 @@ export default async function UrunDetayPage({ params }: Params) {
+         </Container>
+       </section>
+ 
++      {/* PLATFORMLAR / İNDİR */}
++      {product.platforms && <PlatformDownloads />}
++
+       {/* ÖZELLİKLER */}
+       <Section>
+         <SectionHeading
+diff --git a/src/components/PlatformDownloads.tsx b/src/components/PlatformDownloads.tsx
+new file mode 100644
+index 0000000..ac5c5b0
+--- /dev/null
++++ b/src/components/PlatformDownloads.tsx
+@@ -0,0 +1,149 @@
++import { Badge, Container, SectionHeading } from "./ui";
++import {
++  perdeproStoreLinks,
++  perdeproTrialUrl,
++  perdeproWindows,
++} from "@/lib/perdepro";
++
++function WindowsIcon() {
++  return (
++    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-7 w-7">
++      <path d="M3 5.4 10.5 4.3v7.2H3V5.4Zm8.7-1.3L21 2.8v8.7h-9.3V4.1ZM3 12.5h7.5v7.2L3 18.6v-6.1Zm8.7 0H21v8.7l-9.3-1.3v-7.4Z" />
++    </svg>
++  );
++}
++function PhoneIcon() {
++  return (
++    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-7 w-7">
++      <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
++      <path d="M11 18.5h2" />
++    </svg>
++  );
++}
++function TabletIcon() {
++  return (
++    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-7 w-7">
++      <rect x="4" y="3" width="16" height="18" rx="2.2" />
++      <path d="M11 18h2" />
++    </svg>
++  );
++}
++
++const cardBase = "flex h-full flex-col rounded-2xl border p-6 shadow-soft sm:p-7";
++
++function SoonCard({
++  icon,
++  title,
++  text,
++  live,
++}: {
++  icon: React.ReactNode;
++  title: string;
++  text: string;
++  live: boolean;
++}) {
++  return (
++    <div className={`${cardBase} border-navy-100 bg-white`}>
++      <div className="flex items-center justify-between text-navy-400">
++        {icon}
++        <Badge tone="soon">{live ? "Yayında" : "Çok Yakında"}</Badge>
++      </div>
++      <h3 className="mt-5 text-lg font-semibold text-navy-900">{title}</h3>
++      <p className="mt-2 text-sm leading-relaxed text-navy-500">{text}</p>
++      <span
++        aria-disabled="true"
++        className="mt-auto inline-flex cursor-not-allowed items-center justify-center rounded-full border border-navy-100 bg-navy-50 px-6 py-3 text-sm font-semibold text-navy-400"
++      >
++        Çok Yakında
++      </span>
++    </div>
++  );
++}
++
++export default function PlatformDownloads() {
++  return (
++    <section id="indir" className="border-b border-navy-100 bg-paper">
++      <Container>
++        <div className="py-16 sm:py-20">
++          <SectionHeading
++            eyebrow="Windows, iOS ve Android"
++            title="PerdePRO’yu cihazınıza indirin"
++            description="Aynı hesapla Windows, telefon ve tablette çalışın. Giriş, davet kodu veya onay beklemeden indirip kurabilirsiniz."
++          />
++
++          <div className="mt-10 grid gap-5 lg:grid-cols-3 lg:gap-6">
++            {/* WINDOWS — aktif */}
++            <div className={`${cardBase} border-navy-950 bg-navy-950 text-white`}>
++              <div className="flex items-center justify-between">
++                <span className="text-brand-400">
++                  <WindowsIcon />
++                </span>
++                <Badge tone="brand">Hazır</Badge>
++              </div>
++              <h3 className="mt-5 text-lg font-semibold">Windows</h3>
++              <p className="mt-2 text-sm leading-relaxed text-navy-200">
++                Windows 10 / 11 için masaüstü uygulaması. Sürüm {perdeproWindows.version},{" "}
++                {perdeproWindows.sizeLabel}.
++              </p>
++              <div className="mt-6 flex flex-col gap-3">
++                <a
++                  href={perdeproWindows.href}
++                  rel="noopener"
++                  className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-500 px-6 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-brand-600"
++                >
++                  Windows için İndir
++                </a>
++                <a
++                  href={perdeproTrialUrl}
++                  rel="noopener"
++                  className="inline-flex items-center justify-center gap-2 rounded-full border border-navy-600 px-6 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:border-navy-400"
++                >
++                  7 Gün Ücretsiz Dene
++                </a>
++              </div>
++              <details className="mt-5 text-xs text-navy-300">
++                <summary className="cursor-pointer font-medium text-navy-200">
++                  Dosya doğrulama bilgisi
++                </summary>
++                <p className="mt-2 break-all">
++                  {perdeproWindows.fileName}
++                  <br />
++                  SHA-256: {perdeproWindows.sha256}
++                </p>
++                <p className="mt-2">
++                  Kurulum paketi henüz kod imzalı değildir; Windows “Bilinmeyen yayıncı” uyarısı
++                  gösterebilir. İndirdiğiniz dosyanın SHA-256 değerini yukarıdakiyle
++                  karşılaştırabilirsiniz.
++                </p>
++              </details>
++            </div>
++
++            <SoonCard
++              icon={<PhoneIcon />}
++              title="iOS"
++              text="iPhone ve iPad için uygulama App Store’da çok yakında."
++              live={Boolean(perdeproStoreLinks.ios)}
++            />
++            <SoonCard
++              icon={<TabletIcon />}
++              title="Android"
++              text="Android telefon ve tabletler için uygulama Google Play’de çok yakında."
++              live={Boolean(perdeproStoreLinks.android)}
++            />
++          </div>
++
++          <p className="mt-8 max-w-3xl text-base leading-relaxed text-navy-600">
++            iOS ve Android uygulamalarımız çok yakında App Store ve Google Play’de. Aynı hesabınızla
++            Windows, telefon ve tablet üzerinden çalışın; müşterileriniz, ölçüleriniz, teklifleriniz
++            ve siparişleriniz cihazlarınız arasında senkronize olsun.
++          </p>
++          <p className="mt-3 max-w-3xl text-sm text-navy-500">
++            Senkronizasyon internet bağlantısı gerektirir. 7 günlük deneme ve satın alınan lisans
++            firmanıza aittir; cihaz değiştirdiğinizde deneme yeniden başlamaz, ayrıca lisans gerekmez
++            (cihaz sınırları geçerlidir).
++          </p>
++        </div>
++      </Container>
++    </section>
++  );
++}
+diff --git a/src/data/products.ts b/src/data/products.ts
+index 8c9ef05..63ac7db 100644
+--- a/src/data/products.ts
++++ b/src/data/products.ts
+@@ -9,6 +9,7 @@
+  */
+ 
+ import { metrajBillingLive, metrajPurchaseUrl, metrajTrialUrl } from "@/lib/features";
++import { perdeproTrialUrl } from "@/lib/perdepro";
+ 
+ export type ProductStatus = "live" | "soon";
+ 
+@@ -173,6 +174,8 @@ export type Product = {
+     title: string;
+     paragraphs: string[];
+   };
++  /** Windows/iOS/Android indirme bölümü (yalnızca bu bayrağı olan ürünlerde gösterilir) */
++  platforms?: boolean;
+   /** Ürünün kendi uygulamasında self-servis deneme hesabı açma bağlantısı */
+   trial?: {
+     href: string;
+@@ -479,6 +482,12 @@ export const products: Product[] = [
+       "Ölçü alımından montaj gününe kadar geçen süreci tek akışta yönetin. Hangi siparişin hangi aşamada olduğunu, kimin ne kadar ödeme yaptığını aramadan görün.",
+     status: "live",
+     icon: "curtain",
++    platforms: true,
++    trial: {
++      href: perdeproTrialUrl,
++      label: "7 Gün Ücretsiz Dene",
++      note: "Windows sürümünü giriş veya onay beklemeden indirebilir, ardından e-posta ve parolayla kayıt olabilirsiniz.",
++    },
+     whatsappMessage:
+       "Merhaba, PerdePRO hakkında bilgi ve 7 günlük deneme başlatmak istiyorum.",
+     highlights: ["Ölçü", "Teklif", "Sipariş", "Montaj"],
+diff --git a/src/lib/perdepro.ts b/src/lib/perdepro.ts
+new file mode 100644
+index 0000000..6b26ca1
+--- /dev/null
++++ b/src/lib/perdepro.ts
+@@ -0,0 +1,25 @@
++/**
++ * PERDEPRO İNDİRME VE DENEME BAĞLANTILARI — TEK MERKEZ
++ * -------------------------------------------------------------
++ * Windows kurulum paketi her sürümde BURADAN güncellenir (sürüm, bağlantı,
++ * SHA-256). Bağlantı gerçek bir yayın varlığına gitmeli ve SHA-256 yayınlanan
++ * dosyayla birebir aynı olmalıdır; doğrulanmadan değiştirilmez.
++ *
++ * Mağaza bağlantıları (App Store / Google Play) mağazada HERKESE AÇIK yayın
++ * doğrulanana kadar burada TANIMLANMAZ; sitede "Çok Yakında" görünür.
++ */
++export const perdeproWindows = {
++  version: "1.0.15",
++  fileName: "PerdePRO-Setup-1.0.15.exe",
++  href: "https://github.com/oslem1903/curtain-saas/releases/download/v1.0.15-windows/PerdePRO-Setup-1.0.15.exe",
++  sha256: "047721614781E5AC446DAA30537FF85E2D7710C4E65D9EC423AA5C74FF9485D9",
++  sizeLabel: "yaklaşık 148 MB",
++} as const;
++
++/** PerdePRO web uygulaması (kayıt ve giriş). Windows uygulamasıyla aynı hesap ve veriler. */
++export const perdeproWebApp = "https://oslem1903-curtain-saas.vercel.app";
++export const perdeproTrialUrl = `${perdeproWebApp}/#/signup`;
++export const perdeproLoginUrl = `${perdeproWebApp}/#/login`;
++
++/** Mağazada herkese açık yayın doğrulanınca doldurulur; boşken "Çok Yakında" gösterilir. */
++export const perdeproStoreLinks = { ios: "", android: "" } as { ios: string; android: string };
