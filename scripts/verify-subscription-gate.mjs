@@ -42,6 +42,13 @@ check(`${USER}: tek aktif firmaya uye`, Array.isArray(members) && members.length
 const PROBE = 'QA Subscription Gate Probe';
 const getProbe = async () => (await (await rest(`customers?select=id,name,phone&name=eq.${encodeURIComponent(PROBE)}&company_id=eq.${companyId}`)).json());
 
+const SUPPLIER = 'QA Gate Supplier';
+const getSupplier = async () => (await (await rest(`suppliers?select=id,name&name=eq.${encodeURIComponent(SUPPLIER)}&company_id=eq.${companyId}`)).json())[0];
+const ledger = async (supplierId) => {
+  const r = await rpc('get_supplier_ledger', { p_supplier_id: supplierId, p_company_id: companyId, p_limit: 100 });
+  return r;
+};
+
 // ---- Storage yardimcilari (gercek kullanici token'i ile; kendi firmasinin klasoru)
 const BUCKET = 'measurement-photos';
 const OBJ = `${companyId}/__gate_probe__/probe.png`;
@@ -91,6 +98,11 @@ if (expect === 'active') {
     }
     const rmo = await removeObj(OBJ);
     check('Storage probe nesnesi temizlendi', [200, 400, 404].includes(rmo.status), `HTTP ${rmo.status}`);
+    const supC = await getSupplier();
+    if (supC) {
+      const delS = await rest(`suppliers?id=eq.${supC.id}`, { method: 'DELETE' });
+      check('tedarikci probe temizlendi', delS.ok && !(await getSupplier()), `HTTP ${delS.status}`);
+    }
   } else {
     const rd = await rest('customers?select=id&limit=3');
     check('okuma calisir (GET)', rd.ok, `HTTP ${rd.status}`);
@@ -103,6 +115,16 @@ if (expect === 'active') {
       const up = await rest(`customers?id=eq.${probe.id}`, { method: 'PATCH', body: JSON.stringify({ phone: '5550000002' }) });
       const rows = await up.json().catch(() => []);
       check('update calisir', up.ok && Array.isArray(rows) && rows.length === 1, `HTTP ${up.status}`);
+    }
+    let sup = await getSupplier();
+    if (!sup) {
+      const insS = await rest('suppliers', { method: 'POST', body: JSON.stringify({ company_id: companyId, name: SUPPLIER }) });
+      sup = (await insS.json().catch(() => []))?.[0];
+      check('tedarikci olusturulur', insS.status === 201 && !!sup?.id, `HTTP ${insS.status}`);
+    }
+    if (sup) {
+      const lg = await ledger(sup.id);
+      check('cari rapor (get_supplier_ledger) aktifken calisir', lg.status === 200, `HTTP ${lg.status}`);
     }
     let o = await signObj();
     if (!o.ok) {
@@ -119,6 +141,12 @@ if (expect === 'active') {
   const listAll = await rest('customers?select=id&limit=5');
   check('musteri listesi okunabiliyor (GET)', listAll.ok, `HTTP ${listAll.status}`);
   check('probe satiri okunabiliyor (SELECT acik)', !!probe, probe ? 'gorunur' : 'yok — once --expect active calistirin');
+  const supE = await getSupplier();
+  check('tedarikci okunabiliyor (SELECT acik)', !!supE, supE ? 'gorunur' : 'yok — once --expect active calistirin');
+  if (supE) {
+    const lg = await ledger(supE.id);
+    check('cari rapor (get_supplier_ledger) sure bitince de calisir', lg.status === 200, `HTTP ${lg.status}`);
+  }
   const o = await signObj();
   check('Storage imzali adres alinabiliyor (goruntuleme)', o.ok, o.ok ? 'ok' : `HTTP ${o.status} — once --expect active ile nesne olusturun`);
   if (o.url) check('Storage dosya indirilebiliyor', (await fetch(o.url)).status === 200);
@@ -144,6 +172,14 @@ if (expect === 'active') {
   if (o.ok) {
     await removeObj(OBJ);
     check('Storage dosya silme engellendi (nesne duruyor)', (await signObj()).ok, gap ? 'ACIK: 029b gerekli' : '');
+  }
+  // Istisna: destek ekran goruntusu sure bitince de yuklenebilmeli (024: "destek talebi acabilmeli").
+  const supPath = `${companyId}/__gate_probe__/support-${Date.now()}.png`;
+  const supUp = await fetch(`${ctx.url}/storage/v1/object/support-attachments/${supPath}`, { method: 'POST', headers: { ...sHdr, 'Content-Type': 'image/png' }, body: PNG });
+  check('support-attachments yukleme sure bitince ACIK kalir (destek istisnasi)', supUp.status === 200, `HTTP ${supUp.status}`);
+  if (supUp.status === 200) {
+    const supDel = await fetch(`${ctx.url}/storage/v1/object/support-attachments/${supPath}`, { method: 'DELETE', headers: sHdr });
+    check('support-attachments probe temizlendi', supDel.status === 200, `HTTP ${supDel.status}`);
   }
 }
 console.log(fail ? `\n${fail} KONTROL BASARISIZ` : '\nGECTI');
