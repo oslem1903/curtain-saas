@@ -122,9 +122,9 @@ export default function SupportModal({ companyId, userId }: SupportModalProps) {
                         .from('support-attachments')
                         .upload(path, formData.attachment, { upsert: true });
                     if (upErr) throw upErr;
-                    await supabase.from('support_tickets')
-                        .update({ screenshot_url: path })
-                        .eq('id', ticketId);
+                    // Genel UPDATE yetkisi yok: ek, yalnizca kendi talebine baglayan dar kapsamli RPC ile iliskilendirilir.
+                    const { error: linkErr } = await supabase.rpc('attach_support_ticket_screenshot', { p_ticket_id: ticketId, p_path: path });
+                    if (linkErr) throw linkErr;
                 } catch (upError) {
                     console.error("Ek dosya yüklenemedi:", upError);
                     uploadWarning = "Talebiniz gönderildi ancak ekran görüntüsü yüklenemedi.";

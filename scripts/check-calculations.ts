@@ -305,6 +305,7 @@ t("iptal edilen tahsilat negatife duserse plan tutarsiz isaretlenir", () => {
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/support_tickets`), false);
     assert.equal(isReadOnlyBlocked("PATCH", `${B}/rest/v1/support_tickets?id=eq.1`), false);
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/create_support_ticket_as_locked_user`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/attach_support_ticket_screenshot`), false);
     assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/support-attachments/firma/ticket/screenshot.png`), false);
     assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/measurement-photos/firma/a.png`), true);
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/support_tickets_archive`), true);

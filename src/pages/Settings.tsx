@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
+import SecureLink from "../components/SecureLink";
 import { X, Check, Bell, LifeBuoy, Download } from "lucide-react";
 import { CompanySettingsCard } from "../components/CompanySettingsCard";
 import { LicenseCard } from "../components/LicenseCard";
@@ -12,6 +13,7 @@ type MyTicket = {
     title: string | null;
     status: string | null;
     admin_response?: string | null;
+    screenshot_url?: string | null;
     created_at: string | null;
 };
 
@@ -67,7 +69,7 @@ export const Settings = () => {
                 if (!user) return;
                 const { data, error: ticketError } = await supabase
                     .from("support_tickets")
-                    .select("id, title, status, admin_response, created_at")
+                    .select("id, title, status, admin_response, screenshot_url, created_at")
                     .eq("user_id", user.id)
                     .order("created_at", { ascending: false })
                     .limit(20);
@@ -271,6 +273,20 @@ export const Settings = () => {
                                         {t.admin_response && (
                                             <div className="mt-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
                                                 <span className="font-bold">Destek yanıtı:</span> {t.admin_response}
+                                            </div>
+                                        )}
+                                        {t.screenshot_url && (
+                                            <div className="mt-2">
+                                                <SecureLink
+                                                    href={t.screenshot_url}
+                                                    bucket="support-attachments"
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    data-testid="ticket-attachment-link"
+                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 underline dark:text-blue-300"
+                                                >
+                                                    Ekran görüntüsünü aç
+                                                </SecureLink>
                                             </div>
                                         )}
                                     </div>

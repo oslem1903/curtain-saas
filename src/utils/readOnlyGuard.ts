@@ -13,7 +13,7 @@ const ACCESS_RPCS = [
   // Abonelik durumunu yoklayan RPC'ler POST ile gider; engellenirse uygulama kendi durum kontrolunu
   // yapamaz ve her engelleme satin alma ekranini tetikler.
   "company_subscription_access_allowed", "company_subscription_access_snapshot",
-  "create_support_ticket_as_locked_user",
+  "create_support_ticket_as_locked_user", "attach_support_ticket_screenshot",
 ];
 
 // Arka plan telemetrisi / denetim kaydi (kullanicinin yazma girisimi DEGIL). Sunucuda bu tablolar
