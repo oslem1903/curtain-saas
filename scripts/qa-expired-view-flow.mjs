@@ -65,7 +65,7 @@ try {
     const signed = await sb.storage.from('measurement-photos').createSignedUrl(path, 60);
     out.signed = !signed.error && !!signed.data?.signedUrl;
     if (out.signed) { const r = await fetch(signed.data.signedUrl); out.download = r.status; }
-    const { data: sup } = await sb.from('suppliers').select('id').eq('name', supplierName).eq('company_id', companyId).maybeSingle();
+    const { data: sup } = await sb.from('suppliers').select('id').eq('name', supplierName).eq('company_id', companyId).is('deleted_at', null).maybeSingle();
     const led = await sb.rpc('get_supplier_ledger', { p_supplier_id: sup?.id, p_company_id: companyId, p_limit: 20 });
     out.ledgerOk = !led.error;
     const ins = await sb.from('customers').insert({ company_id: companyId, name: 'QA ENGEL', phone: '5550000004' });
@@ -88,6 +88,40 @@ try {
     rec('Excel yedegi (disa aktarma) indirildi', !!dl, dl ? dl.suggestedFilename() : 'indirme olusmadi');
   } else {
     rec('Excel yedegi dugmesi gorunur', false, 'Ayarlar sayfasinda dugme bulunamadi (rol/modul?)');
+  }
+
+  // Destek talebi + ekran goruntusu eki: sure bitince de ACIK kalmali (024: "destek talebi acabilmeli")
+  await page.goto(`${BASE}/#/dashboard`); await page.waitForTimeout(2500);
+  const supportBtn = page.getByRole('button', { name: /Sorun Bildir/ }).first();
+  if (await seen(supportBtn)) {
+    // Kenar cubuktaki dugme surekli yeniden cizildigi icin Playwright 'stable' kontrolu gecmez; force ile tiklanir.
+    await supportBtn.click({ force: true });
+    const title = 'QA Destek Testi ' + Date.now().toString(36);
+    await page.getByPlaceholder('Kısaca sorunu özetleyin...').fill(title);
+    await page.getByPlaceholder('Neler olduğunu detaylıca anlatın...').fill('Otomatik QA: sure bitmis hesapta destek talebi ve ek.');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    await page.locator('input[type="file"]').first().setInputFiles({ name: 'qa-destek.png', mimeType: 'image/png', buffer: png });
+    await page.getByRole('button', { name: /Talebi Gönder/ }).click();
+    const sent = await seen(page.getByText(/Talep Gönderildi/), 20000);
+    rec('destek talebi gonderilebiliyor (sure bitmis)', sent);
+    const bodyAfter = await page.locator('body').innerText();
+    rec('destek eki yuklenebildi (uyari yok)', sent && !/ekran görüntüsü yüklenemedi/i.test(bodyAfter));
+    // Not: normal kullanicinin support_tickets UPDATE politikasi yoktur; screenshot_url alani aktif hesapta
+    // da guncellenmez (sureyle ilgisiz, mevcut davranis). Ek dosyanin Storage'da varligi dogrudan kontrol edilir.
+    const tk = await page.evaluate(async (t) => {
+      const sb = window.supabase;
+      const { data } = await sb.from('support_tickets').select('id,company_id').eq('title', t).limit(1);
+      const row = data?.[0];
+      if (!row) return null;
+      const path = `${row.company_id}/${row.id}/screenshot.png`;
+      const signed = await sb.storage.from('support-attachments').createSignedUrl(path, 60);
+      return { id: row.id, attachment: !signed.error && !!signed.data?.signedUrl };
+    }, title);
+    rec('destek talebi kaydi olustu', !!tk?.id);
+    rec("destek eki Storage'da mevcut (support-attachments)", !!tk?.attachment);
+    console.log('SUPPORT_TICKET_TITLE=' + title);
+  } else {
+    rec('"Sorun Bildir" dugmesi gorunur', false);
   }
   rec('sayfa hatasi yok', pageErrors === 0, `pageerror=${pageErrors}`);
 } catch (e) {
