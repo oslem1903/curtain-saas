@@ -37,6 +37,7 @@ destek ekini talebe bağlayan RPC, onboarding sihirbazının salt-okunur hesapta
 | Google Play **dahili test** | **Yayında**: sürüm adı 1.0.14, **kod 17** (16'dan sonraki; 16'da yanlış alan adı yedeği vardı). Kaynak commit `799f1f6` |
 | TestFlight build 16 | Codemagic #15: yüklendi, işlendi, Beta App Review gönderimi `WAITING_FOR_REVIEW` (App Store Connect'te oturum açık değil, durum Codemagic günlüğünden) |
 | TestFlight build 17 | Codemagic #16 (`799f1f6`): IPA yüklendi ve App Store Connect işlemesi tamamlandı. Beta App Review gönderimi **422 "Another build in the same train is already in beta review"** ile reddedildi (build 16 incelemede); build 16 sonuçlanınca build 17 App Store Connect'ten incelemeye gönderilmelidir. Codemagic durumu "finished with post-processing failed" |
+| App Store incelemesi | 7 Ekim reddi (Guideline 2.1, demo hesap girişi): ASC'deki parola hesapla uyuşmuyordu. Parola düzeltildi, sürüm kaydı 1.0.14 / build 17, manuel yayın. 13 Ekim 20:59'da yeniden gönderildi: **Waiting for Review** (gönderim a39e03ec). Parola bu belgede ve Git'te tutulmaz |
 | Herkese açık mağaza (Play üretim / App Store) | **Gönderilmedi** (bilerek) |
 | Fiziksel cihaz testi | **Yapılmadı** (cihaz/emülatör yok) |
 
