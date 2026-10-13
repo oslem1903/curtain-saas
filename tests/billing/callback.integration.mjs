@@ -18,7 +18,7 @@ create function auth.uid() returns uuid language sql stable as $$ select nullif(
 create table public.companies(id uuid primary key default gen_random_uuid(), name text, is_active boolean default true, plan_status text, subscription_status text, trial_ends_at timestamptz, license_expires_at timestamptz, package_code text, subscription_plan text, enabled_modules text[], updated_at timestamptz, created_at timestamptz default now());
 create function public.is_super_admin() returns boolean language sql as $$ select false $$;
 create function public.is_company_admin(c uuid) returns boolean language sql as $$ select true $$;`);
-for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql']) {
+for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql', 'supabase_migration_036_test_company_checkout.sql']) {
   await db.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
 const rows = async (s, p) => (await db.query(s, p)).rows;
@@ -62,6 +62,10 @@ const [{ id: company }] = await rows(`insert into companies(name,plan_status,tri
 await db.exec(`update billing_plans set is_purchasable=true where code='solo_monthly'`);
 const intent = (await rows(`select billing_create_intent('paytr',$1,'solo_yearly',null) r`, [company]).catch(() => null));
 ok(intent === null, 'yearly plan kapaliyken niyet olusturulamaz');
+const [{ id: tco }] = await rows(`insert into companies(name,plan_status,trial_ends_at,package_code) values('QA Test Co','trial', now()+interval '3 days','solo') returning id`);
+await db.exec(`insert into billing_test_companies(company_id) values ('${tco}')`);
+const tint = (await rows(`select billing_create_intent('paytr',$1,'solo_yearly',null) r`, [tco]))[0].r;
+ok(tint.amount_minor === 499000, 'test firmasi kapali planda niyet olusturabilir (yillik 499000 kurus)');
 const { r: it } = (await rows(`select billing_create_intent('paytr',$1,'solo_monthly',null) r`, [company]))[0];
 const oid = 'PRD' + it.intent_id.replace(/-/g, '');
 const amount = String(it.amount_minor);

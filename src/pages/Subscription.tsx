@@ -11,6 +11,25 @@ type Plan = { code: string; name: string; period: "month" | "year"; price_minor:
 type Payment = { id: string; created_at: string; amount_minor: number; currency: string; status: string; period_end: string | null; channel: string };
 type Sub = { status: string; plan_code: string | null; current_period_end: string | null; cancel_at_period_end: boolean; channel: string };
 
+/** Sunucudaki durum kodlarini kullaniciya Turkce goster ("trial" -> "Deneme"). */
+const STATUS_LABELS: Record<string, string> = {
+  trial: "Deneme",
+  active: "Aktif",
+  pending: "Ödeme bekleniyor",
+  past_due: "Ödeme gecikmiş",
+  canceled: "İptal edildi",
+  cancelled: "İptal edildi",
+  expired: "Süresi dolmuş",
+  refunded: "İade edildi",
+  suspended: "Askıda",
+  lifetime: "Süresiz",
+  starter: "Deneme",
+};
+const statusLabel = (s: string | null | undefined) => {
+  const key = String(s ?? "").trim().toLowerCase();
+  return STATUS_LABELS[key] ?? (key ? key : "—");
+};
+
 const money = (minor: number, currency: string) =>
   new Intl.NumberFormat("tr-TR", { style: "currency", currency }).format(minor / 100);
 
@@ -26,6 +45,7 @@ export default function Subscription() {
   const [error, setError] = useState("");
   const [available, setAvailable] = useState(true);
   const [accepted, setAccepted] = useState(false);
+  const [isTestCompany, setIsTestCompany] = useState(false);
   const native = isNativeApp();
   const canPurchase = !native && memberRole === "admin";
   const paymentParam = params.get("payment");
@@ -41,6 +61,9 @@ export default function Subscription() {
         supabase.from("billing_payments").select("id,created_at,amount_minor,currency,status,period_end,channel").eq("company_id", company.id)
           .order("created_at", { ascending: false }).limit(12),
       ]);
+      // Test firmasi mi? (yalniz sunucuda isaretlenen QA firmalari; herkese acik satin almayi ACMAZ)
+      const t = await supabase.from("billing_test_companies").select("company_id").eq("company_id", company.id).maybeSingle();
+      setIsTestCompany(Boolean(t.data?.company_id));
       // Tablolar henuz kurulu degilse (migration uygulanmamis) ekran "kullanilamiyor" gosterir.
       if (p.error && /relation|does not exist|schema cache/i.test(p.error.message)) { setAvailable(false); return; }
       setPlans((p.data ?? []) as Plan[]);
@@ -126,7 +149,7 @@ export default function Subscription() {
           </div>
         </div>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-          <div><dt className="text-slate-500">Durum</dt><dd className="font-bold">{sub?.status ?? (trial.isExpired ? "süresi dolmuş" : planStatus || "-")}</dd></div>
+          <div><dt className="text-slate-500">Durum</dt><dd className="font-bold">{statusLabel(sub?.status ?? (trial.isExpired ? "expired" : planStatus || "trial"))}</dd></div>
           <div>
             <dt className="text-slate-500">Bitiş</dt>
             <dd className="font-bold">
@@ -153,7 +176,7 @@ export default function Subscription() {
             </p>
           </div>
 
-          {canPurchase && plans.some((p) => p.is_purchasable) ? (
+          {canPurchase && plans.some((p) => p.is_purchasable || isTestCompany) ? (
             <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-900">
               <input type="checkbox" className="mt-1" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
               <span>
@@ -182,7 +205,7 @@ export default function Subscription() {
                     </div>
                   ) : null}
                   {canPurchase ? (
-                    p.is_purchasable ? (
+                    p.is_purchasable || isTestCompany ? (
                       <button
                         type="button"
                         disabled={Boolean(busyPlan) || !accepted}
@@ -190,7 +213,7 @@ export default function Subscription() {
                         className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
                       >
                         {busyPlan === p.code ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-                        Ödemeye geç
+                        {p.is_purchasable ? "Ödemeye geç" : "Test ödemesine geç"}
                       </button>
                     ) : (
                       <button
@@ -206,7 +229,7 @@ export default function Subscription() {
               ))
             )}
           </div>
-          {canPurchase && plans.length > 0 && !plans.some((p) => p.is_purchasable) ? (
+          {canPurchase && plans.length > 0 && !isTestCompany && !plans.some((p) => p.is_purchasable) ? (
             <p className="text-xs text-slate-500">Çevrimiçi ödeme doğrulama aşamasındadır; açıldığında bu ekrandan satın alabilirsiniz.</p>
           ) : null}
           {!canPurchase ? (
