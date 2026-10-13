@@ -274,6 +274,9 @@ t("iptal edilen tahsilat negatife duserse plan tutarsiz isaretlenir", () => {
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/customers`), true);
     assert.equal(isReadOnlyBlocked("PATCH", `${B}/rest/v1/customers?id=eq.1`), true);
     assert.equal(isReadOnlyBlocked("DELETE", `${B}/rest/v1/customers?id=eq.1`), true);
+    // Satin alma baslatma salt okunur modda da calismali; baska Edge Function'lar engelli kalir.
+    assert.equal(isReadOnlyBlocked("POST", `${B}/functions/v1/billing-checkout`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/functions/v1/send-invitation`), true);
   });
   t("salt okunur: okuma RPC'leri (tedarikci cari, sube istatistigi) engellenmez", () => {
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/get_supplier_ledger`), false);

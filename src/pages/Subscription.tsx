@@ -53,6 +53,13 @@ export default function Subscription() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Odeme baska pencerede (tarayici) tamamlanabilir: uygulamaya donuldugunde durumu yenile.
+  useEffect(() => {
+    const onFocus = () => { void refreshAuth(); void load(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshAuth, load]);
+
   // Odeme formundan donuste sunucu webhook'unu bekle: erisim yalnizca sunucu dogrulamasiyla acilir.
   useEffect(() => {
     if (paymentParam !== "pending") return;
@@ -128,6 +135,9 @@ export default function Subscription() {
           </div>
           <div><dt className="text-slate-500">Yenileme</dt><dd className="font-bold">Otomatik yenileme yok</dd></div>
         </dl>
+        {!native && planStatus === "active" && (
+          <p className="mt-3 text-sm text-slate-600">Ödemeniz doğrulandı. Aynı firma ve verilerinizle devam edebilirsiniz; hesabınız tüm cihazlarınızda aynı lisansı kullanır.</p>
+        )}
         {trial.isExpired && !special && planStatus !== "active" && (
           <p className="mt-3 text-sm text-slate-600">Verilerinizi görüntüleyebilir ve dışa aktarabilirsiniz; yeni kayıt ve değişiklikler abonelik açılana kadar kapalıdır.</p>
         )}
@@ -148,7 +158,10 @@ export default function Subscription() {
           {loading ? (
             <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
           ) : plans.length === 0 ? (
-            <p className="text-sm text-slate-500">Şu anda satın alınabilir plan bulunmuyor.</p>
+            <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 sm:col-span-2">
+              Paket fiyatları henüz açıklanmadı; çevrimiçi satın alma açıldığında burada görünecek. Süreniz dolduysa verilerinizi
+              görüntüleyebilir ve dışa aktarabilirsiniz. Satın alma konusunda "Sorun Bildir" üzerinden bize yazabilirsiniz.
+            </p>
           ) : (
             plans.map((p) => (
               <div key={p.code} className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">

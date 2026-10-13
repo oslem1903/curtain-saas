@@ -30,6 +30,9 @@ const ALLOWED_RPC = new RegExp(`/rest/v1/rpc/(${[...ACCESS_RPCS, ...READ_RPCS, .
 // support_tickets tetikleyicisiz, support-attachments Storage politikasinda istisnadir.
 const SUPPORT_TABLES = ["support_tickets"];
 const ALLOWED_TABLE = new RegExp(`/rest/v1/(${[...TELEMETRY_TABLES, ...SUPPORT_TABLES].join("|")})$`);
+// Satin alma baslatma (Edge Function): sure bitince tam da bu islem gerekir. Veri yazmaz; lisansi yalniz
+// sunucuda dogrulanmis odeme bildirimi acar.
+const ALLOWED_FUNCTION = /\/functions\/v1\/billing-checkout$/;
 const ALLOWED_SUPPORT_UPLOAD = /\/storage\/v1\/object\/support-attachments\//;
 // Gorsel/dosya GORUNTULEME: imzali adres uretme ve klasor listeleme (yukleme/silme degil).
 const ALLOWED_STORAGE_READ = /\/storage\/v1\/object\/(sign|list)\//;
@@ -41,6 +44,7 @@ export function isReadOnlyBlocked(method: string | undefined, urlOrPath: string,
   if (pathname.includes("/auth/v1/")) return false;
   if (ALLOWED_RPC.test(pathname)) return false;
   if (ALLOWED_TABLE.test(pathname)) return false;
+  if (ALLOWED_FUNCTION.test(pathname)) return false;
   if (ALLOWED_STORAGE_READ.test(pathname)) return false;
   if (ALLOWED_SUPPORT_UPLOAD.test(pathname)) return false;
   return true;

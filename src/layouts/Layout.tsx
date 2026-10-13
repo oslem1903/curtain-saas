@@ -1,3 +1,4 @@
+import { BILLING_UI_ENABLED } from "../utils/billingFlag";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isNativeApp } from "../utils/nativeRuntime";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
@@ -248,6 +249,8 @@ function setNotified(key: string) {
 }
 
 function getPurchaseUrl() {
+  // Uygulama ici odeme ekrani varsa satin alma oraya gider (WhatsApp yalniz yedek).
+  if (BILLING_UI_ENABLED) return "#/subscription";
   const msg = encodeURIComponent("Merhaba, PerdePRO deneme surem doldu. Lisans satin almak ve devam etmek istiyorum.");
   return `https://wa.me/905308427870?text=${msg}`;
 }
@@ -273,7 +276,7 @@ function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) 
           </div>
         ) : null}
         <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
-          {["Siparis ve müşteri yonetimi", "Muhasebe ve tedarikci islemleri", "Personel, rota ve fiyat listesi"].map((item) => (
+          {["Müşteri ve sipariş yönetimi", "Ölçü, teklif ve randevular", "Tedarikçi, montaj ve tahsilat"].map((item) => (
             <div key={item} className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 p-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
               <CheckCircle2 className="w-5 h-5 text-emerald-500 mb-2" />
               {item}
@@ -283,8 +286,7 @@ function PurchaseRequiredScreen({ trialInfo }: { trialInfo: TrialInfo | null }) 
         {!isNativeApp() && (
         <a
           href={getPurchaseUrl()}
-          target="_blank"
-          rel="noreferrer"
+          {...(BILLING_UI_ENABLED ? {} : { target: "_blank", rel: "noreferrer" })}
           className="mt-7 inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-6 py-3 text-white font-black shadow-lg shadow-red-600/20 hover:bg-red-700 active:scale-95 transition"
         >
           <CreditCard className="w-5 h-5" />
@@ -907,7 +909,7 @@ export const Layout = () => {
               {hasModule("catalogs") && <NavItem to="/catalogs" icon={Palette} label="Kartela Yönetimi" onClick={closeMobileMenu} />}
               {hasModule("staff") && <NavItem to="/staff" icon={UserCog} label="Personel" onClick={closeMobileMenu} />}
               <NavItem to="/settings" icon={Settings} label="Ayarlar" onClick={closeMobileMenu} />
-              {import.meta.env.VITE_BILLING_ENABLED === "1" && (
+              {BILLING_UI_ENABLED && !isNativeApp() && (
                 <NavItem to="/subscription" icon={CreditCard} label="Abonelik" onClick={closeMobileMenu} />
               )}
             </>
@@ -1015,7 +1017,7 @@ export const Layout = () => {
 	              {!isNativeApp() && (
 	              <button
 	                type="button"
-	                onClick={() => window.open(getPurchaseUrl(), "_blank")}
+	                onClick={() => (BILLING_UI_ENABLED ? (window.location.hash = "#/subscription") : window.open(getPurchaseUrl(), "_blank"))}
 	                className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-black text-white"
 	              >
 	                Satın Al / Yükselt
@@ -1050,12 +1052,13 @@ export const Layout = () => {
                   href="#"
                   onClick={(e) => {
                     e.preventDefault();
+                    if (BILLING_UI_ENABLED) { window.location.hash = "#/subscription"; return; }
                     const msg = encodeURIComponent("Merhaba Özlem Hanım, Perde SaaS deneme sürem doldu. Lisans satın almak ve devam etmek istiyorum.");
                     window.open(`https://wa.me/905308427870?text=${msg}`, "_blank");
                   }}
                   className="bg-white text-red-700 px-3 py-1 rounded-full text-xs font-bold shadow hover:bg-red-50 transition"
                 >
-                    Özlem Cihan (Satış & Destek)
+                    {BILLING_UI_ENABLED ? "Satın Al" : "Özlem Cihan (Satış & Destek)"}
                 </a>
                 )}
             </div>
