@@ -33,10 +33,12 @@ destek ekini talebe bağlayan RPC, onboarding sihirbazının salt-okunur hesapta
 
 | Hedef | Durum |
 |---|---|
-| Web production (`oslem1903-curtain-saas`) | Canlı, commit `6d9ad37`; mobil paketler aynı web kodunu içerir |
-| Google Play **dahili test** | **Yayında**: sürüm adı 1.0.14, **kod 16** (önceki: 1.0.11 / kod 11). AAB SHA-256 `b39615d9da1218df6b8f0a603ebe3a4c11aee3db1ffe4466826cda7857c4de6f`; kaynak commit `a895dd3` |
-| TestFlight | Codemagic **#15** (`perdepro-ios`, dal `release/1.0.14-access-trial7`, commit `a895dd3`) **bitti**: sürüm 1.0.14, build 16 App Store Connect'e yüklendi, işleme tamamlandı, TestFlight beta incelemesine gönderildi |
+| Web production (`oslem1903-curtain-saas`) | Canlı, commit `6b44acb`; 118 JS parçası yerel derlemeyle bayt bayt aynı, `app.perdepro.com` yok |
+| Google Play **dahili test** | **Yayında**: sürüm adı 1.0.14, **kod 17** (16'dan sonraki; 16'da yanlış alan adı yedeği vardı). Kaynak commit `799f1f6` |
+| TestFlight build 16 | Codemagic #15: yüklendi, işlendi, Beta App Review gönderimi `WAITING_FOR_REVIEW` (App Store Connect'te oturum açık değil, durum Codemagic günlüğünden) |
+| TestFlight build 17 | Codemagic #16 (`799f1f6`) başlatıldı; sonuç bu belgede ayrıca kaydedilir |
 | Herkese açık mağaza (Play üretim / App Store) | **Gönderilmedi** (bilerek) |
+| Fiziksel cihaz testi | **Yapılmadı** (cihaz/emülatör yok) |
 
 ## Alan adı
 - `perdepro.com` kullanıcıya ait DEĞİL; `app.perdepro.com` bağlantısı Vercel'den kaldırıldı ve Supabase yönlendirme
