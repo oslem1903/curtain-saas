@@ -4,6 +4,7 @@ import { daysRemaining, todayISO, isDelayed, deliveryUrgency } from "../src/util
 import { computePlanForOrder, bucketForDueDate, todayDateOnly, daysBetween } from "../src/utils/installments.ts";
 import { PAYMENT_METHOD_OPTIONS, paymentLabel, paymentLabelOrDash, paymentDescription } from "../src/utils/paymentLabels.ts";
 import { parseStorageRef, isLocalPreviewSrc, STORAGE_BUCKETS } from "../src/utils/storagePath.ts";
+import { isReadOnlyBlocked } from "../src/utils/readOnlyGuard.ts";
 
 const TZ = process.env.TZ;
 let n = 0;
@@ -259,6 +260,40 @@ t("iptal edilen tahsilat negatife duserse plan tutarsiz isaretlenir", () => {
   t("logos: klasorsuz dosya adi bozulmadan cozulur", () => {
     const ref = parseStorageRef(`${BASE}/logos/a8c3b542-7cb7-4b93-a073-b7340f5313d7-logo.jpg?v=123`);
     assert.deepEqual(ref, { bucket: "logos", path: "a8c3b542-7cb7-4b93-a073-b7340f5313d7-logo.jpg" });
+  });
+}
+
+// --- Salt okunur mod: goruntuleme/disa aktarma ACIK, yazma KAPALI (urun karari) ---
+{
+  const B = "https://x.supabase.co";
+  t("salt okunur: GET/HEAD hicbir zaman engellenmez", () => {
+    assert.equal(isReadOnlyBlocked("GET", `${B}/rest/v1/customers?select=*`), false);
+    assert.equal(isReadOnlyBlocked("HEAD", `${B}/rest/v1/orders`), false);
+  });
+  t("salt okunur: dogrudan INSERT/UPDATE/DELETE engellenir", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/customers`), true);
+    assert.equal(isReadOnlyBlocked("PATCH", `${B}/rest/v1/customers?id=eq.1`), true);
+    assert.equal(isReadOnlyBlocked("DELETE", `${B}/rest/v1/customers?id=eq.1`), true);
+  });
+  t("salt okunur: okuma RPC'leri (tedarikci cari, sube istatistigi) engellenmez", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/get_supplier_ledger`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/get_branch_stats`), false);
+  });
+  t("salt okunur: yazan RPC'ler engellenir", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/record_income_entry`), true);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/customer_record_collection`), true);
+  });
+  t("salt okunur: gorsel goruntuleme (imzali adres, listeleme) acik; yukleme/silme kapali", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/sign/measurement-photos/f/a.png`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/sign/measurement-photos`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/list/measurement-photos`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/measurement-photos/f/a.png`), true);
+    assert.equal(isReadOnlyBlocked("DELETE", `${B}/storage/v1/object/measurement-photos/f/a.png`), true);
+  });
+  t("salt okunur: oturum ve erisim akislari acik kalir", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/auth/v1/token?grant_type=password`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/register_device_and_touch_login`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/get_current_auth_context`), false);
   });
 }
 

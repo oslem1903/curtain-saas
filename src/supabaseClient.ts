@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { pickPrimaryMembership } from "./utils/trialLicense";
+import { isReadOnlyBlocked } from "./utils/readOnlyGuard";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URI;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -77,31 +78,27 @@ function showPurchaseRequired() {
 
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (isReadOnly && init?.method) {
-        const method = init.method.toUpperCase();
-        if (["POST", "PATCH", "PUT", "DELETE"].includes(method)) {
-            const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
-            const accessRpc = /\/rest\/v1\/rpc\/(get_current_auth_context|register_device_and_touch_login|complete_pending_invite_for_current_user|claim_pending_invites_for_current_user|accept_invite_code_for_current_user|accept_invite_for_current_user|get_invite_by_token|get_invite_by_email_code)$/.test(new URL(urlStr, window.location.href).pathname);
-            if (!urlStr.includes("/auth/v1/") && !accessRpc) {
-                showPurchaseRequired();
-                // supabase-js (postgrest) hata metnini gövdedeki `message` alanından okur;
-                // `error` alanı kullanılırsa kullanıcıya "undefined" gösterilir.
-                return Promise.resolve(
-                    new Response(
-                        JSON.stringify({
-                            code: "READ_ONLY_MODE",
-                            message: READ_ONLY_MESSAGE,
-                            details: null,
-                            hint: null,
-                            error: READ_ONLY_MESSAGE,
-                        }),
-                        {
-                            status: 403,
-                            statusText: "Forbidden",
-                            headers: { "Content-Type": "application/json" },
-                        }
-                    )
-                );
-            }
+        const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+        if (isReadOnlyBlocked(init.method, urlStr, window.location.href)) {
+            showPurchaseRequired();
+            // supabase-js (postgrest) hata metnini gövdedeki `message` alanından okur;
+            // `error` alanı kullanılırsa kullanıcıya "undefined" gösterilir.
+            return Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        code: "READ_ONLY_MODE",
+                        message: READ_ONLY_MESSAGE,
+                        details: null,
+                        hint: null,
+                        error: READ_ONLY_MESSAGE,
+                    }),
+                    {
+                        status: 403,
+                        statusText: "Forbidden",
+                        headers: { "Content-Type": "application/json" },
+                    }
+                )
+            );
         }
     }
 
