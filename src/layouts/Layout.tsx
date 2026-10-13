@@ -549,6 +549,12 @@ export const Layout = () => {
     return () => window.removeEventListener("trial-expired-action", handler);
   }, []);
 
+  // Engellenen bir yazma girisimi satin alma ekranini acar; baska sayfaya gecince icerik geri gelmeli
+  // (urun karari: sure bitince goruntuleme ve disa aktarma acik kalir).
+  useEffect(() => {
+    setShowPurchaseScreen(false);
+  }, [location.pathname]);
+
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
   const isFieldOnlyRole = role === "installer";

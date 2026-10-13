@@ -290,6 +290,17 @@ t("iptal edilen tahsilat negatife duserse plan tutarsiz isaretlenir", () => {
     assert.equal(isReadOnlyBlocked("POST", `${B}/storage/v1/object/measurement-photos/f/a.png`), true);
     assert.equal(isReadOnlyBlocked("DELETE", `${B}/storage/v1/object/measurement-photos/f/a.png`), true);
   });
+  t("salt okunur: abonelik durumu RPC'leri ve telemetri engellenmez (satin alma ekrani tetiklenmesin)", () => {
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/company_subscription_access_snapshot`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/company_subscription_access_allowed`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/record_login`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/record_user_activity`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/app_devices?on_conflict=device_id`), false);
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/audit_logs`), false);
+    // is verisi yazmalari hala engelli
+    assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/orders`), true);
+    assert.equal(isReadOnlyBlocked("PATCH", `${B}/rest/v1/app_devices_backup?id=eq.1`), true);
+  });
   t("salt okunur: oturum ve erisim akislari acik kalir", () => {
     assert.equal(isReadOnlyBlocked("POST", `${B}/auth/v1/token?grant_type=password`), false);
     assert.equal(isReadOnlyBlocked("POST", `${B}/rest/v1/rpc/register_device_and_touch_login`), false);

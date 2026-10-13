@@ -10,12 +10,22 @@ const ACCESS_RPCS = [
   "get_current_auth_context", "register_device_and_touch_login", "complete_pending_invite_for_current_user",
   "claim_pending_invites_for_current_user", "accept_invite_code_for_current_user", "accept_invite_for_current_user",
   "get_invite_by_token", "get_invite_by_email_code",
+  // Abonelik durumunu yoklayan RPC'ler POST ile gider; engellenirse uygulama kendi durum kontrolunu
+  // yapamaz ve her engelleme satin alma ekranini tetikler.
+  "company_subscription_access_allowed", "company_subscription_access_snapshot",
 ];
+
+// Arka plan telemetrisi / denetim kaydi (kullanicinin yazma girisimi DEGIL). Sunucuda bu tablolar
+// 024'te BILEREK abonelik korumasi disindadir. Engellenirse her sayfa yuklemesinde satin alma ekrani
+// acilir ve icerik gorunmez olur.
+const TELEMETRY_RPCS = ["record_login", "record_user_activity", "report_client_error"];
+const TELEMETRY_TABLES = ["app_devices", "audit_logs", "activity_logs", "user_activity", "error_logs"];
 
 // Veri DEGISTIRMEYEN, ekran/PDF icin gereken okuma RPC'leri (abonelik kapisi yok, yazma yok).
 const READ_RPCS = ["get_supplier_ledger", "get_branch_stats"];
 
-const ALLOWED_RPC = new RegExp(`/rest/v1/rpc/(${[...ACCESS_RPCS, ...READ_RPCS].join("|")})$`);
+const ALLOWED_RPC = new RegExp(`/rest/v1/rpc/(${[...ACCESS_RPCS, ...READ_RPCS, ...TELEMETRY_RPCS].join("|")})$`);
+const ALLOWED_TABLE = new RegExp(`/rest/v1/(${TELEMETRY_TABLES.join("|")})$`);
 // Gorsel/dosya GORUNTULEME: imzali adres uretme ve klasor listeleme (yukleme/silme degil).
 const ALLOWED_STORAGE_READ = /\/storage\/v1\/object\/(sign|list)\//;
 
@@ -25,6 +35,7 @@ export function isReadOnlyBlocked(method: string | undefined, urlOrPath: string,
   try { pathname = new URL(urlOrPath, base).pathname; } catch { pathname = urlOrPath; }
   if (pathname.includes("/auth/v1/")) return false;
   if (ALLOWED_RPC.test(pathname)) return false;
+  if (ALLOWED_TABLE.test(pathname)) return false;
   if (ALLOWED_STORAGE_READ.test(pathname)) return false;
   return true;
 }
