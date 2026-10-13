@@ -1,6 +1,6 @@
 # Migration 029 — analiz, karar ve çalıştırma planı (2026-10-13)
 
-**Durum (2026-10-13 sonu):** tam 029 UYGULANMADI (kesin ürün kararı). **029a, 029b ve 029c üretime uygulandı; 1.0.14 production'da** — bkz. §9-§10.
+**Durum (2026-10-13 sonu):** tam 029 UYGULANMADI (kesin ürün kararı). **029a, 029b, 029c ve 029d üretime uygulandı; 1.0.14 production'da** — bkz. §9-§11.
 
 ## 1. Karar: 029 olduğu gibi değil, 029a (iki RPC)
 
@@ -238,4 +238,31 @@ Apple Test ve gerçek müşteri kayıtlarına dokunulmadı.
 
 **Açık yayın işleri:** `app.perdepro.com` DNS/domain ataması; `curtain-saas` Vercel projesi Production'ı hâlâ eski derleme
 (boş sayfa) — silinmedi, yeniden dağıtım veya kaldırma kararı ayrı.
+
+## 11. Destek eki bağlama (029d) — 2026-10-13
+
+**Sorun:** `SupportModal` ekran görüntüsünü yükleyip `support_tickets.screenshot_url`'i UPDATE ile dolduruyordu; kullanıcının bu
+tabloda UPDATE politikası olmadığından istek 0 satırla sessizce bitiyor, ek hiçbir talebe bağlanmıyordu (aktif hesapta da).
+
+**Çözüm (genel UPDATE yetkisi AÇILMADI):** `attach_support_ticket_screenshot(p_ticket_id, p_path)` — yalnızca `screenshot_url`
+alanını doldurur. Şartlar: oturum; talebin firmasında aktif üyelik ve (talebi açan kişi **veya** firma admin/owner'ı); yol
+`<company_id>/<ticket_id>/screenshot.(png|jpg|jpeg|webp)`; nesne `support-attachments`'ta gerçekten var. Talep yok / başka firma /
+yetkisiz → aynı `42501` (varlık sızmaz). Abonelik kontrolü yok (029c ile tutarlı; süresi bitmiş firma da bağlayabilir).
+İstemci: `SupportModal` RPC'yi çağırır; `Ayarlar > Destek Taleplerim` listesinde imzalı "Ekran görüntüsünü aç" bağlantısı.
+Süper admin ekranı (`SuperAdminSupport`) `screenshot_url` doluyken eki zaten imzalı adresle gösteriyordu; **süper admin arayüzü
+bu oturumda UI olarak test EDİLMEDİ** (süper admin hesabıyla giriş izni yok) — mekanizma: `perdepro_objects_select` politikası
+`is_super_admin()` içerir (canlı doğrulandı) ve aynı imzalı adres yolu müşteri tarafında canlı test edildi.
+
+**Canlı doğrulama (`6d9ad37`, production `dpl_GRXfTX8rgU2o4AdPvCWd9irZVBiK`; 115/115 JS dosyası HEAD derlemesiyle aynı):**
+| Senaryo | Sonuç |
+|---|---|
+| Aktif (A, arayüz): talep + ek → `screenshot_url` dolu → listede bağlantı → imzalı adres → `image/png` 200 | **Geçti** |
+| Süresi bitmiş (B, arayüz): aynı akış | **Geçti** |
+| Sunucu (aktif ve bitmiş): sahip bağlar; başka firma 403/42501; var olmayan talep aynı hata; başka firma/başka talep/`../`/`.exe` yolu reddedilir; anon 401; doğrudan PATCH (sahip ve saldırgan) 0 satır, talep değişmez | **Geçti** |
+| Başka firma ek için imzalı adres alamaz (400) | **Geçti** |
+| Regresyon (canlı): aktif akışlar, süre bitince görüntüleme/Excel/cari/fotoğraf, yazma ve Storage engeli, destek açık | **Geçti** |
+
+**Geri yükleme:** A ve B `trial_ends_at` orijinal (`2026-10-19T20:10:4x`), plan `trial`, aktif, `read_only=false`, `pilot=false`;
+A `onboarding_completed` testten önceki `false`'a döndürüldü; QA destek talepleri (11) ve ek nesneleri silindi.
+Apple Test ve gerçek müşteri kayıtlarına dokunulmadı.
 
