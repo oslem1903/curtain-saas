@@ -43,7 +43,7 @@ const PROBE = 'QA Subscription Gate Probe';
 const getProbe = async () => (await (await rest(`customers?select=id,name,phone&name=eq.${encodeURIComponent(PROBE)}&company_id=eq.${companyId}`)).json());
 
 const SUPPLIER = 'QA Gate Supplier';
-const getSupplier = async () => (await (await rest(`suppliers?select=id,name&name=eq.${encodeURIComponent(SUPPLIER)}&company_id=eq.${companyId}`)).json())[0];
+const getSupplier = async () => (await (await rest(`suppliers?select=id,name&name=eq.${encodeURIComponent(SUPPLIER)}&company_id=eq.${companyId}&deleted_at=is.null`)).json())[0];
 const ledger = async (supplierId) => {
   const r = await rpc('get_supplier_ledger', { p_supplier_id: supplierId, p_company_id: companyId, p_limit: 100 });
   return r;
@@ -100,8 +100,9 @@ if (expect === 'active') {
     check('Storage probe nesnesi temizlendi', [200, 400, 404].includes(rmo.status), `HTTP ${rmo.status}`);
     const supC = await getSupplier();
     if (supC) {
-      const delS = await rest(`suppliers?id=eq.${supC.id}`, { method: 'DELETE' });
-      check('tedarikci probe temizlendi', delS.ok && !(await getSupplier()), `HTTP ${delS.status}`);
+      // Uygulamanin kendi yolu: dogrudan DELETE yok, soft_delete_supplier RPC (satir deleted_at ile gizlenir).
+      const delS = await rpc('soft_delete_supplier', { p_company_id: companyId, p_supplier_id: supC.id });
+      check('tedarikci probe temizlendi (soft delete)', delS.status === 200 && delS.body?.success === true && !(await getSupplier()), `HTTP ${delS.status}`);
     }
   } else {
     const rd = await rest('customers?select=id&limit=3');

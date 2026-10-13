@@ -1,13 +1,13 @@
 -- =============================================================================
--- Migration 029b (TASLAK — UYGULANMADI): suresi bitmis firma icin Storage YAZMA korumasi.
+-- Migration 029b (UYGULANDI 2026-10-13, PerdePRO ffhmzlcsgsgjonqqhgqq): suresi bitmis firma icin Storage YAZMA korumasi.
 --
 -- Gerekce: 024/025 yazma korumasi yalnizca PUBLIC tablolardaki tetikleyicilerdir; storage.objects
 -- politikalari (supabase_storage_tenant_isolation.sql) abonelik durumuna BAKMAZ. Urun karari:
 -- sure bitince yeni kayit/duzenleme/silme sunucuda engellenir -> dosya yukleme/degistirme/silme de.
 -- SELECT'e (goruntuleme, imzali adres) DOKUNULMAZ. FORCE RLS eklenmez.
 --
--- UYGULAMA KOSULU: once scripts/verify-subscription-gate.mjs suresi bitmis QA firmasinda Storage
--- yazmasinin GERCEKTEN engellenmedigini (acigi) kanitlamali. Kanitlanmadiysa uygulanmaz.
+-- UYGULAMA KOSULU (saglandi): scripts/verify-subscription-gate.mjs suresi bitmis QA firmasinda Storage
+-- yukleme/silmenin HTTP 200 oldugunu kanitladi; uygulamadan sonra 400 ve support-attachments 200.
 --
 -- KAPSAM: 6 bucket. 'support-attachments' BILEREK disarida: 024 destek talebini sure bitince de
 -- acik birakir (musteri destege ulasabilmeli).

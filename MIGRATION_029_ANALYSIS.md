@@ -1,7 +1,6 @@
 # Migration 029 — analiz, karar ve çalıştırma planı (2026-10-13)
 
-**Durum: üretime HİÇBİR 029 parçası uygulanmadı.** Bu oturumda PerdePRO projesine yönetim erişimi (SQL Editor)
-yoktu; canlı karşılaştırma ve uygulama adımları erişim gelince aşağıdaki sırayla yapılacak.
+**Durum (2026-10-13 sonu):** tam 029 UYGULANMADI (kesin ürün kararı). **029a ve 029b üretime uygulandı** — bkz. §9.
 
 ## 1. Karar: 029 olduğu gibi değil, 029a (iki RPC)
 
@@ -148,4 +147,58 @@ Vercel (scope `ilk16`, iki proje aynı repoyu derliyor):
   korumasıyla (URL/anon eksikse derleme hata verir) tekrar bozulması engellenir.
 - `app.perdepro.com` iki projeye de atanmamış (NXDOMAIN).
 Bu üç madde (hangi proje canonical, domain atama, redeploy) **kalan yayın işidir**; bu oturumda değiştirilmedi.
+
+## 9. Uygulama ve canlı doğrulama (2026-10-13, yetkili Supabase oturumu ile)
+
+### 9.1 Canlı şema karşılaştırması (salt-okunur)
+| Nesne | Canlı | Repo eşleşmesi |
+|---|---|---|
+| `check_subscription_active` | md5 `ed827621…`, secdef, `search_path=public` | **migration 026** ile birebir (013/029 değil) |
+| `company_subscription_allows_write` | `9c2f12cc…` | **026** ile birebir |
+| `is_company_writable` | `82951037…` | **026** ile birebir (011/022'den farklı: `pilot_until` var) |
+| `enforce_company_subscription_write` | var | 024 |
+| Yazma tetikleyicisi | **29 tablo** | iş tabloları kapsamlı |
+| `company_id`'li tetikleyicisiz | 23 tablo: `activity_logs, admin_*, app_devices, app_update_reads, audit_logs, backup_history, company_devices, company_members, database_health_checks, device_notification_tokens, email_*, error_logs, installation_errors, notification_*, remote_maintenance_logs, support_tickets, system_logs, user_activity, user_invites` | 024'ün bilerek kapsam dışı bıraktıkları (log/cihaz/bildirim/destek/üyelik/davet) |
+| 029 politikası | 0 tabloda | — |
+| 029'un 45 tablosundan canlıda olmayan | `branches, customer_collections, field_info, quote_items, quotes, staff, vehicles, warehouse_items` | 029 bunları atlardı |
+| Storage politikaları | 4 `perdepro_objects_*`, hiçbirinde abonelik kontrolü yok | — |
+
+**011/013 ile fark:** canlı gövdeler 011/013'ün de ötesinde, **026**'dır (pilot süresi `pilot_until`, `license_expires_at`).
+Etki yönünden güvenli: 026 daha kısıtlayıcı/kapsamlıdır (011'de pilot süresiz yazabilirdi).
+
+**Firma etkisi (8 firma; adlar maskeli):** 029a yeni nesne eklediği için sunucu davranışı değişmez. İstemci 1.0.14 bu RPC'lerle
+şunu görür: 2 gerçek firmanın denemesi zaten bitmiş (`access_allowed=false`; sunucu yazmayı zaten engelliyordu), 2 pilot ve
+"Apple Test" (pilot) `true`, 1 gerçek deneme (2026-10-18'e kadar) `true`, 2 QA firması `true`.
+
+### 9.2 Uygulananlar
+- **029a** (düzeltilmiş `snapshot`): `company_subscription_access_allowed/snapshot` — ön/son kontrol geçti.
+- **029b** (Storage yazma): `perdepro_objects_insert/update/delete`'a `company_subscription_allows_write(...)` eklendi;
+  `support-attachments` hariç; SELECT'e dokunulmadı. Önceki tanımlar `backup-before-029b-20261013/` (Git dışı) ve
+  `supabase_migration_029b_rollback.sql`'de.
+- **`support-attachments` istisnasının nedeni:** migration 024 — "süresi dolan kullanıcı giriş yapabilmeli, destek talebi
+  açabilmeli"; `support_tickets` tetikleyicisiz; `SupportModal` ekran görüntüsünü `{company}/{ticket}/screenshot.*` olarak
+  buraya yükler (upsert). Kapsam yalnızca bu bucket; firma üyelik koşulu yine geçerli. Sunucuda doğrulandı (yükleme 200).
+
+### 9.3 Sunucu testleri (QA firması B, canlı veritabanı) — `verify-subscription-gate.mjs`
+| Senaryo | Sonuç |
+|---|---|
+| Aktif: iki RPC `true`/trial, okuma+yazma, tedarikçi cari, Storage yükle/imzala/indir | **Geçti** |
+| Aktif: başka firma snapshot alamaz (403), var/yok aynı hata, anon 401 | **Geçti** |
+| Bitmiş: iki RPC `false`; müşteri/tedarikçi okuma, cari rapor, Storage imzalı adres + indirme açık | **Geçti** |
+| Bitmiş: REST INSERT/UPDATE `P0001`, DELETE `42501 PERDEPRO_SUBSCRIPTION_READ_ONLY`; Storage yükleme/silme engelli | **Geçti** (029b sonrası) |
+| Bitmiş, 029b ÖNCESİ: Storage yükleme/silme **HTTP 200** (açık kanıtlandı) | 029b ile kapandı |
+| Bitmiş: `support-attachments` yükleme açık | **Geçti** |
+| `trial_ends_at` | `2026-10-19 20:10:48.126191+00` → bitmiş → **aynı değere geri yüklendi** (doğrulandı; plan `trial`, aktif, `read_only=false`, `is_pilot=false`) |
+
+### 9.4 İstemci hatası (bulundu ve düzeltildi, `3395f53`)
+Bitmiş QA firmasında 1.0.14 istemcisi içeriği **göstermiyordu**: salt-okunur modda kendi abonelik RPC'lerini (POST) ve
+arka plan telemetrisini (`app_devices`, `record_login`) engelliyor, her engelleme `trial-expired-action` ile
+`PurchaseRequiredScreen`'i açıp tüm sayfayı değiştiriyordu. Düzeltme: izin listesi + rota değişince ekranın sıfırlanması.
+**Yerel dev sunucusunda (1.0.14 kodu, canlı Supabase)** bitmiş durumda: müşteri/tedarikçi görünümü, cari, imzalı fotoğraf,
+Excel yedeği indirme geçti. **Bu bir yerel testtir; yayındaki sürümde henüz doğrulanmadı.**
+
+### 9.5 Yayın
+Sürüm: `package.json`=`package-lock.json`=Android `versionName`=derlenen paket **1.0.14** (eski `VITE_APP_VERSION` secret'ı
+artık yok sayılıyor). `git push` bu oturumda otomatik izin denetimi tarafından reddedildi; **release dalı push edilmedi,
+production'a yayınlanmadı, yayın sonrası canlı doğrulama yapılmadı.** `app.perdepro.com` DNS/domain işi açık.
 
