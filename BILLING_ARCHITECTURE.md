@@ -1,6 +1,6 @@
 # PerdePRO Abonelik / Ödeme Mimarisi (TASLAK)
 
-Durum: **tasarım + yerel test edilmiş taslak şema + dağıtılmamış Edge Function kodu.**
+Durum: ESKI (iyzico) TASARIM TASLAGI; guncel PayTR akisi icin BILLING_PAYTR_ROUTING.md ve migration 033-035 gecerlidir.
 Üretime uygulanmadı, hiçbir sağlayıcı hesabı açılmadı, **canlı/sandbox ödeme akışı test edilmedi**, çalışan satın alma yoktur.
 
 ## Ödeme modeli: tek seferlik dönem satın alımı
