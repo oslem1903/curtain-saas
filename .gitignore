@@ -73,3 +73,6 @@ marketing/**/*.webm
 marketing/**/*.wav
 marketing/**/*.png
 marketing/**/*.jpg
+
+# QA PayTR test durumu
+.qa-paytr-state.json
