@@ -86,3 +86,43 @@ export function routeAuthCallback() {
     const route = window.location.hash.startsWith("#/reset-password") ? "/reset-password" : "/auth/callback";
     window.history.replaceState(null, document.title, `${window.location.pathname}#${route}?${params.toString()}`);
 }
+
+/** Kayit dogrulama baglantisinin DONECEGI web adresi (izin listesinde ZATEN var: `<web>/#/auth/callback`). */
+const PRODUCTION_WEB_APP = "https://oslem1903-curtain-saas.vercel.app";
+
+/**
+ * Kayit (signup) dogrulama e-postasi icin donus adresi.
+ *
+ * Mobil uygulamada ozel sema (com.curtainsaas.app://) ile donmek, e-posta bilgisayarda/Gmail web'de
+ * acildiginda beyaz ekranda kalir. Bu yuzden mobil kayitlarda dogrulama HTTPS web sayfasina doner;
+ * sayfa "Uygulamayi ac" dugmesiyle uygulamaya geri yonlendirir. Sifre sifirlama akisi AYRIDIR ve
+ * getAuthRedirectUrl("/reset-password") ile ayni sekilde kalir.
+ */
+export function getSignupRedirectUrl(): string | undefined {
+    if (isNativeCapacitor()) {
+        const base = configuredPublicAppUrl() ?? PRODUCTION_WEB_APP;
+        return `${base}/#/auth/callback`;
+    }
+    return getAuthRedirectUrl("/auth/callback");
+}
+
+const PENDING_SIGNUP_KEY = "perdepro_pending_signup_at";
+
+/** Bu cihaz/tarayici kaydi baslatti (dogrulama sayfasi buna gore davranir). */
+export function markSignupStartedHere(): void {
+    try { localStorage.setItem(PENDING_SIGNUP_KEY, String(Date.now())); } catch { /* yok say */ }
+}
+export function wasSignupStartedHere(maxAgeMs = 7 * 24 * 3600 * 1000): boolean {
+    try {
+        const t = Number(localStorage.getItem(PENDING_SIGNUP_KEY) || 0);
+        return Number.isFinite(t) && t > 0 && Date.now() - t < maxAgeMs;
+    } catch {
+        return false;
+    }
+}
+export function clearSignupStartedHere(): void {
+    try { localStorage.removeItem(PENDING_SIGNUP_KEY); } catch { /* yok say */ }
+}
+
+/** Uygulamayi acan ozel sema baglantisi (yalniz "Uygulamayi ac" dugmesi icin; kimlik bilgisi tasimaz). */
+export const APP_DEEP_LINK = "com.curtainsaas.app://auth/callback";

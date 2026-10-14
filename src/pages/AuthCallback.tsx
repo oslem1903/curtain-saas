@@ -6,7 +6,7 @@ import { CheckCircle2, Loader2, MailWarning } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import AuthShell, { AuthMessage, authPrimaryButtonClass } from "../components/AuthShell";
-import { readAuthParamsFromLocation } from "../utils/authRedirect";
+import { APP_DEEP_LINK, clearSignupStartedHere, readAuthParamsFromLocation, wasSignupStartedHere } from "../utils/authRedirect";
 import { friendlyAuthError } from "../utils/authErrors";
 
 /**
@@ -17,9 +17,10 @@ import { friendlyAuthError } from "../utils/authErrors";
 export default function AuthCallback() {
     const nav = useNavigate();
     const { refreshAuth } = useAuth();
-    const [state, setState] = useState<"working" | "confirmed" | "error">("working");
+    const [state, setState] = useState<"working" | "confirmed" | "verified_elsewhere" | "error">("working");
     const [message, setMessage] = useState("");
     const sessionTask = useRef<Promise<string> | null>(null);
+    const hadCredentials = useRef(false);
 
     useEffect(() => {
         let alive = true;
@@ -33,6 +34,7 @@ export default function AuthCallback() {
             const refreshToken = params.get("refresh_token");
             const code = params.get("code");
             const tokenHash = params.get("token_hash");
+            hadCredentials.current = Boolean(accessToken || code || tokenHash);
             if (accessToken && refreshToken) {
                 const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
                 if (error) throw error;
@@ -59,12 +61,28 @@ export default function AuthCallback() {
                 const { data, error } = await supabase.auth.getSession();
                 if (error) throw error;
                 if (!alive) return;
+                if (!data.session && !hadCredentials.current) {
+                    // "Uygulamayi ac" ozel sema baglantisi parametresiz gelir: kullaniciyi hata yerine giris ekranina al.
+                    nav("/login", { replace: true });
+                    return;
+                }
                 if (!data.session) {
                     setState("error");
                     setMessage("Doğrulama oturumu bulunamadı. E-postanızdaki bağlantıyı yeniden açın veya doğrulama tamamlandıysa giriş yaparak devam edin.");
                     return;
                 }
 
+                // Dogrulama BASKA bir cihazda/tarayicida acildiysa (ornegin telefonda baslayan kayit, bilgisayarda
+                // Gmail'den acilan baglanti): bu tarayicida oturum BIRAKILMAZ; kullanici bos ekranda kalmaz,
+                // uygulamaya donme ve giris secenekleri gosterilir. Hesap/firma bu adimda OLUSTURULMAZ.
+                if (type === "signup" && !wasSignupStartedHere()) {
+                    await supabase.auth.signOut({ scope: "local" });
+                    if (!alive) return;
+                    setState("verified_elsewhere");
+                    setMessage("E-postanız doğrulandı. Kaydı başlattığınız uygulamaya dönüp giriş yapabilirsiniz.");
+                    return;
+                }
+                clearSignupStartedHere();
                 await refreshAuth();
                 if (!alive) return;
                 setState("confirmed");
@@ -89,6 +107,25 @@ export default function AuthCallback() {
         return (
             <AuthShell title="Bağlantı kontrol ediliyor" icon={<Loader2 className="w-7 h-7 animate-spin" />}>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Lütfen bekleyin...</p>
+            </AuthShell>
+        );
+    }
+
+    if (state === "verified_elsewhere") {
+        return (
+            <AuthShell title="E-posta doğrulandı" icon={<CheckCircle2 className="w-7 h-7" />}>
+                <div className="space-y-4">
+                    <AuthMessage tone="success">{message}</AuthMessage>
+                    <a href={APP_DEEP_LINK} className={authPrimaryButtonClass + " block text-center"}>
+                        PerdePRO uygulamasını aç
+                    </a>
+                    <button type="button" className={authPrimaryButtonClass} onClick={() => nav("/login", { replace: true })}>
+                        Bu tarayıcıda giriş yap
+                    </button>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Uygulama açılmazsa telefonunuzda PerdePRO'yu elle açın ve e-posta ile parolanızla giriş yapın; hesabınız hazır.
+                    </p>
+                </div>
             </AuthShell>
         );
     }

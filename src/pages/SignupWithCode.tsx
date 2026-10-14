@@ -4,7 +4,7 @@ import { CheckCircle2, Loader2, Lock, Mail, ShieldCheck, User, XCircle } from "l
 
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
-import { getAuthRedirectUrl } from "../utils/authRedirect";
+import { getSignupRedirectUrl, markSignupStartedHere } from "../utils/authRedirect";
 import { inviteSignupMetadata, friendlyInviteJoinError } from "../utils/inviteJoin";
 import { scrollFieldIntoView } from "../components/AuthShell";
 
@@ -111,7 +111,7 @@ function friendlySignupError(message: string) {
 }
 
 function signupRedirect() {
-    return getAuthRedirectUrl("/auth/callback");
+    return getSignupRedirectUrl();
 }
 
 export default function SignupWithCode() {
@@ -324,6 +324,7 @@ export default function SignupWithCode() {
         if (continuing || !shouldTrySignupAfterSignIn(signedIn.error)) throw failJoinStep("auth_sign_in", signedIn.error);
 
         const redirectTo = signupRedirect();
+        markSignupStartedHere();
         const signedUp = await supabase.auth.signUp({
             email: cleanEmail, password,
             options: {

@@ -12,7 +12,7 @@ import AuthShell, {
     authSecondaryButtonClass,
     scrollFieldIntoView,
 } from "../components/AuthShell";
-import { getAuthRedirectUrl } from "../utils/authRedirect";
+import { getSignupRedirectUrl, markSignupStartedHere } from "../utils/authRedirect";
 import { friendlyAuthError } from "../utils/authErrors";
 import { startSelfServiceTrial } from "../utils/selfServiceTrial";
 
@@ -91,7 +91,8 @@ export default function SelfSignup() {
         submittingRef.current = true;
         setLoading(true);
         try {
-            const emailRedirectTo = getAuthRedirectUrl("/auth/callback");
+            markSignupStartedHere();
+            const emailRedirectTo = getSignupRedirectUrl();
             const { data, error } = await supabase.auth.signUp({
                 email: cleanEmail,
                 password,
@@ -162,7 +163,7 @@ export default function SelfSignup() {
         setLoading(true);
         setMessage(null);
         try {
-            const emailRedirectTo = getAuthRedirectUrl("/auth/callback");
+            const emailRedirectTo = getSignupRedirectUrl();
             const { error } = await supabase.auth.resend({
                 type: "signup",
                 email: email.trim().toLowerCase(),
