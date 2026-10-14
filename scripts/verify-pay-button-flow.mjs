@@ -8,7 +8,7 @@ import { loadQaAccounts } from './lib/qaAccounts.mjs';
 const kind = process.argv[2] || 'real';
 const BASE = 'https://oslem1903-curtain-saas.vercel.app';
 const { accounts } = loadQaAccounts({ requireBoth: false });
-const acc = accounts.B;
+const acc = accounts[(process.argv[3] || 'B').toUpperCase()];
 const out = [];
 const rec = (n, ok, d = '') => { out.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  [${kind}] ${n}${d ? '  -> ' + d : ''}`); };
 console.log('kontrol saati (Europe/Istanbul):', new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }));

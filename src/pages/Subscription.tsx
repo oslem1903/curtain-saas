@@ -30,8 +30,14 @@ const statusLabel = (s: string | null | undefined) => {
   return STATUS_LABELS[key] ?? (key ? key : "—");
 };
 
-const money = (minor: number, currency: string) =>
-  new Intl.NumberFormat("tr-TR", { style: "currency", currency }).format(minor / 100);
+const money = (minor: number, currency: string) => {
+  if (currency === "TRY") {
+    const tl = minor / 100;
+    const digits = Number.isInteger(tl) ? 0 : 2;
+    return `${new Intl.NumberFormat("tr-TR", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(tl)} TL`;
+  }
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency }).format(minor / 100);
+};
 
 /** Satin alma YALNIZCA web/Windows'ta sunulur; mobil mağaza paketlerinde yalnizca durum gosterilir. */
 export default function Subscription() {
@@ -167,73 +173,113 @@ export default function Subscription() {
       </section>
 
       {!native ? (
-        <section aria-labelledby="launch-prices" className="flex flex-col gap-3">
-          <div>
-            <h2 id="launch-prices" className="text-xl font-black text-slate-900 dark:text-white">Açılışa Özel Fiyatlar</h2>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+        <section aria-labelledby="launch-prices" className="flex flex-col gap-4">
+          <div className="space-y-1.5">
+            <h2 id="launch-prices" className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">Açılışa Özel Fiyatlar</h2>
+            <p className="max-w-3xl text-sm leading-6 text-slate-700 dark:text-slate-200">
               PerdePRO Solo · KDV dahil · tek seferlik dönem satın alma, otomatik yenileme yok. 7 gün ücretsiz deneme, kredi kartı gerekmez.
               Windows, iOS ve Android aynı firma lisansını kullanır; cihaz sınırları geçerlidir.
             </p>
           </div>
 
           {canPurchase && plans.some((p) => p.is_purchasable || isTestCompany) ? (
-            <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-900">
-              <input type="checkbox" className="mt-1" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+            <label
+              className={`flex cursor-pointer items-start gap-3 rounded-2xl border-2 p-4 text-sm leading-6 transition-colors ${
+                accepted
+                  ? "border-emerald-500 bg-emerald-50 text-slate-900 dark:border-emerald-600 dark:bg-emerald-950/30 dark:text-slate-100"
+                  : "border-amber-400 bg-amber-50 text-slate-900 dark:border-amber-500 dark:bg-amber-950/30 dark:text-slate-100"
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="mt-1 h-5 w-5 shrink-0 accent-blue-600"
+                checked={accepted}
+                onChange={(e) => setAccepted(e.target.checked)}
+                aria-describedby="consent-help"
+              />
               <span>
                 Seçtiğim dönem için <b>tek seferlik</b> ödeme yapmayı onaylıyorum. Aboneliğim <b>otomatik yenilenmez</b>, kartım kaydedilmez;
                 süre dolmadan yeniden satın alabilirim.
+                <span id="consent-help" className="mt-1 block text-xs font-bold text-slate-700 dark:text-slate-200">
+                  {accepted ? "Onay verildi; ödeme düğmeleri etkin." : "Ödeme düğmeleri, bu kutuyu işaretleyene kadar pasiftir."}
+                </span>
               </span>
             </label>
           ) : null}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
             {loading ? (
               <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
             ) : plans.length === 0 ? (
-              <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 sm:col-span-2">
+              <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 md:col-span-2">
                 Paket bilgileri şu anda yüklenemedi. Süreniz dolduysa verilerinizi görüntüleyebilir ve dışa aktarabilirsiniz.
               </p>
             ) : (
-              plans.map((p) => (
-                <div key={p.code} className="flex flex-col rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-                  <div className="text-sm font-bold text-slate-500">{p.period === "year" ? "1 yıllık kullanım" : "1 aylık kullanım"}</div>
-                  <div className="mt-2 text-3xl font-black">{money(p.price_minor, p.currency)}</div>
-                  <div className="text-xs text-slate-500">KDV dahil</div>
-                  {p.period === "year" ? (
-                    <div className="mt-2 inline-flex w-fit rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                      Aylık ödemeye göre 2 ay avantajlı
+              plans.map((p) => {
+                const canPay = p.is_purchasable || isTestCompany;
+                return (
+                  <div
+                    key={p.code}
+                    className="flex h-full min-w-0 flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    <div className="text-sm font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">
+                      {p.period === "year" ? "1 yıllık kullanım" : "1 aylık kullanım"}
                     </div>
-                  ) : null}
-                  {canPurchase ? (
-                    p.is_purchasable || isTestCompany ? (
-                      <button
-                        type="button"
-                        disabled={Boolean(busyPlan) || !accepted}
-                        onClick={() => void startCheckout(p.code)}
-                        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {busyPlan === p.code ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-                        {p.is_purchasable ? "Ödemeye geç" : "Test ödemesine geç"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled
-                        className="mt-4 inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-slate-200 px-4 py-2.5 text-sm font-black text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                      >
-                        Ödeme yakında açılacak
-                      </button>
-                    )
-                  ) : null}
-                </div>
-              ))
+                    <div className="mt-3 flex items-baseline gap-2">
+                      <span className="text-4xl font-black leading-none text-slate-900 dark:text-white">{money(p.price_minor, p.currency)}</span>
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">KDV dahil</span>
+                    </div>
+                    {/* Etiket alani iki kartta da ayni yuksekliktedir (hiza bozulmaz) */}
+                    <div className="mt-3 min-h-[2rem]">
+                      {p.period === "year" ? (
+                        <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200">
+                          Aylık ödemeye göre 2 ay avantajlı
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+                          Tek seferlik · otomatik yenileme yok
+                        </span>
+                      )}
+                    </div>
+                    {canPurchase ? (
+                      <div className="mt-auto pt-6">
+                        {canPay ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={Boolean(busyPlan) || !accepted}
+                              onClick={() => void startCheckout(p.code)}
+                              aria-describedby="consent-help"
+                              className="inline-flex min-h-[3rem] w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
+                            >
+                              {busyPlan === p.code ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+                              {p.is_purchasable ? "Ödemeye geç" : "Test ödemesine geç"}
+                            </button>
+                            <p className="mt-2 min-h-[1.25rem] text-xs font-semibold text-slate-700 dark:text-slate-200">
+                              {!accepted ? "Önce yukarıdaki onay kutusunu işaretleyin." : "\u00A0"}
+                            </p>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            className="inline-flex min-h-[3rem] w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-slate-300 px-4 py-3 text-sm font-black text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                          >
+                            Ödeme yakında açılacak
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
             )}
           </div>
           {canPurchase && plans.length > 0 && !isTestCompany && !plans.some((p) => p.is_purchasable) ? (
-            <p className="text-xs text-slate-500">Çevrimiçi ödeme doğrulama aşamasındadır; açıldığında bu ekrandan satın alabilirsiniz.</p>
+            <p className="text-xs text-slate-700 dark:text-slate-200">Çevrimiçi ödeme doğrulama aşamasındadır; açıldığında bu ekrandan satın alabilirsiniz.</p>
           ) : null}
           {!canPurchase ? (
-            <p className="text-xs text-slate-500">Satın alma işlemini firma yöneticisi yapabilir.</p>
+            <p className="text-xs text-slate-700 dark:text-slate-200">Satın alma işlemini firma yöneticisi yapabilir.</p>
           ) : null}
         </section>
       ) : null}
