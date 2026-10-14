@@ -24,8 +24,8 @@ await page.goto(PAGE, { waitUntil: 'networkidle' });
 const links = await page.$$eval('a[href]', (as) => as.map((a) => ({ text: a.textContent.trim(), href: a.href })).filter((a) => /PerdePRO-Setup|releases\/download/i.test(a.href)));
 console.log('Sayfadaki indirme baglantilari:'); links.forEach((l) => console.log('  ' + l.text.slice(0, 30) + ' -> ' + l.href));
 rec('indirme baglantisi var', links.length > 0);
-rec('hepsi v1.0.16 / PerdePRO-Setup-1.0.16.exe', links.length > 0 && links.every((l) => /v1\.0\.16-windows\/PerdePRO-Setup-1\.0\.16\.exe$/.test(l.href)));
-rec('eski surum (1.0.15) baglantisi yok', !links.some((l) => /1\.0\.15/.test(l.href)));
+rec('hepsi PerdePRO-Setup-<surum>.exe release baglantisi', links.length > 0 && links.every((l) => /v\d+\.\d+\.\d+-windows\/PerdePRO-Setup-\d+\.\d+\.\d+\.exe$/.test(l.href)));
+rec('eski surum (1.0.15/1.0.16) baglantisi yok', !links.some((l) => /1\.0\.1[56]/.test(l.href)));
 
 const [dl] = await Promise.all([
   page.waitForEvent('download', { timeout: 120000 }),
@@ -35,7 +35,7 @@ const file = path.join(os.tmpdir(), 'perdepro-anon-' + Date.now() + '.exe');
 await dl.saveAs(file);
 const buf = fs.readFileSync(file);
 const sha = createHash('sha256').update(buf).digest('hex');
-rec('dosya adi PerdePRO-Setup-1.0.16.exe', dl.suggestedFilename() === 'PerdePRO-Setup-1.0.16.exe', dl.suggestedFilename());
+rec('dosya adi PerdePRO-Setup-<surum>.exe', /^PerdePRO-Setup-\d+\.\d+\.\d+\.exe$/.test(dl.suggestedFilename()), dl.suggestedFilename());
 rec('gercek EXE (MZ imzasi), HTML/giris sayfasi degil', buf[0] === 0x4d && buf[1] === 0x5a, `${buf.length} bayt`);
 rec('boyut makul (>50 MB)', buf.length > 50 * 1024 * 1024);
 rec('SHA-256 beklenenle ayni', sha === EXPECT, sha);
