@@ -11,7 +11,7 @@ import AuthShell, {
     authSecondaryButtonClass,
     scrollFieldIntoView,
 } from "../components/AuthShell";
-import { getAuthRedirectUrl } from "../utils/authRedirect";
+import { getAuthRedirectUrl, markResetStartedHere } from "../utils/authRedirect";
 import { friendlyAuthError } from "../utils/authErrors";
 import { PASSWORD_UPDATED_EMAIL, PASSWORD_UPDATED_FLAG } from "./ResetPassword";
 
@@ -152,6 +152,7 @@ export default function Login() {
 
         setLoading(true);
         try {
+            markResetStartedHere();
             const redirectTo = getAuthRedirectUrl("/reset-password");
             const { error } = await withTimeout(
                 supabase.auth.resetPasswordForEmail(cleanEmail, redirectTo ? { redirectTo } : undefined),

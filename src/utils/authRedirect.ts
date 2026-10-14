@@ -31,6 +31,10 @@ function configuredPublicAppUrl(): string | null {
 
 export function getAuthRedirectUrl(path: "/auth/callback" | "/reset-password"): string | undefined {
     if (isNativeCapacitor()) {
+        // Sifre sifirlama: e-posta bilgisayarda/Gmail web'de acilabilir; ozel sema orada BOS EKRAN verir.
+        // Bu yuzden HTTPS web sayfasina doner (izin listesinde zaten var: <web>/#/reset-password); sayfa
+        // parolayi belirler ve "Uygulamayi ac" dugmesi sunar. Kayit dogrulamasi AYRI akistir (getSignupRedirectUrl).
+        if (path === "/reset-password") return `${configuredPublicAppUrl() ?? PRODUCTION_WEB_APP}/#/reset-password`;
         return "com.curtainsaas.app://auth/callback";
     }
 
@@ -126,3 +130,19 @@ export function clearSignupStartedHere(): void {
 
 /** Uygulamayi acan ozel sema baglantisi (yalniz "Uygulamayi ac" dugmesi icin; kimlik bilgisi tasimaz). */
 export const APP_DEEP_LINK = "com.curtainsaas.app://auth/callback";
+
+const PENDING_RESET_KEY = "perdepro_pending_reset_at";
+export function markResetStartedHere(): void {
+    try { localStorage.setItem(PENDING_RESET_KEY, String(Date.now())); } catch { /* yok say */ }
+}
+export function wasResetStartedHere(maxAgeMs = 24 * 3600 * 1000): boolean {
+    try {
+        const t = Number(localStorage.getItem(PENDING_RESET_KEY) || 0);
+        return Number.isFinite(t) && t > 0 && Date.now() - t < maxAgeMs;
+    } catch {
+        return false;
+    }
+}
+export function clearResetStartedHere(): void {
+    try { localStorage.removeItem(PENDING_RESET_KEY); } catch { /* yok say */ }
+}

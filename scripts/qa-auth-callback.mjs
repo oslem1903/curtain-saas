@@ -44,5 +44,34 @@ rec('ayni cihazda eski akis: "Kaydı başlattığınız uygulamaya dönüp" sayf
 r = await run('recovery (sifre sifirlama) akisi etkilenmez', { pending: false, type: 'recovery' });
 rec('recovery -> /reset-password', /reset-password/.test(r.url), r.url.split('#')[1]?.slice(0, 30));
 
+// --- Sifre sifirlama: telefondaki uygulamadan istenen baglanti bilgisayarda acilir (sifirlama bu tarayicida baslatilmadi)
+async function resetRun(pending) {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  if (pending) await ctx.addInitScript(() => localStorage.setItem('perdepro_pending_reset_at', String(Date.now())));
+  await ctx.route('**/auth/v1/user*', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(user) }));
+  await ctx.route('**/auth/v1/logout*', (r) => r.fulfill({ status: 204, body: '' }));
+  await ctx.route('**/auth/v1/token*', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ access_token: jwt, refresh_token: 'r', token_type: 'bearer', expires_in: 3600, user }) }));
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/#/reset-password#access_token=${jwt}&refresh_token=r&expires_in=3600&token_type=bearer&type=recovery`);
+  await page.waitForTimeout(2500);
+  await page.locator('input[autocomplete="new-password"]').nth(0).fill('Yeni-Parola-123');
+  await page.locator('input[autocomplete="new-password"]').nth(1).fill('Yeni-Parola-123');
+  await page.getByRole('button', { name: /Şifreyi Güncelle/ }).click();
+  await page.waitForTimeout(3500);
+  const body = await page.locator('body').innerText();
+  const deep = await page.locator('a[href^="com.curtainsaas.app://"]').count();
+  const out = { body, deep, url: page.url() };
+  await browser.close();
+  return out;
+}
+console.log('--- sifre sifirlama, baska cihazda acildi');
+r = await resetRun(false);
+rec('sifre guncellendi sayfasi bos ekran degil, "Uygulamayi ac" var', /Şifreniz güncellendi/.test(r.body) && r.deep === 1);
+rec('otomatik girise atilmadi (secenekler gorunuyor)', /reset-password/.test(r.url) && /Bu tarayıcıda giriş yap/.test(r.body));
+console.log('--- sifre sifirlama, ayni tarayicida baslatildi');
+r = await resetRun(true);
+rec('ayni tarayicida eski akis: girise yonlenir', /login/.test(r.url));
+
 console.log(fail ? `\n${fail} KONTROL BASARISIZ` : '\nTUM KONTROLLER GECTI');
 process.exit(fail ? 1 : 0);

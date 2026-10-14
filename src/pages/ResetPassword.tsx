@@ -4,6 +4,7 @@ import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock } from "lucide-react
 import { supabase } from "../supabaseClient";
 import AuthShell, { AuthMessage, authInputClass, authLabelClass, authPrimaryButtonClass, scrollFieldIntoView } from "../components/AuthShell";
 import { friendlyAuthError } from "../utils/authErrors";
+import { APP_DEEP_LINK, clearResetStartedHere, wasResetStartedHere } from "../utils/authRedirect";
 
 const MIN_PASSWORD_LENGTH = 8;
 /** Giriş ekranının "şifreniz güncellendi" mesajını göstermesi için (bkz. Login.tsx). */
@@ -47,6 +48,7 @@ export default function ResetPassword() {
         tone: "info",
         text: "Şifre sıfırlama bağlantısı kontrol ediliyor...",
     });
+    const [elsewhere, setElsewhere] = useState(false);
     const savingRef = useRef(false);
 
     useEffect(() => {
@@ -155,6 +157,14 @@ export default function ResetPassword() {
             // Depolama kapalıysa mesaj yalnızca yönlendirme durumuyla taşınır.
         }
 
+        // Sifirlama bu cihaz/tarayicida baslatilmadiysa (telefondaki uygulamadan istenip bilgisayarda acilan baglanti)
+        // otomatik yonlendirme yerine "Uygulamayi ac" / "Giris ekrani" secenekleri gosterilir.
+        if (!wasResetStartedHere()) {
+            setMessage({ tone: "success", text: "Şifreniz güncellendi. Artık uygulamaya yeni şifrenizle giriş yapabilirsiniz." });
+            setElsewhere(true);
+            return;
+        }
+        clearResetStartedHere();
         window.setTimeout(() => {
             nav("/login", { replace: true, state: { passwordUpdated: true, email } });
         }, REDIRECT_DELAY_MS);
@@ -233,7 +243,21 @@ export default function ResetPassword() {
                     </>
                 ) : null}
 
-                {phase === "done" ? (
+                {phase === "done" && elsewhere ? (
+                    <div className="space-y-3">
+                        <a href={APP_DEEP_LINK} className={authPrimaryButtonClass + " block text-center"}>
+                            PerdePRO uygulamasını aç
+                        </a>
+                        <button type="button" className={authPrimaryButtonClass} onClick={() => nav("/login", { replace: true })}>
+                            Bu tarayıcıda giriş yap
+                        </button>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                            Uygulama açılmazsa PerdePRO'yu telefonunuzda elle açıp yeni şifrenizle giriş yapın.
+                        </p>
+                    </div>
+                ) : null}
+
+                {phase === "done" && !elsewhere ? (
                     <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
                         <Loader2 className="w-4 h-4 animate-spin" />
                         Oturum güvenli şekilde kapatıldı.
