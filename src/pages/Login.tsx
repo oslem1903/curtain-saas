@@ -161,7 +161,9 @@ export default function Login() {
             if (error) throw error;
             setInfo({
                 tone: "success",
-                text: "Bu e-posta ile kayıtlı bir hesap varsa şifre sıfırlama bağlantısı gönderildi. Gelen kutusu ve spam klasörünü kontrol edin.",
+                // Hesabin var olup olmadigi ACIKLANMAZ (Supabase de ayni 200 yanitini verir); yalnizca yazilan adres
+                // geri gosterilir ve kullaniciya adres/kayit kontrolu yaptirilir.
+                text: `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Birkaç dakika içinde gelmezse spam klasörünü ve adresin doğru yazıldığını kontrol edin. Bu adresle PerdePRO'da kayıt olmadıysanız bağlantı gönderilmez; "7 gün ücretsiz dene" ile kayıt olabilir ya da kayıt olurken kullandığınız adresi yazabilirsiniz.`,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String((error as { message?: string })?.message || "");
