@@ -1,7 +1,7 @@
 {
   "name": "perdepro",
   "private": true,
-  "version": "1.0.19",
+  "version": "1.0.20",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -53,9 +53,11 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "public/**/*"
+      "public/**/*",
+      "!node_modules/**/*"
     ],
-    "copyright": "PerdePRO"
+    "copyright": "Copyright © OZIDIJITAL",
+    "electronLanguages": ["tr", "en-US"]
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
@@ -115,5 +117,8 @@
     "vite-plugin-pwa": "^1.2.0",
     "wait-on": "^9.0.5"
   },
-  "description": "PerdePRO perde işletmesi yönetim uygulaması"
+  "description": "PerdePRO perde işletmesi yönetim uygulaması",
+  "author": {
+    "name": "OZIDIJITAL"
+  }
 }

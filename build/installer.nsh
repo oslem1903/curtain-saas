@@ -20,3 +20,9 @@
     DetailPrint "Eski surum kaldirici kodu $R0 dondurdu; guncelleme dosyalarin uzerine yazilarak surdurulur."
   ${endif}
 !macroend
+
+; Eski surumlerden (<=1.0.19) kalan app.asar.unpacked (binlerce gereksiz dosya) guncellemede temizlenir.
+; Yeni paket bu klasoru kullanmaz; kullanici verisi (userData) ayri dizinde, etkilenmez.
+!macro customInstall
+  RMDir /r "$INSTDIR\resources\app.asar.unpacked"
+!macroend
