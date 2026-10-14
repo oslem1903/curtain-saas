@@ -1570,6 +1570,8 @@ export default function OrderDetail() {
                     // Siparişte montajcı seçildiyse montaj işine taşı
                     // (Montaj Takibi + Montajcı Cari bu alandan okur; kalıcı kimlik kuralı: her zaman employees.id)
                     assigned_staff_id: installationEmployeeId,
+                    // "Kendim yapıyorum" seçiliyse iş baştan firma-içi olarak açılır (hakediş/borç oluşmaz)
+                    ...(selfInstall ? { is_internal_installation: true } : {}),
                 }])
                 .select("id,status,assigned_staff_id")
                 .single();
@@ -2448,21 +2450,21 @@ export default function OrderDetail() {
 
                                 {/* Özet kartları */}
                                 <div className="grid grid-cols-2 gap-3 mb-6">
-                                    <div className="rounded-2xl bg-white/5 p-3 text-center">
+                                    <div className="min-w-0 rounded-2xl bg-white/5 p-3 text-center">
                                         <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Toplam Satış</div>
-                                        <div className="text-lg font-black text-white">{fmtTL(salesTotal)}</div>
+                                        <div className="whitespace-nowrap text-sm font-black tabular-nums text-white">{fmtTL(salesTotal)}</div>
                                     </div>
-                                    <div className="rounded-2xl bg-white/5 p-3 text-center">
+                                    <div className="min-w-0 rounded-2xl bg-white/5 p-3 text-center">
                                         <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Toplam Maliyet</div>
-                                        <div className="text-lg font-black text-rose-400">{fmtTL(totalCostAll)}</div>
+                                        <div className="whitespace-nowrap text-sm font-black tabular-nums text-rose-400">{fmtTL(totalCostAll)}</div>
                                     </div>
-                                    <div className="rounded-2xl bg-emerald-500/10 p-3 text-center">
+                                    <div className="min-w-0 rounded-2xl bg-emerald-500/10 p-3 text-center">
                                         <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Net Kâr</div>
-                                        <div className={`text-lg font-black ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmtTL(netProfit)}</div>
+                                        <div className={`whitespace-nowrap text-sm font-black tabular-nums ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmtTL(netProfit)}</div>
                                     </div>
-                                    <div className="rounded-2xl bg-white/5 p-3 text-center">
+                                    <div className="min-w-0 rounded-2xl bg-white/5 p-3 text-center">
                                         <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Kâr Marjı</div>
-                                        <div className={`text-lg font-black ${profitMargin >= 0 ? "text-emerald-400" : "text-rose-400"}`}>%{profitMargin.toFixed(1)}</div>
+                                        <div className={`whitespace-nowrap text-sm font-black tabular-nums ${profitMargin >= 0 ? "text-emerald-400" : "text-rose-400"}`}>%{profitMargin.toFixed(1)}</div>
                                     </div>
                                 </div>
 

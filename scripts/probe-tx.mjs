@@ -1,0 +1,11 @@
+import { createClient } from '@supabase/supabase-js';
+import fs from 'node:fs';
+import { loadQaAccounts } from './lib/qaAccounts.mjs';
+const env = Object.fromEntries(fs.readFileSync('.env.local','utf8').split(/\r?\n/).filter(l=>l.includes('=')).map(l=>{const i=l.indexOf('=');return [l.slice(0,i),l.slice(i+1).replace(/^"|"$/g,'')]}));
+const sb = createClient(env.VITE_SUPABASE_URI, env.VITE_SUPABASE_ANON_KEY);
+const a = loadQaAccounts({ requireBoth: false }).accounts.A;
+await sb.auth.signInWithPassword({ email: a.email, password: a.password });
+const { data } = await sb.from('installer_transactions').select('installer_id,transaction_type,amount,created_at,description').order('created_at', { ascending: false }).limit(8);
+console.log(JSON.stringify(data, null, 1));
+const { data: e } = await sb.from('installer_earnings').select('installer_id,total_earning,created_at,earning_type').order('created_at', { ascending: false }).limit(3);
+console.log(JSON.stringify(e));

@@ -16,6 +16,7 @@ import {
   type CollectionRowStatus,
 } from "../utils/installments";
 import { EmptyState } from "../components/EmptyState";
+import { useAuth } from "../context/AuthContext";
 
 // ============================================================================
 // Tahsilat ve Ödemeler — Solo Perdeci icin Muhasebe'nin yerini tutan tahsilat ekrani.
@@ -127,13 +128,13 @@ const KIND_TABS: { key: KindFilter; label: string }[] = [
 
 export default function Collections() {
   const nav = useNavigate();
+  const { readOnly: authReadOnly } = useAuth();
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [openRows, setOpenRows] = useState<OpenRow[]>([]);
   const [collectedRows, setCollectedRows] = useState<CollectedRow[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
-  const [readOnly] = useState(() => isAppReadOnly());
   const [dueEdit, setDueEdit] = useState<{ key: string; value: string } | null>(null);
   const [dueMsg, setDueMsg] = useState("");
   const [search, setSearch] = useState("");
@@ -486,6 +487,8 @@ export default function Collections() {
 
   if (loading) return <div className="p-10 text-center font-bold">Yükleniyor...</div>;
 
+  // Salt okunur: süresi dolmuş lisans / salt okunur firma / demo — yazma düğmeleri gizlenir (sunucu da engeller)
+  const readOnly = authReadOnly || isAppReadOnly();
   const canRecord = !readOnly;
 
   const openLinks = (row: OpenRow) => {

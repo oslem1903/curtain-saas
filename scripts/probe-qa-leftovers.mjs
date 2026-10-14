@@ -1,0 +1,15 @@
+import { createClient } from '@supabase/supabase-js';
+import fs from 'node:fs';
+import { loadQaAccounts } from './lib/qaAccounts.mjs';
+const env = Object.fromEntries(fs.readFileSync('.env.local','utf8').split(/\r?\n/).filter(l=>l.includes('=')).map(l=>{const i=l.indexOf('=');return [l.slice(0,i),l.slice(i+1).replace(/^"|"$/g,'')]}));
+const sb = createClient(env.VITE_SUPABASE_URI, env.VITE_SUPABASE_ANON_KEY);
+const a = loadQaAccounts({ requireBoth: false }).accounts.A;
+await sb.auth.signInWithPassword({ email: a.email, password: a.password });
+const show = async (t, cols) => { const r = await sb.from(t).select(cols); console.log(t, r.error?.message ?? JSON.stringify(r.data)); };
+await show('installer_earnings', 'id,installer_id,installation_job_id,order_id,earning_type,total_earning');
+await show('installation_jobs', 'id,order_id,assigned_staff_id,status,is_internal_installation');
+await show('employees', 'id,full_name');
+await show('orders', 'id,customer_id,status');
+await show('customers', 'id,name');
+await show('suppliers', 'id,name');
+await show('installer_transactions', 'id,installer_id,transaction_type,amount');
