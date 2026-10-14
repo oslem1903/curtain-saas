@@ -76,3 +76,4 @@ marketing/**/*.jpg
 
 # QA PayTR test durumu
 .qa-paytr-state.json
+.qa-paytr-live-link.txt
