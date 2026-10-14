@@ -958,7 +958,7 @@ const RLS_WRITE_HINT =
 
                 {showNewSupplierModal && (
                     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[90vh] overflow-y-auto w-full max-w-2xl shadow-2xl">
+                        <div className="bg-white dark:bg-slate-900 rounded-3xl max-h-[calc(100dvh-2rem)] overflow-y-auto w-full max-w-2xl shadow-2xl">
                             <div className="sticky top-0 flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
                                 <h2 className="text-2xl font-black text-slate-900 dark:text-white">Yeni Tedarikçi Ekle</h2>
                                 <button

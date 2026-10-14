@@ -1602,7 +1602,7 @@ export default function Customers() {
             {/* Premium Tabbed Details CRM Modal */}
             {selectedCustomer && selectedLedger && (
                 <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/60 backdrop-blur-xs p-0 sm:items-center sm:p-4 animate-fadeIn">
-                    <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 flex flex-col border border-slate-200 dark:border-slate-850">
+                    <div className="max-h-[calc(100dvh-1rem)] w-full max-w-4xl overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 flex flex-col border border-slate-200 dark:border-slate-850">
                         {/* Header details */}
                         <div className="flex justify-between items-start gap-4 pb-4 border-b border-slate-100 dark:border-slate-800 mb-4">
                             <div className="min-w-0">
@@ -2043,7 +2043,7 @@ export default function Customers() {
             {/* Müşteri Cari Ekstre Modal */}
             {statementCustomer ? (
                 <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/60 backdrop-blur-xs p-0 sm:items-center sm:p-4 animate-fadeIn">
-                    <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 border border-slate-200 dark:border-slate-800">
+                    <div className="w-full max-w-3xl max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 border border-slate-200 dark:border-slate-800">
                         <div className="flex items-start justify-between gap-3 mb-4">
                             <div>
                                 <h3 className="flex items-center gap-2 text-lg font-black text-slate-900 dark:text-white">
@@ -2120,7 +2120,7 @@ export default function Customers() {
             {/* Enhanced Collection Modal */}
             {collectCustomer ? (
                 <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/60 backdrop-blur-xs p-0 sm:items-center sm:p-4 animate-fadeIn">
-                    <div className="w-full max-w-md overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 border border-slate-200 dark:border-slate-800">
+                    <div className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-t-3xl bg-white dark:bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:p-6 border border-slate-200 dark:border-slate-800">
                         
                         {collectSuccessState ? (
                             /* Success State Render */

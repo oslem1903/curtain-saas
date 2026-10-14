@@ -608,6 +608,42 @@ export const Layout = () => {
   const toggleMobileMenu = () => setIsMobileMenuOpen((p) => !p);
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
 
+  // ---- Ortak modal/pencere davranisi -------------------------------------------------------------
+  // Sayfalardaki pencereler (Tedarikci Ekle, Musteri, Teklif, Siparis, Randevu...) `fixed inset-0` katmani
+  // olarak render edilir. Bir pencere acildiginda: mobil menu kapanir, yan menu/ust cubuk/alt gezinme
+  // etkilesime kapatilir (inert), arka plan kaydirmasi kilitlenir. Kapaninca hepsi eski haline doner.
+  useEffect(() => {
+    let raf = 0;
+    let locked = false;
+    const apply = () => {
+      raf = 0;
+      const overlays = Array.from(document.querySelectorAll<HTMLElement>("main [class*='inset-0']")).filter((el) => {
+        if (el.closest("header, [data-chrome]")) return false;
+        const cs = window.getComputedStyle(el);
+        return cs.position === "fixed" && cs.display !== "none" && cs.visibility !== "hidden";
+      });
+      const open = overlays.length > 0;
+      if (open === locked) return;
+      locked = open;
+      document.querySelectorAll<HTMLElement>("[data-chrome]").forEach((el) => {
+        if (open) el.setAttribute("inert", "");
+        else el.removeAttribute("inert");
+      });
+      document.body.style.overflow = open ? "hidden" : "";
+      if (open) setIsMobileMenuOpen(false);
+    };
+    const schedule = () => { if (!raf) raf = window.requestAnimationFrame(apply); };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    schedule();
+    return () => {
+      observer.disconnect();
+      if (raf) window.cancelAnimationFrame(raf);
+      document.querySelectorAll<HTMLElement>("[data-chrome]").forEach((el) => el.removeAttribute("inert"));
+      document.body.style.overflow = "";
+    };
+  }, []);
+
   const toggleReminder = () => setIsReminderOpen((p) => !p);
   const closeReminder = () => setIsReminderOpen(false);
 
@@ -841,6 +877,7 @@ export const Layout = () => {
       {/* Mobile Backdrop */}
       {isMobileMenuOpen && (
         <div
+          data-chrome="backdrop"
           className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm transition-opacity"
           onClick={closeMobileMenu}
         />
@@ -848,8 +885,9 @@ export const Layout = () => {
 
       {/* Sidebar */}
       <aside
+        data-chrome="sidebar"
         className={cn(
-          "fixed lg:sticky top-0 left-0 z-[60] h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
+          "fixed lg:sticky top-0 left-0 z-[60] lg:z-30 h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
@@ -1063,7 +1101,7 @@ export const Layout = () => {
                 )}
             </div>
         )}
-	        <header className={cn("min-h-[64px] sm:min-h-[80px] pt-safe bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-3 lg:px-8 z-50 transition-all duration-300", !isExpiredTrial && "sticky top-0")}>
+	        <header data-chrome="header" className={cn("min-h-[64px] sm:min-h-[80px] pt-safe bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-3 lg:px-8 z-50 transition-all duration-300", !isExpiredTrial && "sticky top-0")}>
 
 
           <button
@@ -1390,7 +1428,7 @@ export const Layout = () => {
       )}
 
       {/* MOBILE BOTTOM NAVIGATION */}
-      <nav className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] overflow-hidden pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-30 shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
+      <nav data-chrome="bottom-nav" className="fixed bottom-0 left-0 right-0 min-h-[calc(64px+env(safe-area-inset-bottom))] overflow-hidden pb-safe bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center lg:hidden z-30 shadow-[0_-4px_10px_-2px_rgba(0,0,0,0.1)]">
 
         <NavLink 
           to={isFieldOnlyRole ? "/field" : "/dashboard"}
