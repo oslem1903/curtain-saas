@@ -1,3 +1,4 @@
+import { computeInstallationCost } from "../utils/installationCost";
 import { decorativeRail, railDescription } from "../utils/decorativeRail";
 import { useMemo, useState, useEffect, useRef, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -344,6 +345,8 @@ export default function OrderDetail() {
     const idempotencyKeyRef = useRef<string | null>(null);
     const [staffList, setStaffList] = useState<Array<{ id: string; employeeId: string | null; userId: string | null; full_name: string; role: string; hasAccount: boolean }>>([]);
     const [assignedTo, setAssignedTo] = useState("");
+    const [selfInstall, setSelfInstall] = useState(false); // orders.installation_mode = "self"
+    const [jobEarningsTotal, setJobEarningsTotal] = useState(0);
     const [showNewInstaller, setShowNewInstaller] = useState(false);
     const [newInstallerName, setNewInstallerName] = useState("");
     const [newInstallerSaving, setNewInstallerSaving] = useState(false);
@@ -546,7 +549,20 @@ export default function OrderDetail() {
             setLaborCostInput(String(o?.labor_cost ?? 0));
             setTransportCostInput(String(o?.transport_cost ?? 0));
             setInstallationJob((jobRow ?? null) as InstallationJobRow | null);
-            setAssignedTo(jobRow?.assigned_staff_id || o?.assigned_staff_id || o?.assigned_to || "");
+            // "Kendim yapıyorum" (orders.installation_mode=self; kolon henüz yoksa sorgu hatası yok sayılır)
+            let modeSelf = false;
+            try {
+                const { data: modeRow, error: modeErr } = await supabase.from("orders").select("installation_mode").eq("id", id).maybeSingle();
+                modeSelf = !modeErr && (modeRow as any)?.installation_mode === "self";
+            } catch { /* kolon yok */ }
+            const isSelf = Boolean(jobRow?.is_internal_installation) || modeSelf;
+            setSelfInstall(isSelf);
+            // Bu siparişin hakediş toplamı (montaj maliyeti kaynağı; ödemeler maliyet değildir)
+            try {
+                const { data: earnRows, error: earnErr } = await supabase.from("installer_earnings").select("total_earning").eq("order_id", id);
+                setJobEarningsTotal(earnErr ? 0 : (earnRows ?? []).reduce((a: number, r: any) => a + (Number(r.total_earning) || 0), 0));
+            } catch { setJobEarningsTotal(0); }
+            setAssignedTo(isSelf ? "__self__" : (jobRow?.assigned_staff_id || o?.assigned_staff_id || o?.assigned_to || ""));
 
             // The order's tenant also owns its installers, including demo/support views.
             if (o.company_id) {
@@ -1164,6 +1180,21 @@ export default function OrderDetail() {
         if (!id) return;
         setSaving(true);
         try {
+            if (assignedTo === "__self__") {
+                // Kendim yapıyorum: dış montajcı yok, montaj maliyeti 0, montajcı borcu oluşmaz.
+                const { error: clearErr } = await supabase.from("orders").update({ assigned_to: null, assigned_staff_id: null }).eq("id", id);
+                if (clearErr) { alert(clearErr.message); return; }
+                const { error: modeErr } = await supabase.from("orders").update({ installation_mode: "self" }).eq("id", id);
+                if (modeErr && !/installation_mode|schema cache|column/i.test(modeErr.message)) { alert(modeErr.message); return; }
+                const { error: jobErr } = await supabase.from("installation_jobs")
+                    .update({ assigned_staff_id: null, is_internal_installation: true }).eq("order_id", id);
+                if (jobErr) { alert(`Seçim kaydedildi fakat montaj işi güncellenemedi: ${jobErr.message}`); }
+                else if (modeErr && !installationJob?.id) {
+                    alert("Seçim bu sipariş için henüz kalıcı saklanamıyor (veritabanı güncellemesi bekleniyor). Montaj işi oluşunca tekrar seçin.");
+                }
+                await loadData();
+                return;
+            }
             const selected = staffList.find((s) => s.id === assignedTo);
 
             // Kalıcı kimlik kuralı: orders.assigned_to = daima user_id (auth.users FK'sı,
@@ -1173,6 +1204,10 @@ export default function OrderDetail() {
             const { error } = await supabase.from("orders")
                 .update({ assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId })
                 .eq("id", id);
+            if (!error) {
+                // "Kendim yapıyorum" işareti varsa kaldır (kolon yoksa sessizce geç)
+                await supabase.from("orders").update({ installation_mode: null }).eq("id", id);
+            }
             if (error) {
                 const isFK = /foreign key|fkey|assigned_to/i.test(error.message);
                 alert(isFK ? "Montajcı atanamadı: Seçilen kişi sistemde kayıtlı kullanıcı değil." : error.message);
@@ -1718,6 +1753,7 @@ export default function OrderDetail() {
                                 className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3"
                             >
                                 <option value="">Montajcı seç / atamayı kaldır</option>
+                                <option value="__self__">Kendim yapıyorum (montajcı yok, montaj maliyeti 0)</option>
                                 {staffList.map((staff) => (
                                     <option key={staff.id} value={staff.id}>
                                         {staff.full_name} ({staffRoleLabel(staff.role)})
@@ -1726,7 +1762,7 @@ export default function OrderDetail() {
                             </select>
                             <button
                                 onClick={handleUpdateAssignedTo}
-                                disabled={saving || assignedTo === (currentInstaller?.id ?? currentInstallerId)}
+                                disabled={saving || assignedTo === (selfInstall ? "__self__" : (currentInstaller?.id ?? currentInstallerId))}
                                 className="w-full px-5 py-3 rounded-xl bg-primary-600 text-white font-bold disabled:opacity-60 sm:w-auto"
                             >
                                 {saving ? "Kaydediliyor..." : currentInstallerId ? "Montajcıyı Değiştir" : "Montajcıyı Ata"}
@@ -2397,7 +2433,8 @@ export default function OrderDetail() {
                     {/* Maliyet Kutusu (Sadece Admin/Muhasebe) */}
                     {(role === 'admin' || role === 'accountant') && (() => {
                         const mechCostVal   = Math.max(0, safeNumber(mechanismCostInput));
-                        const instCostVal   = Math.max(0, safeNumber(installationCostInput));
+                        const instCalc      = computeInstallationCost({ isInternal: selfInstall, earningsTotal: jobEarningsTotal, manualCost: safeNumber(installationCostInput) });
+                        const instCostVal   = instCalc.cost;
                         const laborCostVal  = Math.max(0, safeNumber(laborCostInput));
                         const transCostVal  = Math.max(0, safeNumber(transportCostInput));
                         const totalCostAll  = purchaseTotal + mechCostVal + instCostVal + laborCostVal + transCostVal;
@@ -2420,7 +2457,7 @@ export default function OrderDetail() {
                                         <div className="text-lg font-black text-rose-400">{fmtTL(totalCostAll)}</div>
                                     </div>
                                     <div className="rounded-2xl bg-emerald-500/10 p-3 text-center">
-                                        <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Brüt Kâr</div>
+                                        <div className="text-[10px] font-black opacity-50 mb-1 uppercase tracking-wider">Net Kâr</div>
                                         <div className={`text-lg font-black ${netProfit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmtTL(netProfit)}</div>
                                     </div>
                                     <div className="rounded-2xl bg-white/5 p-3 text-center">
@@ -2432,13 +2469,19 @@ export default function OrderDetail() {
                                 {/* Detaylı maliyet kalemleri */}
                                 <div className="space-y-1 mb-5 border-t border-white/5 pt-4">
                                     <div className="flex justify-between text-xs opacity-50">
-                                        <span>Kumaş / Alış Maliyeti</span><span>{fmtTL(purchaseTotal)}</span>
+                                        <span>Ürün maliyeti</span><span>{fmtTL(purchaseTotal)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs opacity-80">
+                                        <span>Montaj maliyeti {instCalc.source === "self" ? "(Kendim yapıyorum)" : instCalc.source === "earnings" ? "(montajcı hakedişi)" : "(elle girilen)"}</span><span>{fmtTL(instCostVal)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs font-black opacity-90">
+                                        <span>Toplam maliyet</span><span>{fmtTL(totalCostAll)}</span>
                                     </div>
 
                                     {/* Giriş alanları */}
                                     {([
                                         { label: "Mekanizma",  value: mechanismCostInput,    setter: setMechanismCostInput },
-                                        { label: "Montaj",     value: installationCostInput, setter: setInstallationCostInput },
+                                        ...(instCalc.source === "manual" ? [{ label: "Montaj (tahmini)", value: installationCostInput, setter: setInstallationCostInput }] : []),
                                         { label: "İşçilik",    value: laborCostInput,        setter: setLaborCostInput },
                                         { label: "Nakliye",    value: transportCostInput,    setter: setTransportCostInput },
                                     ] as const).map(({ label, value, setter }) => (

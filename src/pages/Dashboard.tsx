@@ -1,3 +1,4 @@
+import { computeInstallationCost } from "../utils/installationCost";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { isNativeApp } from "../utils/nativeRuntime";
 import { isSpecialAccessActive } from "../utils/trialLicense";
@@ -103,6 +104,8 @@ type DashboardData = {
   completedInstallations: number;
   monthSales: number;
   monthCost: number;
+  monthProductCost: number;
+  monthInstallCost: number;
   // Faz 2.6 — Collections.tsx ile AYNI kova tanimlarini (bucketForDueDate)
   // kullanan Dashboard tahsilat ozeti. Yukaridaki todayCollections/
   // overdueCollections/weekCollections ("Yaklaşan İşler"in 7-gunluk
@@ -140,6 +143,8 @@ const emptyData: DashboardData = {
   completedInstallations: 0,
   monthSales: 0,
   monthCost: 0,
+  monthProductCost: 0,
+  monthInstallCost: 0,
   todayDueCollections: [],
   weekDueCollections: [],
   monthDueCollections: [],
@@ -454,6 +459,7 @@ export const Dashboard = () => {
       const monthOrderIds = monthOrders.map((order) => order.id).filter(Boolean);
 
       let monthCost = 0;
+      let monthInstallCost = 0;
       if (monthOrderIds.length > 0) {
         const itemsRes = await supabase.from("order_items").select("order_id,supplier_total_cost,supplier_unit_cost,qty,profit,line_total").in("order_id", monthOrderIds);
         if (!itemsRes.error) {
@@ -463,6 +469,25 @@ export const Dashboard = () => {
             return sum + (explicit || calculated || 0);
           }, 0);
         }
+        // Montaj maliyeti: sipariş detayıyla AYNI hesap (Kendim yapıyorum=0, hakediş varsa hakediş, yoksa elle tutar)
+        try {
+          const [earnRes, jobRes, costRes, modeRes] = await Promise.all([
+            supabase.from("installer_earnings").select("order_id,total_earning").in("order_id", monthOrderIds),
+            supabase.from("installation_jobs").select("order_id,is_internal_installation").in("order_id", monthOrderIds),
+            supabase.from("orders").select("id,installation_cost").in("id", monthOrderIds),
+            supabase.from("orders").select("id,installation_mode").in("id", monthOrderIds),
+          ]);
+          const earn = new Map<string, number>();
+          (earnRes.data ?? []).forEach((r: any) => earn.set(r.order_id, (earn.get(r.order_id) ?? 0) + (Number(r.total_earning) || 0)));
+          const internal = new Set<string>();
+          (jobRes.data ?? []).forEach((r: any) => { if (r.is_internal_installation) internal.add(r.order_id); });
+          (modeRes.error ? [] : (modeRes.data ?? [])).forEach((r: any) => { if (r.installation_mode === "self") internal.add(r.id); });
+          const manual = new Map<string, number>();
+          (costRes.data ?? []).forEach((r: any) => manual.set(r.id, Number(r.installation_cost) || 0));
+          monthOrderIds.forEach((oid: string) => {
+            monthInstallCost += computeInstallationCost({ isInternal: internal.has(oid), earningsTotal: earn.get(oid) ?? 0, manualCost: manual.get(oid) ?? 0 }).cost;
+          });
+        } catch { /* montaj verisi okunamazsa ürün maliyeti ile devam */ }
       }
 
       // order_payment_plans (aktif) — payment_due_date'in taksitli/vadeli
@@ -727,7 +752,9 @@ export const Dashboard = () => {
         activeOrders: orderRows.filter((order) => !isClosed(order.status)).length,
         completedInstallations: completedJobsRes.status === "fulfilled" && !completedJobsRes.value.error ? completedJobsRes.value.count ?? 0 : 0,
         monthSales: monthOrders.reduce((sum, order) => sum + Number(order.total_amount ?? 0), 0),
-        monthCost,
+        monthProductCost: monthCost,
+        monthInstallCost,
+        monthCost: monthCost + monthInstallCost,
         todayDueCollections,
         weekDueCollections,
         monthDueCollections,
@@ -999,6 +1026,14 @@ export const Dashboard = () => {
               <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
                 <span className="text-sm font-bold text-slate-500">Toplam Satış</span>
                 <span className="font-black text-slate-950 dark:text-white">{money(data.monthSales)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
+                <span className="text-sm font-bold text-slate-500">Ürün Maliyeti</span>
+                <span className="font-black text-slate-950 dark:text-white">{money(data.monthProductCost)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
+                <span className="text-sm font-bold text-slate-500">Montaj Maliyeti</span>
+                <span className="font-black text-slate-950 dark:text-white">{money(data.monthInstallCost)}</span>
               </div>
               <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/50">
                 <span className="text-sm font-bold text-slate-500">Toplam Maliyet</span>
