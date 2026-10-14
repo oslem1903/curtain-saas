@@ -1,6 +1,7 @@
 import { computeInstallationCost } from "../utils/installationCost";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { isNativeApp } from "../utils/nativeRuntime";
+import { BILLING_UI_ENABLED } from "../utils/billingFlag";
 import { isSpecialAccessActive } from "../utils/trialLicense";
 import { useNavigate } from "react-router-dom";
 import {
@@ -384,7 +385,9 @@ function ActionButton({ label, icon: Icon, onClick }: { label: string; icon: any
 export const Dashboard = () => {
   const navigate = useNavigate();
   const { effectiveRole: role, realRole, viewingUserId } = useRole();
-  const { company, hasModule, readOnly } = useAuth();
+  const { company, hasModule, readOnly, memberRole } = useAuth();
+  // Satın alma: yalnız web/Windows (mağaza uygulamalarında ödeme akışı yok) ve yalnız firma yöneticisi.
+  const canBuyLicense = BILLING_UI_ENABLED && !isNativeApp() && memberRole === "admin" && !readOnly;
   // Faz 2.6: Muhasebe modulu olan paketlerde "Tahsilatlar" mevcut /accounting
   // ekranina, olmayanlarda (Solo) yeni /collections ekranina yonlendirir.
   const collectionsTarget = useMemo(() => (hasModule("accounting") ? "/accounting" : "/collections"), [hasModule]);
@@ -851,7 +854,7 @@ export const Dashboard = () => {
       {trialInfo && !trialInfo.isExpired && company?.subscription_status === "trial" && !(company && isSpecialAccessActive(company as any)) && (
         <div
           className={cn(
-            "rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border flex items-start gap-3",
+            "rounded-2xl px-4 py-3 sm:px-5 sm:py-4 border flex flex-wrap items-start gap-3 sm:flex-nowrap",
             getTrialBannerStyle() === "info" &&
               "bg-blue-50 border-blue-200 text-blue-900 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-100",
             getTrialBannerStyle() === "warning" &&
@@ -873,12 +876,21 @@ export const Dashboard = () => {
               Bitiş tarihi: {formatTrialDate(trialInfo.trialEndsAt)} {isNativeApp() ? "" : " — Kesintisiz devam etmek için lisans satın alın"}
             </p>
           </div>
-          <a
-            href="#/app/settings"
-            className="flex-shrink-0 text-xs font-black underline hover:no-underline"
-          >
-            Bilgi
-          </a>
+          {canBuyLicense ? (
+            <a
+              href="#/subscription"
+              className="w-full flex-shrink-0 self-center rounded-xl bg-slate-900 px-4 py-2 text-center text-xs sm:w-auto font-black text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 sm:text-sm"
+            >
+              Satın Al
+            </a>
+          ) : (
+            <a
+              href="#/app/settings"
+              className="flex-shrink-0 text-xs font-black underline hover:no-underline"
+            >
+              Bilgi
+            </a>
+          )}
         </div>
       )}
 
