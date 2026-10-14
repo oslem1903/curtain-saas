@@ -14,6 +14,10 @@ export function setAppReadOnlyMode(status: boolean) {
     isReadOnly = status;
 }
 
+export function isAppReadOnly(): boolean {
+    return isReadOnly;
+}
+
 export function setDemoTenantContext(companyId: string, readOnly = true) {
     localStorage.setItem("demo_company_id", companyId);
     localStorage.setItem("demo_read_only", readOnly ? "true" : "false");
