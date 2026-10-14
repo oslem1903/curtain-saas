@@ -6,9 +6,14 @@
 export function assertRowsDeleted(
     result: { data: unknown[] | null; error: { message: string } | null },
     what = "Kayıt",
+    expected = 1,
 ): void {
     if (result.error) throw new Error(result.error.message);
-    if (!result.data || result.data.length === 0) {
+    const n = result.data?.length ?? 0;
+    if (n === 0) {
         throw new Error(`${what} silinemedi: işlem veritabanında uygulanmadı (yetki veya kayıt kuralı nedeniyle). Sayfayı yenileyip tekrar deneyin.`);
+    }
+    if (n < expected) {
+        throw new Error(`${what}: beklenen ${expected} kayıttan yalnız ${n} tanesi silindi. Liste yenileniyor; işlemi kontrol edin.`);
     }
 }

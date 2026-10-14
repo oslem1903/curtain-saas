@@ -658,7 +658,13 @@ export default function CatalogManagement() {
     async function deleteSeries(row: CatalogSeries) {
         if (!window.confirm("Bu kod/model silinsin mi? Alt varyantlar da silinebilir.")) return;
         const delRes = await supabase.from("catalog_series").delete().eq("id", row.id).eq("company_id", companyId).select("id");
-        try { assertRowsDeleted(delRes, "Kod/model"); } catch (e: any) { return setErr(e.message); }
+        try { assertRowsDeleted(delRes, "Kod/model"); } catch (e: any) { await loadData(); return setErr(e.message); }
+        // Alt varyantlar DB'de CASCADE ile silinir: hepsinin gittiğini doğrula (kısmi başarıyı tam başarı sayma)
+        const rest = await supabase.from("catalog_variants").select("id", { count: "exact", head: true }).eq("series_id", row.id);
+        if (!rest.error && Number(rest.count ?? 0) > 0) {
+            await loadData();
+            return setErr(`Kod/model silindi ancak ${rest.count} alt varyant silinemedi. Liste yenilendi; lütfen kontrol edin.`);
+        }
         setSeries((prev) => prev.filter((item) => item.id !== row.id));
         setVariants((prev) => prev.filter((item) => item.series_id !== row.id));
     }
@@ -666,7 +672,7 @@ export default function CatalogManagement() {
     async function deleteVariant(row: CatalogVariant) {
         if (!window.confirm("Bu renk/varyant silinsin mi?")) return;
         const delRes = await supabase.from("catalog_variants").delete().eq("id", row.id).eq("company_id", companyId).select("id");
-        try { assertRowsDeleted(delRes, "Renk/varyant"); } catch (e: any) { return setErr(e.message); }
+        try { assertRowsDeleted(delRes, "Renk/varyant"); } catch (e: any) { await loadData(); return setErr(e.message); }
         setVariants((prev) => prev.filter((item) => item.id !== row.id));
     }
 

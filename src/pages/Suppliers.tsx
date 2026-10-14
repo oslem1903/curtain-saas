@@ -663,23 +663,23 @@ const RLS_WRITE_HINT =
         try {
             const ctx = await getContext();
             
-            let query = supabase
-                .from("supplier_product_prices")
-                .delete()
-                .eq("company_id", ctx.company_id)
-                .eq("supplier_id", selectedSupplier.id);
-                
-            if (deletingProduct.id) {
-                query = query.eq("id", deletingProduct.id);
-            } else {
-                const nameCol = await resolveSupplierPriceNameColumn(column =>
+            // Beklenen kapsam: silinecek filtreyle eşleşen TÜM satırlar (ada göre silmede birden çok olabilir)
+            let nameCol: string | null = null;
+            if (!deletingProduct.id) {
+                nameCol = await resolveSupplierPriceNameColumn(column =>
                     supabase.from("supplier_product_prices").select(`id, ${column}`).limit(1));
-                query = query.eq(nameCol, deletingProduct.product_name);
             }
-            
-            const delRes = await query.select("id");
-            assertRowsDeleted(delRes, "Ürün fiyatı");
-            
+            const applyFilters = <T extends { eq: (c: string, v: unknown) => T }>(q: T): T => {
+                let r = q.eq("company_id", ctx.company_id).eq("supplier_id", selectedSupplier.id);
+                r = deletingProduct.id ? r.eq("id", deletingProduct.id) : r.eq(nameCol as string, deletingProduct.product_name);
+                return r;
+            };
+            const pre = await applyFilters(supabase.from("supplier_product_prices").select("id", { count: "exact", head: true }) as any);
+            const expected = Math.max(1, Number((pre as any).count ?? 1));
+
+            const delRes = await applyFilters(supabase.from("supplier_product_prices").delete() as any).select("id");
+            assertRowsDeleted(delRes as any, "Ürün fiyatı", expected);
+
             setSuccess("Ürün fiyat kaydı silindi.");
             setDeletingProduct(null);
             await loadSupplierPrices(selectedSupplier.id);
@@ -688,6 +688,7 @@ const RLS_WRITE_HINT =
         } catch (e: any) {
             alert(e?.message || "Ürün silinemedi.");
             setDeletingProduct(null);
+            if (selectedSupplier) await loadSupplierPrices(selectedSupplier.id);
         }
     }
 
