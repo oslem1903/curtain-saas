@@ -30,6 +30,7 @@ import SecureImage from "../components/SecureImage";
 import SecureLink from "../components/SecureLink";
 
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "dikey_tul" | "dikey_stor" | "rustik" | "dekoratif_ray" | "kruvaze" | "katlamali_mekanizma" | "ip_perde" | "aksesuar" | "diger";
 
 type OrderRow = {
@@ -1159,8 +1160,8 @@ export default function OrderDetail() {
                 });
             }
 
-            const { error } = await supabase.from("order_items").delete().eq("id", itemId);
-            if (error) throw error;
+            const delRes = await supabase.from("order_items").delete().eq("id", itemId).select("id");
+            assertRowsDeleted(delRes, "Ürün kalemi");
             if (editingItemId === itemId) resetItemForm();
 
             const { data: freshItems } = await supabase

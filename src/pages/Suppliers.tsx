@@ -16,6 +16,7 @@ import { Pagination } from "../components/Pagination";
 import { EmptyState } from "../components/EmptyState";
 import { todayLocalISO } from "../utils/date";
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 type Supplier = {
     id: string;
     company_id: string;
@@ -459,11 +460,12 @@ export const Suppliers = () => {
         if (!selectedSupplier) return;
         if (!window.confirm("Bu cari işlemi kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.")) return;
         try {
-            const { error } = await supabase
+            const delRes = await supabase
                 .from("supplier_transactions")
                 .delete()
-                .eq("id", txId);
-            if (error) throw error;
+                .eq("id", txId)
+                .select("id");
+            assertRowsDeleted(delRes, "Cari işlem");
 
             setSuccess("Cari işlemi silindi");
             await loadSupplierTransactions(selectedSupplier.id);
@@ -675,9 +677,8 @@ const RLS_WRITE_HINT =
                 query = query.eq(nameCol, deletingProduct.product_name);
             }
             
-            const { error } = await query;
-                
-            if (error) throw error;
+            const delRes = await query.select("id");
+            assertRowsDeleted(delRes, "Ürün fiyatı");
             
             setSuccess("Ürün fiyat kaydı silindi.");
             setDeletingProduct(null);

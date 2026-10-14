@@ -9,6 +9,7 @@ import { printHtmlDocument } from "../utils/printDocument";
 import SecureImage from "../components/SecureImage";
 import SecureLink from "../components/SecureLink";
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 const financeService = createFinanceService();
 
 type Employee = {
@@ -652,8 +653,8 @@ export default function InstallerLedger({ hideTitle }: { hideTitle?: boolean }) 
             }
 
             if (!window.confirm(`${emp.full_name} silinsin mi?`)) return;
-            const { error } = await supabase.from("employees").delete().eq("id", emp.id);
-            if (error) throw error;
+            const delRes = await supabase.from("employees").delete().eq("id", emp.id).select("id");
+            assertRowsDeleted(delRes, "Montajcı");
             setEmployees((prev) => prev.filter((e) => e.id !== emp.id));
         } catch (e: any) {
             alert(e?.message || "Montajcı silinemedi.");

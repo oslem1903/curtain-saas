@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import SecureImage from "../components/SecureImage";
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 type ProductType = "plicell" | "stor" | "zebra" | "tul" | "fon" | "jalousie" | "dikey_tul" | "dikey_stor" | "cam_balkon" | "diger";
 
 type CatalogSeries = {
@@ -656,16 +657,16 @@ export default function CatalogManagement() {
 
     async function deleteSeries(row: CatalogSeries) {
         if (!window.confirm("Bu kod/model silinsin mi? Alt varyantlar da silinebilir.")) return;
-        const { error } = await supabase.from("catalog_series").delete().eq("id", row.id).eq("company_id", companyId);
-        if (error) return setErr(error.message);
+        const delRes = await supabase.from("catalog_series").delete().eq("id", row.id).eq("company_id", companyId).select("id");
+        try { assertRowsDeleted(delRes, "Kod/model"); } catch (e: any) { return setErr(e.message); }
         setSeries((prev) => prev.filter((item) => item.id !== row.id));
         setVariants((prev) => prev.filter((item) => item.series_id !== row.id));
     }
 
     async function deleteVariant(row: CatalogVariant) {
         if (!window.confirm("Bu renk/varyant silinsin mi?")) return;
-        const { error } = await supabase.from("catalog_variants").delete().eq("id", row.id).eq("company_id", companyId);
-        if (error) return setErr(error.message);
+        const delRes = await supabase.from("catalog_variants").delete().eq("id", row.id).eq("company_id", companyId).select("id");
+        try { assertRowsDeleted(delRes, "Renk/varyant"); } catch (e: any) { return setErr(e.message); }
         setVariants((prev) => prev.filter((item) => item.id !== row.id));
     }
 

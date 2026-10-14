@@ -1,0 +1,22 @@
+// QA-REAL kayitlarinin salt okunur yedegi (JSON). node scripts/qa-backup-real.mjs <cikti.json>
+import { createClient } from '@supabase/supabase-js';
+import fs from 'node:fs';
+import { loadQaAccounts } from './lib/qaAccounts.mjs';
+const env = Object.fromEntries(fs.readFileSync('.env.local','utf8').split(/\r?\n/).filter(l=>l.includes('=')).map(l=>{const i=l.indexOf('=');return [l.slice(0,i),l.slice(i+1).replace(/^"|"$/g,'')]}));
+const sb = createClient(env.VITE_SUPABASE_URI, env.VITE_SUPABASE_ANON_KEY);
+const a = loadQaAccounts({ requireBoth: false }).accounts.A;
+await sb.auth.signInWithPassword({ email: a.email, password: a.password });
+const out = {};
+const get = async (t, q) => { const r = await q; if (r.error) throw new Error(t + ': ' + r.error.message); out[t] = r.data; console.log(t, r.data.length); return r.data; };
+const cust = await get('customers', sb.from('customers').select('*').like('name', 'QA-REAL%'));
+const cids = cust.map((c) => c.id);
+const ord = await get('orders', sb.from('orders').select('*').in('customer_id', cids));
+const oids = ord.map((o) => o.id);
+const jobs = await get('installation_jobs', sb.from('installation_jobs').select('*').in('order_id', oids));
+const staff = [...new Set(jobs.map((j) => j.assigned_staff_id).filter(Boolean))];
+await get('installer_earnings', sb.from('installer_earnings').select('*').in('order_id', oids));
+await get('installer_transactions', sb.from('installer_transactions').select('*').in('installer_id', staff));
+await get('income', sb.from('income').select('*').in('order_id', oids));
+await get('suppliers', sb.from('suppliers').select('*').like('name', 'QA-REAL%'));
+fs.writeFileSync(process.argv[2], JSON.stringify(out, null, 1));
+console.log('yedek yazildi:', process.argv[2]);

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { toLocalDateISO } from "../utils/date";
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 const APPOINTMENT_STATUS_LABELS: Record<string, string> = {
     planned: "Planlandı",
     onway: "Yolda",
@@ -303,9 +304,11 @@ const myCompany = pickPrimaryMembership(myCompanyRows as any[] | null) as { comp
 
     async function handleDelete() {
         if (!id || !window.confirm("Bu randevu kalıcı olarak silinsin mi?")) return;
-        const { error } = await supabase.from("appointments").delete().eq("id", id);
-        if (error) {
-            alert(error.message);
+        const delRes = await supabase.from("appointments").delete().eq("id", id).select("id");
+        try {
+            assertRowsDeleted(delRes, "Randevu");
+        } catch (e: any) {
+            alert(e.message);
             return;
         }
         await cancelReminderNotification(`appointment:${id}`);

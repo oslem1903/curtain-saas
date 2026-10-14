@@ -46,6 +46,7 @@ import { withoutDeleted } from "../utils/softDelete";
 import { todayLocalISO } from "../utils/date";
 import { printHtmlDocument } from "../utils/printDocument";
 
+import { assertRowsDeleted } from "../utils/strictDelete";
 type Customer = {
     id: string;
     created_at: string;
@@ -653,14 +654,17 @@ export default function Customers() {
         const ok = confirm(`${customer.name || "Bu müşteri"} silinsin mi?`);
         if (!ok) return;
 
-        const { error } = await supabase
+        const delRes = await supabase
             .from("customers")
             .delete()
             .eq("id", customer.id)
-            .eq("company_id", companyId);
+            .eq("company_id", companyId)
+            .select("id");
 
-        if (error) {
-            alert(error.message);
+        try {
+            assertRowsDeleted(delRes, "Müşteri");
+        } catch (e: any) {
+            alert(e.message);
             return;
         }
 

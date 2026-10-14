@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { todayLocalISO } from "../utils/date";
+import { assertRowsDeleted } from "../utils/strictDelete";
 type Employee = {
     id: string;
     full_name: string;
@@ -178,11 +179,12 @@ const cm = pickPrimaryMembership(cmRows as any[] | null) as { company_id?: strin
             }
 
             if (!window.confirm("Bu personeli silmek istediğinize emin misiniz?")) return;
-            const { error } = await supabase
+            const delRes = await supabase
                 .from("employees")
                 .delete()
-                .eq("id", id);
-            if (error) throw error;
+                .eq("id", id)
+                .select("id");
+            assertRowsDeleted(delRes, "Personel");
             setEmployees(prev => prev.filter(e => e.id !== id));
         } catch (e: any) {
             alert(e.message || "Personel silinemedi.");
