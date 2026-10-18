@@ -8,16 +8,19 @@ name: PerdePRO Apple Test iPad screenshots
     timeout: 120000
 - assertNotVisible: ".*7 gün ücretsiz.*"
 - takeScreenshot: 01-Giris
-- tapOn: "E-posta|E-POSTA"
+- tapOn: ".*Giriş e-posta adresi.*"
 - inputText:
     text: ${MAESTRO_DEMO_EMAIL}
     label: Enter dedicated Apple Test email
-- tapOn: "Şifre|ŞİFRE"
+- assertVisible: ".*${MAESTRO_DEMO_EMAIL}.*"
+- tapOn: ".*Giriş şifresi.*"
 - inputText:
     text: ${MAESTRO_DEMO_PASSWORD}
     label: Enter dedicated Apple Test password
+- waitForAnimationToEnd
 - hideKeyboard
-- tapOn: "Giriş Yap"
+- waitForAnimationToEnd
+- tapOn: ".*PerdePRO hesabına Giriş Yap.*"
 - extendedWaitUntil:
     visible: "Yönetici Paneli"
     timeout: 60000

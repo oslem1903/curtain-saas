@@ -193,7 +193,8 @@ workflows:
         MAESTRO_DEVICE_FAMILY: iPhone
         MAESTRO_FLOW: tests/ios/review-screenshots.yaml
     scripts:
-      - name: Check dedicated demo credentials
+      - &demo_credentials
+        name: Check dedicated demo credentials
         script: |
           set -eu
           if [ "${MAESTRO_DEMO_EMAIL:-}" != "test0924064036@gmail.com" ] || [ -z "${MAESTRO_DEMO_PASSWORD:-}" ]; then
@@ -204,21 +205,31 @@ workflows:
       - *web_build
       - *cap_sync
       - *ios_sim_build
-      - name: Install official Maestro CLI
+      - &maestro_install
+        name: Install official Maestro CLI
         script: |
           set -euo pipefail
           curl -fsSL https://get.maestro.mobile.dev -o /tmp/install-maestro.sh
           bash /tmp/install-maestro.sh
-      - name: Capture authenticated iOS module screenshots
+      - &maestro_capture
+        name: Capture authenticated iOS module screenshots
         script: |
           set -euo pipefail
           export PATH="$HOME/.maestro/bin:$PATH"
           export MAESTRO_CLI_NO_ANALYTICS=1
+          for REVIEW_FAMILY in $MAESTRO_DEVICE_FAMILY; do
+          export MAESTRO_DEVICE_FAMILY_CURRENT="$REVIEW_FAMILY"
+          export PERDEPRO_MAESTRO_PRIVATE="/tmp/perdepro-maestro-private-$REVIEW_FAMILY"
+          if [ "$REVIEW_FAMILY" = iPad ]; then
+            export MAESTRO_FLOW=tests/ios/review-ipad-screenshots.yaml
+          else
+            export MAESTRO_FLOW=tests/ios/review-screenshots.yaml
+          fi
           SIM_ID=$(python3 - <<'PYCODE'
           import json, subprocess
           data = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))
           import os
-          family = os.environ.get('MAESTRO_DEVICE_FAMILY', 'iPhone')
+          family = os.environ['MAESTRO_DEVICE_FAMILY_CURRENT']
           devices = [d for key, group in data['devices'].items() if 'iOS' in key for d in group if d.get('isAvailable') and family in d['name']]
           if not devices:
               raise SystemExit('No available simulator for requested family')
@@ -230,7 +241,7 @@ workflows:
           PYCODE
           )
           trap 'xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true' EXIT
-          mkdir -p "$CM_BUILD_DIR/build/ios-authenticated-screenshots"
+          mkdir -p "$CM_BUILD_DIR/build/ios-authenticated-screenshots/$REVIEW_FAMILY"
           xcrun simctl boot "$SIM_ID" || true
           xcrun simctl bootstatus "$SIM_ID" -b
           xcrun simctl status_bar "$SIM_ID" override --time '9:41' --batteryState charged --batteryLevel 100
@@ -238,13 +249,13 @@ workflows:
           # Credentials come from secure MAESTRO_ environment variables, never CLI arguments.
           # Do not publish raw Maestro logs/commands: those can contain test credentials.
           RESULT=0
-          maestro --device "$SIM_ID" test --test-output-dir /tmp/perdepro-maestro-private --debug-output /tmp/perdepro-maestro-private "$MAESTRO_FLOW" > /tmp/perdepro-maestro-private.log 2>&1 || RESULT=$?
+          maestro --device "$SIM_ID" test --test-output-dir "$PERDEPRO_MAESTRO_PRIVATE" --debug-output "$PERDEPRO_MAESTRO_PRIVATE" "$MAESTRO_FLOW" > /tmp/perdepro-maestro-private.log 2>&1 || RESULT=$?
           maestro --device "$SIM_ID" hierarchy > /tmp/perdepro-private-hierarchy.json 2>/dev/null || true
           python3 - <<'PYCODE'
           from pathlib import Path
           import os, re, shutil
-          source = Path('/tmp/perdepro-maestro-private')
-          target = Path(os.environ['CM_BUILD_DIR']) / 'build/ios-authenticated-screenshots'
+          source = Path(os.environ['PERDEPRO_MAESTRO_PRIVATE'])
+          target = Path(os.environ['CM_BUILD_DIR']) / 'build/ios-authenticated-screenshots' / os.environ['MAESTRO_DEVICE_FAMILY_CURRENT']
           for image in source.rglob('*.png'):
               if re.fullmatch(r'0[1-9]-[A-Za-z]+\.png', image.name):
                   shutil.copy2(image, target / image.name)
@@ -271,6 +282,11 @@ workflows:
               'password_label_upper': 'ŞİFRE',
               'password_label_title': 'Şifre',
               'login_button': 'Giriş Yap',
+              'invalid_email': 'Lütfen geçerli bir e-posta adresi girin.',
+              'email_accessible_label': 'Giriş e-posta adresi',
+              'password_accessible_label': 'Giriş şifresi',
+              'submit_accessible_label': 'PerdePRO hesabına Giriş Yap',
+              'demo_email_present': os.environ['MAESTRO_DEMO_EMAIL'],
           }
           for code, phrase in known_ui.items():
               if phrase.casefold() in ui.casefold():
@@ -323,9 +339,11 @@ workflows:
             echo 'Native UI flow failed. Raw credential-bearing logs were kept private and are not uploaded.'
             exit "$RESULT"
           fi
-          echo 'PASS: Apple Test login and module screenshots completed on iOS simulator.'
+          echo "PASS: Apple Test login and module screenshots completed on $REVIEW_FAMILY simulator."
+          xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true
+          done
     artifacts:
-      - build/ios-authenticated-screenshots/*.png
+      - build/ios-authenticated-screenshots/**/*.png
 
   ios-review-ipad:
     <<: *ios_review_authenticated
@@ -339,3 +357,42 @@ workflows:
         MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
         MAESTRO_DEVICE_FAMILY: iPad
         MAESTRO_FLOW: tests/ios/review-ipad-screenshots.yaml
+
+  ios-review-complete:
+    name: PerdePRO iOS build 22 and iPhone-iPad review screenshots
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: PerdePRO Codemagic
+    environment:
+      groups:
+        - perdepro_env
+      node: 24.17.0
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.curtainsaas.app
+      vars:
+        MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
+        MAESTRO_DEVICE_FAMILY: iPhone iPad
+    scripts:
+      - *demo_credentials
+      - *npm_install
+      - *web_build
+      - *cap_sync
+      - name: Apply iOS signing profiles
+        script: xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          xcode-project build-ipa --project ios/App/App.xcodeproj --scheme App
+      - *ios_sim_build
+      - *maestro_install
+      - *maestro_capture
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios-authenticated-screenshots/**/*.png
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

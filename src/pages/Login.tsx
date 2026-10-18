@@ -212,6 +212,8 @@ export default function Login() {
                     <div className="mt-1.5 relative">
                         <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            id="perdepro-login-email"
+                            aria-label="Giriş e-posta adresi"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             onFocus={scrollFieldIntoView}
@@ -232,11 +234,16 @@ export default function Login() {
                     <div className="mt-1.5 relative">
                         <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            id="perdepro-login-password"
+                            aria-label="Giriş şifresi"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             onFocus={scrollFieldIntoView}
                             type={showPassword ? "text" : "password"}
                             autoComplete="current-password"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             placeholder="••••••"
                             className={`${authInputClass} pr-12`}
                             disabled={loading}
@@ -275,7 +282,7 @@ export default function Login() {
 
                 {info ? <AuthMessage tone={info.tone}>{info.text}</AuthMessage> : null}
 
-                <button type="submit" className={authPrimaryButtonClass} disabled={loading}>
+                <button type="submit" aria-label={loading ? "Giriş yapılıyor" : "PerdePRO hesabına Giriş Yap"} className={authPrimaryButtonClass} disabled={loading}>
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
                     {loading ? "Lütfen bekleyin..." : "Giriş Yap"}
                 </button>
