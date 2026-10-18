@@ -133,7 +133,8 @@ workflows:
       - *npm_install
       - *web_build
       - *cap_sync
-      - name: Build iOS simulator app
+      - &ios_sim_build
+        name: Build iOS simulator app
         script: |
           set -euo pipefail
           xcodebuild build \
@@ -177,3 +178,72 @@ workflows:
       - build/ios-review-screenshots/*.png
       - /tmp/perdepro-simulator-build.log
       - /tmp/perdepro-simulator-runtime.log
+
+  ios-review-authenticated:
+    name: PerdePRO iOS authenticated review screenshots
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    environment:
+      groups:
+        - perdepro_env
+      node: 24.17.0
+      xcode: latest
+    scripts:
+      - name: Check dedicated demo credentials
+        script: |
+          set -eu
+          if [ "${MAESTRO_DEMO_EMAIL:-}" != "test0924064036@gmail.com" ] || [ -z "${MAESTRO_DEMO_PASSWORD:-}" ]; then
+            echo 'Add MAESTRO_DEMO_EMAIL and MAESTRO_DEMO_PASSWORD as secure variables in perdepro_env. Only the dedicated Apple Test account is allowed.'
+            exit 1
+          fi
+      - *npm_install
+      - *web_build
+      - *cap_sync
+      - *ios_sim_build
+      - name: Install official Maestro CLI
+        script: |
+          set -euo pipefail
+          curl -fsSL https://get.maestro.mobile.dev -o /tmp/install-maestro.sh
+          bash /tmp/install-maestro.sh
+      - name: Capture authenticated iOS module screenshots
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/.maestro/bin:$PATH"
+          export MAESTRO_CLI_NO_ANALYTICS=1
+          SIM_ID=$(python3 - <<'PYCODE'
+          import json, subprocess
+          data = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))
+          devices = [d for key, group in data['devices'].items() if 'iOS' in key for d in group if d.get('isAvailable') and 'iPhone' in d['name']]
+          if not devices:
+              raise SystemExit('No available iPhone simulator')
+          best = next((d for d in devices if '17 Pro Max' in d['name']), next((d for d in devices if 'Pro Max' in d['name']), devices[0]))
+          print(best['udid'])
+          PYCODE
+          )
+          trap 'xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true' EXIT
+          mkdir -p "$CM_BUILD_DIR/build/ios-authenticated-screenshots"
+          xcrun simctl boot "$SIM_ID" || true
+          xcrun simctl bootstatus "$SIM_ID" -b
+          xcrun simctl status_bar "$SIM_ID" override --time '9:41' --batteryState charged --batteryLevel 100
+          xcrun simctl install "$SIM_ID" "$CM_BUILD_DIR/build/ios-simulator/Build/Products/Debug-iphonesimulator/App.app"
+          # Credentials come from secure MAESTRO_ environment variables, never CLI arguments.
+          # Do not publish raw Maestro logs/commands: those can contain test credentials.
+          RESULT=0
+          maestro --device "$SIM_ID" test --test-output-dir /tmp/perdepro-maestro-private tests/ios/review-screenshots.yaml > /tmp/perdepro-maestro-private.log 2>&1 || RESULT=$?
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import os, re, shutil
+          source = Path('/tmp/perdepro-maestro-private')
+          target = Path(os.environ['CM_BUILD_DIR']) / 'build/ios-authenticated-screenshots'
+          for image in source.rglob('*.png'):
+              if re.fullmatch(r'0[1-9]-[A-Za-z]+\.png', image.name):
+                  shutil.copy2(image, target / image.name)
+          print('Intended screenshots captured:', len(list(target.glob('*.png'))))
+          PYCODE
+          if [ "$RESULT" -ne 0 ]; then
+            echo 'Native UI flow failed. Raw credential-bearing logs were kept private and are not uploaded.'
+            exit "$RESULT"
+          fi
+          echo 'PASS: Apple Test login and module screenshots completed on iOS simulator.'
+    artifacts:
+      - build/ios-authenticated-screenshots/*.png

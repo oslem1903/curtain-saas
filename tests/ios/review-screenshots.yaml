@@ -1,0 +1,74 @@
+appId: com.curtainsaas.app
+name: PerdePRO Apple Test screenshots
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+    timeout: 120000
+- assertNotVisible: ".*7 gün ücretsiz.*"
+- takeScreenshot: 01-Giris
+- tapOn: "E-POSTA"
+- inputText:
+    text: ${MAESTRO_DEMO_EMAIL}
+    label: Enter dedicated Apple Test email
+- tapOn: "ŞİFRE"
+- inputText:
+    text: ${MAESTRO_DEMO_PASSWORD}
+    label: Enter dedicated Apple Test password
+- hideKeyboard
+- tapOn: "Giriş Yap"
+- extendedWaitUntil:
+    visible: "Yönetici Paneli"
+    timeout: 60000
+- assertVisible: "(?i)apple test"
+- assertNotVisible: "Satın Al / Yükselt"
+- waitForAnimationToEnd
+- takeScreenshot: 02-Panel
+- tapOn: "Sipariş"
+- extendedWaitUntil:
+    visible: "Siparişlerinizi yönetin ve yeni sipariş oluşturun."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 03-Siparisler
+- tapOn: "Tedarikçi"
+- extendedWaitUntil:
+    visible: "Kumaş ve donanım tedarikçilerinizi yönetin"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 04-Tedarikciler
+- tapOn: "Diğer"
+- extendedWaitUntil:
+    visible: "ANA MENÜ"
+    timeout: 15000
+- takeScreenshot: 05-Menu
+- tapOn: "Müşteriler"
+- extendedWaitUntil:
+    visible: "Müşteri İlişkileri \\(CRM\\)"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 06-Musteriler
+- tapOn: "Diğer"
+- tapOn: "Ölçü & Teklifler"
+- extendedWaitUntil:
+    visible: "Ölçü kayıtları gruplanmış teklifler olarak görünür."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 07-Teklifler
+- tapOn: "Diğer"
+- tapOn: "Randevular"
+- extendedWaitUntil:
+    notVisible: "ANA MENÜ"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Randevular"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 08-Randevular
+- tapOn: "Diğer"
+- tapOn: "Tahsilat ve Ödemeler"
+- extendedWaitUntil:
+    visible: "Müşterilerden alacaklarınızı, tedarikçi ve montajcılara ödemelerinizi tek ekrandan takip edin."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 09-Tahsilatlar
