@@ -9,7 +9,7 @@ name: PerdePRO Apple Test screenshots
 - assertNotVisible: ".*7 gün ücretsiz.*"
 - takeScreenshot: 01-Giris
 - tapOn:
-    point: "50%,30.7%"
+    point: "50%,31%"
     label: Focus email input at observed iPhone login position
 - inputText:
     text: ${MAESTRO_DEMO_EMAIL}
@@ -18,7 +18,7 @@ name: PerdePRO Apple Test screenshots
 - hideKeyboard
 - waitForAnimationToEnd
 - tapOn:
-    point: "50%,40.7%"
+    point: "50%,41%"
     label: Focus password input at observed iPhone login position
 - inputText:
     text: ${MAESTRO_DEMO_PASSWORD}

@@ -279,7 +279,7 @@ workflows:
           # Report only fixed command kinds and enum statuses; never command arguments.
           import json
           allowed_statuses = {'COMPLETED', 'FAILED', 'RUNNING', 'PENDING', 'SKIPPED', 'SUCCESS', 'ERROR'}
-          allowed_kinds = {'launchAppCommand', 'assertConditionCommand', 'takeScreenshotCommand', 'tapOnElementCommand', 'inputTextCommand', 'hideKeyboardCommand', 'waitForAnimationToEndCommand', 'extendedWaitUntilCommand', 'applyConfigurationCommand'}
+          allowed_kinds = {'launchAppCommand', 'assertConditionCommand', 'takeScreenshotCommand', 'tapOnElementCommand', 'inputTextCommand', 'hideKeyboardCommand', 'waitForAnimationToEndCommand', 'extendedWaitUntilCommand', 'applyConfigurationCommand', 'tapOnPointCommand'}
           allowed_kinds |= {kind.removesuffix('Command') for kind in allowed_kinds}
           for report in source.rglob('commands*.json'):
               try:
@@ -299,6 +299,13 @@ workflows:
                   status = metadata.get('status') if isinstance(metadata, dict) else None
                   if status in allowed_statuses:
                       print('Safe step status:', index, ','.join(kinds) or 'other', status)
+                  if status == 'FAILED':
+                      error = metadata.get('error', {})
+                      for frame in (error.get('stackTrace', [])[:3] if isinstance(error, dict) else []):
+                          cls, method = frame.get('className', ''), frame.get('methodName', '')
+                          if re.fullmatch(r'[A-Za-z][A-Za-z0-9_.$]*', cls) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_$-]*', method):
+                              print('Safe failure stack:', cls, method)
+
           # Installer/runtime failures can happen before command JSON exists.
           log = Path('/tmp/perdepro-maestro-private.log').read_text(errors='replace')
           for line in log.splitlines():
@@ -307,7 +314,7 @@ workflows:
                       if phrase.casefold() in line.casefold():
                           print('Safe failed assertion target:', code)
 
-          for marker in ['Unable to launch app', 'Element not found', 'Assertion is false', 'No devices found', 'Failed to install', 'Timeout', 'Invalid Flow File', 'Unknown option', 'Unsupported class file']:
+          for marker in ['Unable to launch app', 'Element not found', 'Assertion is false', 'No devices found', 'Failed to install', 'Timeout', 'Invalid Flow File', 'Unknown option', 'Unsupported class file', 'NumberFormatException', 'Invalid point', 'Invalid relative point']:
               if marker.lower() in log.lower():
                   print('Safe failure category:', marker)
 
