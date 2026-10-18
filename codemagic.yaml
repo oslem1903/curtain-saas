@@ -188,12 +188,14 @@ workflows:
         - perdepro_env
       node: 24.17.0
       xcode: latest
+      vars:
+        MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
     scripts:
       - name: Check dedicated demo credentials
         script: |
           set -eu
           if [ "${MAESTRO_DEMO_EMAIL:-}" != "test0924064036@gmail.com" ] || [ -z "${MAESTRO_DEMO_PASSWORD:-}" ]; then
-            echo 'Add MAESTRO_DEMO_EMAIL and MAESTRO_DEMO_PASSWORD as secure variables in perdepro_env. Only the dedicated Apple Test account is allowed.'
+            echo 'Add MAESTRO_DEMO_PASSWORD as a secure variable in perdepro_env. The dedicated Apple Test email is configured by this workflow.'
             exit 1
           fi
       - *npm_install
