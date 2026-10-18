@@ -164,11 +164,16 @@ workflows:
           xcrun simctl status_bar "$SIM_ID" override --time '9:41' --batteryState charged --batteryLevel 100
           xcrun simctl install "$SIM_ID" "$CM_BUILD_DIR/build/ios-simulator/Build/Products/Debug-iphonesimulator/App.app"
           xcrun simctl launch "$SIM_ID" com.curtainsaas.app
-          # Allow WKWebView and the anonymous session check to finish.
-          sleep 20
-          xcrun simctl io "$SIM_ID" screenshot "$CM_BUILD_DIR/build/ios-review-screenshots/PerdePRO-iOS-Login.png"
+          # First simulator launch can spend longer loading system/WebKit caches.
+          # Keep several real captures so a launch screen is never mistaken for login.
+          for CAPTURE in 1 2 3; do
+            sleep 30
+            xcrun simctl io "$SIM_ID" screenshot "$CM_BUILD_DIR/build/ios-review-screenshots/PerdePRO-iOS-$CAPTURE.png"
+          done
+          xcrun simctl spawn "$SIM_ID" log show --last 3m --style compact --predicate 'process == "App"' > /tmp/perdepro-simulator-runtime.log 2>&1 || true
           xcrun simctl shutdown "$SIM_ID"
     artifacts:
       - build/ios-simulator/Build/Products/Debug-iphonesimulator/*.app
       - build/ios-review-screenshots/*.png
       - /tmp/perdepro-simulator-build.log
+      - /tmp/perdepro-simulator-runtime.log
