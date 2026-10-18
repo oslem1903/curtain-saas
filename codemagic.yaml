@@ -251,6 +251,11 @@ workflows:
           print('Intended screenshots captured:', len(list(target.glob('*.png'))))
           # Inspect only known static UI phrases; never print field values or raw hierarchy.
           ui = Path('/tmp/perdepro-private-hierarchy.json').read_text(errors='replace')
+          import json
+          try:
+              ui = json.dumps(json.loads(ui), ensure_ascii=False)
+          except ValueError:
+              pass
           known_ui = {
               'login_screen': 'Mevcut PerdePRO hesabınızla giriş yapın.',
               'admin_dashboard': 'Yönetici Paneli',
@@ -261,6 +266,11 @@ workflows:
               'email_unconfirmed': 'E-posta adresiniz henüz doğrulanmadı.',
               'rate_limited': 'Çok fazla deneme yapıldı.',
               'license_purchase': 'Satın Al / Yükselt',
+              'email_label_upper': 'E-POSTA',
+              'email_label_title': 'E-posta',
+              'password_label_upper': 'ŞİFRE',
+              'password_label_title': 'Şifre',
+              'login_button': 'Giriş Yap',
           }
           for code, phrase in known_ui.items():
               if phrase.casefold() in ui.casefold():
@@ -271,11 +281,13 @@ workflows:
           allowed_statuses = {'COMPLETED', 'FAILED', 'RUNNING', 'PENDING', 'SKIPPED', 'SUCCESS', 'ERROR'}
           allowed_kinds = {'launchAppCommand', 'assertConditionCommand', 'takeScreenshotCommand', 'tapOnElementCommand', 'inputTextCommand', 'hideKeyboardCommand', 'waitForAnimationToEndCommand', 'extendedWaitUntilCommand', 'applyConfigurationCommand'}
           allowed_kinds |= {kind.removesuffix('Command') for kind in allowed_kinds}
-          for report in source.rglob('commands-*.json'):
+          for report in source.rglob('commands*.json'):
               try:
                   commands = json.loads(report.read_text())
               except (ValueError, OSError):
                   continue
+              if isinstance(commands, dict):
+                  commands = commands.get('commands', [])
               if not isinstance(commands, list):
                   continue
               for index, item in enumerate(commands):
@@ -289,6 +301,12 @@ workflows:
                       print('Safe step status:', index, ','.join(kinds) or 'other', status)
           # Installer/runtime failures can happen before command JSON exists.
           log = Path('/tmp/perdepro-maestro-private.log').read_text(errors='replace')
+          for line in log.splitlines():
+              if 'assertion is false' in line.casefold():
+                  for code, phrase in known_ui.items():
+                      if phrase.casefold() in line.casefold():
+                          print('Safe failed assertion target:', code)
+
           for marker in ['Unable to launch app', 'Element not found', 'Assertion is false', 'No devices found', 'Failed to install', 'Timeout', 'Invalid Flow File', 'Unknown option', 'Unsupported class file']:
               if marker.lower() in log.lower():
                   print('Safe failure category:', marker)

@@ -8,11 +8,18 @@ name: PerdePRO Apple Test screenshots
     timeout: 120000
 - assertNotVisible: ".*7 gün ücretsiz.*"
 - takeScreenshot: 01-Giris
-- tapOn: "E-posta|E-POSTA"
+- tapOn:
+    point: "50%,30.7%"
+    label: Focus email input at observed iPhone login position
 - inputText:
     text: ${MAESTRO_DEMO_EMAIL}
     label: Enter dedicated Apple Test email
-- tapOn: "Şifre|ŞİFRE"
+- assertVisible: ${MAESTRO_DEMO_EMAIL}
+- hideKeyboard
+- waitForAnimationToEnd
+- tapOn:
+    point: "50%,40.7%"
+    label: Focus password input at observed iPhone login position
 - inputText:
     text: ${MAESTRO_DEMO_PASSWORD}
     label: Enter dedicated Apple Test password
