@@ -1,0 +1,63 @@
+appId: com.curtainsaas.app
+name: PerdePRO Apple Test iPad screenshots
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+    timeout: 120000
+- assertNotVisible: ".*7 gün ücretsiz.*"
+- takeScreenshot: 01-Giris
+- tapOn: "E-posta|E-POSTA"
+- inputText:
+    text: ${MAESTRO_DEMO_EMAIL}
+    label: Enter dedicated Apple Test email
+- tapOn: "Şifre|ŞİFRE"
+- inputText:
+    text: ${MAESTRO_DEMO_PASSWORD}
+    label: Enter dedicated Apple Test password
+- hideKeyboard
+- tapOn: "Giriş Yap"
+- extendedWaitUntil:
+    visible: "Yönetici Paneli"
+    timeout: 60000
+- waitForAnimationToEnd
+- takeScreenshot: 02-Panel
+- assertVisible: "(?i)apple test"
+- assertNotVisible: "Satın Al / Yükselt"
+- tapOn: "Siparişler"
+- extendedWaitUntil:
+    visible: "Siparişlerinizi yönetin ve yeni sipariş oluşturun."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 03-Siparisler
+- tapOn: "Tedarikçiler"
+- extendedWaitUntil:
+    visible: "Kumaş ve donanım tedarikçilerinizi yönetin"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 04-Tedarikciler
+- tapOn: "Müşteriler"
+- extendedWaitUntil:
+    visible: "Müşteri İlişkileri \\(CRM\\)"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 06-Musteriler
+- tapOn: "Ölçü & Teklifler"
+- extendedWaitUntil:
+    visible: "Ölçü kayıtları gruplanmış teklifler olarak görünür."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 07-Teklifler
+- tapOn: "Randevular"
+- extendedWaitUntil:
+    visible: "Randevular"
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 08-Randevular
+- tapOn: "Tahsilat ve Ödemeler"
+- extendedWaitUntil:
+    visible: "Müşterilerden alacaklarınızı, tedarikçi ve montajcılara ödemelerinizi tek ekrandan takip edin."
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 09-Tahsilatlar

@@ -8,11 +8,11 @@ name: PerdePRO Apple Test screenshots
     timeout: 120000
 - assertNotVisible: ".*7 gün ücretsiz.*"
 - takeScreenshot: 01-Giris
-- tapOn: "E-POSTA"
+- tapOn: "E-posta|E-POSTA"
 - inputText:
     text: ${MAESTRO_DEMO_EMAIL}
     label: Enter dedicated Apple Test email
-- tapOn: "ŞİFRE"
+- tapOn: "Şifre|ŞİFRE"
 - inputText:
     text: ${MAESTRO_DEMO_PASSWORD}
     label: Enter dedicated Apple Test password
@@ -21,10 +21,10 @@ name: PerdePRO Apple Test screenshots
 - extendedWaitUntil:
     visible: "Yönetici Paneli"
     timeout: 60000
-- assertVisible: "(?i)apple test"
-- assertNotVisible: "Satın Al / Yükselt"
 - waitForAnimationToEnd
 - takeScreenshot: 02-Panel
+- assertVisible: "(?i)apple test"
+- assertNotVisible: "Satın Al / Yükselt"
 - tapOn: "Sipariş"
 - extendedWaitUntil:
     visible: "Siparişlerinizi yönetin ve yeni sipariş oluşturun."
@@ -39,7 +39,7 @@ name: PerdePRO Apple Test screenshots
 - takeScreenshot: 04-Tedarikciler
 - tapOn: "Diğer"
 - extendedWaitUntil:
-    visible: "ANA MENÜ"
+    visible: "Ana Menü|ANA MENÜ"
     timeout: 15000
 - takeScreenshot: 05-Menu
 - tapOn: "Müşteriler"
@@ -58,7 +58,7 @@ name: PerdePRO Apple Test screenshots
 - tapOn: "Diğer"
 - tapOn: "Randevular"
 - extendedWaitUntil:
-    notVisible: "ANA MENÜ"
+    notVisible: "Ana Menü|ANA MENÜ"
     timeout: 15000
 - extendedWaitUntil:
     visible: "Randevular"

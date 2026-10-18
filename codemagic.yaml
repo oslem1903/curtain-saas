@@ -179,7 +179,7 @@ workflows:
       - /tmp/perdepro-simulator-build.log
       - /tmp/perdepro-simulator-runtime.log
 
-  ios-review-authenticated:
+  ios-review-authenticated: &ios_review_authenticated
     name: PerdePRO iOS authenticated review screenshots
     max_build_duration: 45
     instance_type: mac_mini_m2
@@ -190,6 +190,8 @@ workflows:
       xcode: latest
       vars:
         MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
+        MAESTRO_DEVICE_FAMILY: iPhone
+        MAESTRO_FLOW: tests/ios/review-screenshots.yaml
     scripts:
       - name: Check dedicated demo credentials
         script: |
@@ -215,10 +217,15 @@ workflows:
           SIM_ID=$(python3 - <<'PYCODE'
           import json, subprocess
           data = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))
-          devices = [d for key, group in data['devices'].items() if 'iOS' in key for d in group if d.get('isAvailable') and 'iPhone' in d['name']]
+          import os
+          family = os.environ.get('MAESTRO_DEVICE_FAMILY', 'iPhone')
+          devices = [d for key, group in data['devices'].items() if 'iOS' in key for d in group if d.get('isAvailable') and family in d['name']]
           if not devices:
-              raise SystemExit('No available iPhone simulator')
-          best = next((d for d in devices if '17 Pro Max' in d['name']), next((d for d in devices if 'Pro Max' in d['name']), devices[0]))
+              raise SystemExit('No available simulator for requested family')
+          if family == 'iPad':
+              best = next((d for d in devices if '13-inch' in d['name'] and 'Pro' in d['name']), devices[0])
+          else:
+              best = next((d for d in devices if '17 Pro Max' in d['name']), next((d for d in devices if 'Pro Max' in d['name']), devices[0]))
           print(best['udid'])
           PYCODE
           )
@@ -231,7 +238,8 @@ workflows:
           # Credentials come from secure MAESTRO_ environment variables, never CLI arguments.
           # Do not publish raw Maestro logs/commands: those can contain test credentials.
           RESULT=0
-          maestro --device "$SIM_ID" test --test-output-dir /tmp/perdepro-maestro-private tests/ios/review-screenshots.yaml > /tmp/perdepro-maestro-private.log 2>&1 || RESULT=$?
+          maestro --device "$SIM_ID" test --test-output-dir /tmp/perdepro-maestro-private --debug-output /tmp/perdepro-maestro-private "$MAESTRO_FLOW" > /tmp/perdepro-maestro-private.log 2>&1 || RESULT=$?
+          maestro --device "$SIM_ID" hierarchy > /tmp/perdepro-private-hierarchy.json 2>/dev/null || true
           python3 - <<'PYCODE'
           from pathlib import Path
           import os, re, shutil
@@ -241,10 +249,28 @@ workflows:
               if re.fullmatch(r'0[1-9]-[A-Za-z]+\.png', image.name):
                   shutil.copy2(image, target / image.name)
           print('Intended screenshots captured:', len(list(target.glob('*.png'))))
+          # Inspect only known static UI phrases; never print field values or raw hierarchy.
+          ui = Path('/tmp/perdepro-private-hierarchy.json').read_text(errors='replace')
+          known_ui = {
+              'login_screen': 'Mevcut PerdePRO hesabınızla giriş yapın.',
+              'admin_dashboard': 'Yönetici Paneli',
+              'demo_company': 'Apple Test',
+              'invalid_credentials': 'E-posta veya şifre hatalı.',
+              'empty_credentials': 'E-posta ve şifre alanlarını doldurun.',
+              'network_failure': 'Sunucuya bağlanılamadı.',
+              'email_unconfirmed': 'E-posta adresiniz henüz doğrulanmadı.',
+              'rate_limited': 'Çok fazla deneme yapıldı.',
+              'license_purchase': 'Satın Al / Yükselt',
+          }
+          for code, phrase in known_ui.items():
+              if phrase.casefold() in ui.casefold():
+                  print('Safe visible UI state:', code)
+
           # Report only fixed command kinds and enum statuses; never command arguments.
           import json
           allowed_statuses = {'COMPLETED', 'FAILED', 'RUNNING', 'PENDING', 'SKIPPED', 'SUCCESS', 'ERROR'}
           allowed_kinds = {'launchAppCommand', 'assertConditionCommand', 'takeScreenshotCommand', 'tapOnElementCommand', 'inputTextCommand', 'hideKeyboardCommand', 'waitForAnimationToEndCommand', 'extendedWaitUntilCommand', 'applyConfigurationCommand'}
+          allowed_kinds |= {kind.removesuffix('Command') for kind in allowed_kinds}
           for report in source.rglob('commands-*.json'):
               try:
                   commands = json.loads(report.read_text())
@@ -275,3 +301,16 @@ workflows:
           echo 'PASS: Apple Test login and module screenshots completed on iOS simulator.'
     artifacts:
       - build/ios-authenticated-screenshots/*.png
+
+  ios-review-ipad:
+    <<: *ios_review_authenticated
+    name: PerdePRO iPad authenticated review screenshots
+    environment:
+      groups:
+        - perdepro_env
+      node: 24.17.0
+      xcode: latest
+      vars:
+        MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
+        MAESTRO_DEVICE_FAMILY: iPad
+        MAESTRO_FLOW: tests/ios/review-ipad-screenshots.yaml
