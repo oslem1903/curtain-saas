@@ -241,6 +241,32 @@ workflows:
               if re.fullmatch(r'0[1-9]-[A-Za-z]+\.png', image.name):
                   shutil.copy2(image, target / image.name)
           print('Intended screenshots captured:', len(list(target.glob('*.png'))))
+          # Report only fixed command kinds and enum statuses; never command arguments.
+          import json
+          allowed_statuses = {'COMPLETED', 'FAILED', 'RUNNING', 'PENDING', 'SKIPPED', 'SUCCESS', 'ERROR'}
+          allowed_kinds = {'launchAppCommand', 'assertConditionCommand', 'takeScreenshotCommand', 'tapOnElementCommand', 'inputTextCommand', 'hideKeyboardCommand', 'waitForAnimationToEndCommand', 'extendedWaitUntilCommand', 'applyConfigurationCommand'}
+          for report in source.rglob('commands-*.json'):
+              try:
+                  commands = json.loads(report.read_text())
+              except (ValueError, OSError):
+                  continue
+              if not isinstance(commands, list):
+                  continue
+              for index, item in enumerate(commands):
+                  if not isinstance(item, dict):
+                      continue
+                  command = item.get('command', {})
+                  metadata = item.get('metadata', {})
+                  kinds = sorted(set(command) & allowed_kinds) if isinstance(command, dict) else []
+                  status = metadata.get('status') if isinstance(metadata, dict) else None
+                  if status in allowed_statuses:
+                      print('Safe step status:', index, ','.join(kinds) or 'other', status)
+          # Installer/runtime failures can happen before command JSON exists.
+          log = Path('/tmp/perdepro-maestro-private.log').read_text(errors='replace')
+          for marker in ['Unable to launch app', 'Element not found', 'Assertion is false', 'No devices found', 'Failed to install', 'Timeout', 'Invalid Flow File', 'Unknown option', 'Unsupported class file']:
+              if marker.lower() in log.lower():
+                  print('Safe failure category:', marker)
+
           PYCODE
           if [ "$RESULT" -ne 0 ]; then
             echo 'Native UI flow failed. Raw credential-bearing logs were kept private and are not uploaded.'
