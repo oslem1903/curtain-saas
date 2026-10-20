@@ -32,6 +32,20 @@ try {
     process.exitCode = 1;
   } else {
     console.log('AUTH_CHECK: dedicated_demo_credentials_accepted');
+    if (process.env.PERDEPRO_REVIEW_DEVICE_AUDIT === '1') {
+      const membership = await client.from('company_members').select('company_id,is_active,companies(name,max_devices)').eq('user_id', data.user.id).eq('is_active', true);
+      const rows = Array.isArray(membership.data) ? membership.data : [];
+      const review = rows.find(row => String((Array.isArray(row.companies) ? row.companies[0] : row.companies)?.name || '').toLowerCase() === 'apple test');
+      if (review) {
+        const company = Array.isArray(review.companies) ? review.companies[0] : review.companies;
+        const devices = await client.from('company_devices').select('id', { count: 'exact', head: true }).eq('company_id', review.company_id).eq('is_active', true);
+        if (Number.isInteger(company.max_devices)) console.log('DEMO_DEVICE_LIMIT:', company.max_devices);
+        if (!devices.error && Number.isInteger(devices.count)) console.log('DEMO_ACTIVE_DEVICE_COUNT:', devices.count);
+        console.log('DEMO_DEVICE_AUDIT:', !devices.error && Number.isInteger(devices.count) && Number.isInteger(company.max_devices) ? (devices.count >= company.max_devices ? 'capacity_reached' : 'capacity_available') : 'capacity_not_resolved');
+      } else {
+        console.log('DEMO_DEVICE_AUDIT: review_membership_not_resolved');
+      }
+    }
     const { error: signOutError } = await client.auth.signOut({ scope: 'local' });
     console.log('AUTH_CHECK:', signOutError ? 'test_session_cleanup_failed' : 'test_session_closed');
     if (signOutError) process.exitCode = 1;
