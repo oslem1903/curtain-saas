@@ -277,6 +277,10 @@ workflows:
           known_ui = {
               'login_screen': 'Mevcut PerdePRO hesabınızla giriş yapın.',
               'admin_dashboard': 'Yönetici Paneli',
+              'device_limit': 'Cihaz limiti doldu',
+              'access_check_failed': 'Hesabınız kontrol edilemedi',
+              'membership_not_ready': 'Hesap erişimi tamamlanamadı',
+              'access_locked': 'Erişim kilitli',
               'demo_company': 'Apple Test',
               'invalid_credentials': 'E-posta veya şifre hatalı.',
               'empty_credentials': 'E-posta ve şifre alanlarını doldurun.',
@@ -432,6 +436,7 @@ workflows:
       node: 24.17.0
       vars:
         MAESTRO_DEMO_EMAIL: test0924064036@gmail.com
+        PERDEPRO_REVIEW_DEVICE_AUDIT: '1'
     scripts:
       - *demo_credentials
       - *npm_install
