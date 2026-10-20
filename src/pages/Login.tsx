@@ -15,6 +15,8 @@ import { getAuthRedirectUrl, markResetStartedHere } from "../utils/authRedirect"
 import { friendlyAuthError } from "../utils/authErrors";
 import { PASSWORD_UPDATED_EMAIL, PASSWORD_UPDATED_FLAG } from "./ResetPassword";
 
+import { isNativeIos } from "../utils/nativeRuntime";
+
 const PASSWORD_UPDATED_TEXT = "Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz.";
 
 /** Şifre sıfırlamadan gelindiyse bayrağı okuyup hemen temizler (tek seferlik mesaj). */
@@ -164,7 +166,7 @@ export default function Login() {
                 tone: "success",
                 // Hesabin var olup olmadigi ACIKLANMAZ (Supabase de ayni 200 yanitini verir); yalnizca yazilan adres
                 // geri gosterilir ve kullaniciya adres/kayit kontrolu yaptirilir.
-                text: `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Birkaç dakika içinde gelmezse spam klasörünü ve adresin doğru yazıldığını kontrol edin. Bu adresle PerdePRO'da kayıt olmadıysanız bağlantı gönderilmez; "7 gün ücretsiz dene" ile kayıt olabilir ya da kayıt olurken kullandığınız adresi yazabilirsiniz.`,
+                text: isNativeIos() ? `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Gelen kutusu ve spam klasörünü kontrol edin. Hesap erişiminiz için firma yöneticinizle görüşün.` : `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Birkaç dakika içinde gelmezse spam klasörünü ve adresin doğru yazıldığını kontrol edin. Bu adresle PerdePRO'da kayıt olmadıysanız bağlantı gönderilmez; "7 gün ücretsiz dene" ile kayıt olabilir ya da kayıt olurken kullandığınız adresi yazabilirsiniz.`,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String((error as { message?: string })?.message || "");
@@ -188,8 +190,8 @@ export default function Login() {
     return (
         <AuthShell
             title="PerdePRO"
-            subtitle="Hesabınıza giriş yapın ya da kendi işletmeniz için 7 günlük ücretsiz denemeyi hemen başlatın."
-            footer={
+            subtitle={isNativeIos() ? "Mevcut PerdePRO hesabınızla giriş yapın." : "Hesabınıza giriş yapın ya da kendi işletmeniz için 7 günlük ücretsiz denemeyi hemen başlatın."}
+            footer={isNativeIos() ? undefined :
                 <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm">
                     <KeyRound className="w-4 h-4 text-slate-400" />
                     <span className="text-slate-500 dark:text-slate-400">Davet mi aldınız?</span>
@@ -210,6 +212,8 @@ export default function Login() {
                     <div className="mt-1.5 relative">
                         <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            id="perdepro-login-email"
+                            aria-label="Giriş e-posta adresi"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             onFocus={scrollFieldIntoView}
@@ -230,11 +234,16 @@ export default function Login() {
                     <div className="mt-1.5 relative">
                         <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            id="perdepro-login-password"
+                            aria-label="Giriş şifresi"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             onFocus={scrollFieldIntoView}
                             type={showPassword ? "text" : "password"}
                             autoComplete="current-password"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             placeholder="••••••"
                             className={`${authInputClass} pr-12`}
                             disabled={loading}
@@ -273,12 +282,13 @@ export default function Login() {
 
                 {info ? <AuthMessage tone={info.tone}>{info.text}</AuthMessage> : null}
 
-                <button type="submit" className={authPrimaryButtonClass} disabled={loading}>
+                <button type="submit" aria-label={loading ? "Giriş yapılıyor" : "PerdePRO hesabına Giriş Yap"} className={authPrimaryButtonClass} disabled={loading}>
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
                     {loading ? "Lütfen bekleyin..." : "Giriş Yap"}
                 </button>
             </form>
 
+            {!isNativeIos() && <>
             <div className="my-4 flex items-center gap-3 text-xs font-bold uppercase tracking-wider text-slate-400">
                 <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
                 Hesabınız yok mu?
@@ -292,6 +302,7 @@ export default function Login() {
             <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
                 Kredi kartı gerekmez. Kod beklemeden kendi hesabınızı açın.
             </p>
+            </>}
         </AuthShell>
     );
 }

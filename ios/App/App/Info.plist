@@ -9,7 +9,7 @@
     <string>en</string>
 
     <key>CFBundleDisplayName</key>
-    <string>Curtain Saas</string>
+    <string>PerdePRO</string>
 
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>

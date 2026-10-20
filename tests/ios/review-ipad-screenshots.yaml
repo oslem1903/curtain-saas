@@ -1,0 +1,116 @@
+appId: com.curtainsaas.app
+name: PerdePRO Apple Test iPad screenshots
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+    timeout: 120000
+- assertNotVisible: ".*7 gün ücretsiz.*"
+- takeScreenshot: 01-Giris
+- tapOn: ".*Giriş e-posta adresi.*"
+- inputText:
+    text: ${MAESTRO_DEMO_EMAIL}
+    label: Enter dedicated Apple Test email
+- assertVisible: ".*${MAESTRO_DEMO_EMAIL}.*"
+- tapOn: ".*Giriş şifresi.*"
+- inputText:
+    text: ${MAESTRO_DEMO_PASSWORD}
+    label: Enter dedicated Apple Test password
+- waitForAnimationToEnd
+- pressKey: enter
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*Giriş yapılıyor.*"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+      notVisible: ".*(E-posta veya şifre hatalı|alanlarını doldurun|Sunucuya bağlanılamadı|Çok fazla deneme|Lütfen geçerli bir e-posta).*"
+    commands:
+      - hideKeyboard
+      - scrollUntilVisible:
+          element:
+            text: ".*PerdePRO hesabına Giriş Yap.*"
+          direction: DOWN
+          centerElement: true
+          timeout: 15000
+      - tapOn:
+          text: ".*PerdePRO hesabına Giriş Yap.*"
+          retryTapIfNoChange: true
+- scrollUntilVisible:
+    element:
+      text: "Yönetici Paneli"
+    direction: UP
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Yönetici Paneli"
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 02-Panel
+- assertVisible: "(?i)apple test"
+- assertNotVisible: "Satın Al / Yükselt"
+- tapOn: "Siparişler"
+- extendedWaitUntil:
+    visible: "Siparişlerinizi yönetin ve yeni sipariş oluşturun."
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 03-Siparisler
+- tapOn: "Tedarikçiler"
+- extendedWaitUntil:
+    visible: "Kumaş ve donanım tedarikçilerinizi yönetin"
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 04-Tedarikciler
+- tapOn: "Müşteriler"
+- extendedWaitUntil:
+    visible: "Müşteri İlişkileri \\(CRM\\)"
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 06-Musteriler
+- tapOn: "Ölçü & Teklifler"
+- extendedWaitUntil:
+    visible: "Ölçü kayıtları gruplanmış teklifler olarak görünür."
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 07-Teklifler
+- tapOn: "Randevular"
+- extendedWaitUntil:
+    visible: "Ölçü, montaj ve müşteri görüşmelerinizi tek ekrandan takip edin."
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 08-Randevular
+- tapOn: "Tahsilat ve Ödemeler"
+- extendedWaitUntil:
+    visible: "Müşterilerden alacaklarınızı, tedarikçi ve montajcılara ödemelerinizi tek ekrandan takip edin."
+    timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: 09-Tahsilatlar

@@ -1,3 +1,4 @@
+import { isNativeIos } from "./nativeRuntime";
 import { supabase } from "../supabaseClient";
 
 export type SelfServiceTrialResult = {
@@ -15,6 +16,7 @@ export type SelfServiceTrialResult = {
  * bir işletmeye bağlıysa yeni işletme/deneme oluşturmaz, mevcut olanı döndürür.
  */
 export async function startSelfServiceTrial(companyName: string, fullName?: string | null): Promise<SelfServiceTrialResult> {
+    if (isNativeIos()) throw new Error("Bu cihazda işletme kaydı desteklenmiyor.");
     const { data, error } = await supabase.rpc("start_self_service_trial", {
         p_company_name: companyName.trim(),
         p_full_name: fullName?.trim() || null,

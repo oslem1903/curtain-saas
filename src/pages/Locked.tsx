@@ -1,3 +1,4 @@
+import { isNativeIos } from "../utils/nativeRuntime";
 import { useState } from "react";
 import { Clock, LockKeyhole, MonitorSmartphone, RefreshCw, ShieldOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
@@ -124,7 +125,7 @@ export default function Locked() {
                 </div>
                 <h1 className="text-2xl font-black text-slate-900 dark:text-white">{content.title}</h1>
                 <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {content.text}
+                    {isNativeIos() && ["expired_trial", "read_only"].includes(lockReason || "") ? "Hesabınız salt okunur modda. Erişim durumunuz için firma yöneticinizle görüşün." : content.text}
                 </p>
                 {company?.name && (
                     <p className="mt-2 text-xs font-bold text-slate-400">Firma: {company.name}</p>
@@ -146,14 +147,14 @@ export default function Locked() {
                         <RefreshCw className={`h-4 w-4 ${checking ? "animate-spin" : ""}`} />
                         {checking ? "Kontrol ediliyor..." : "Tekrar Dene"}
                     </button>
-                    <button
+                    {!isNativeIos() && <button
                         type="button"
                         onClick={handleSupportRequest}
                         disabled={requesting}
                         className="inline-flex items-center justify-center rounded-2xl border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-black text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
                     >
                         {requesting ? "Talep gonderiliyor..." : "Destek / Lisans Al"}
-                    </button>
+                    </button>}
                     <button
                         type="button"
                         onClick={logout}
