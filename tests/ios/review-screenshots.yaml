@@ -78,10 +78,7 @@ name: PerdePRO Apple Test screenshots
 - tapOn: "Diğer"
 - tapOn: "Randevular"
 - extendedWaitUntil:
-    notVisible: "Ana Menü|ANA MENÜ"
-    timeout: 15000
-- extendedWaitUntil:
-    visible: "Randevular"
+    visible: "Ölçü, montaj ve müşteri görüşmelerinizi tek ekrandan takip edin."
     timeout: 30000
 - waitForAnimationToEnd
 - takeScreenshot: 08-Randevular

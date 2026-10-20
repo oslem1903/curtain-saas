@@ -71,7 +71,7 @@ name: PerdePRO Apple Test iPad screenshots
 - takeScreenshot: 07-Teklifler
 - tapOn: "Randevular"
 - extendedWaitUntil:
-    visible: "Randevular"
+    visible: "Ölçü, montaj ve müşteri görüşmelerinizi tek ekrandan takip edin."
     timeout: 30000
 - waitForAnimationToEnd
 - takeScreenshot: 08-Randevular

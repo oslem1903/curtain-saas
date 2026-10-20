@@ -222,6 +222,7 @@ workflows:
           export MAESTRO_CLI_NO_ANALYTICS=1
           mkdir -p "$CM_BUILD_DIR/build"
           : > "$CM_BUILD_DIR/build/ios-native-review-result.txt"
+          REVIEW_FAILURE=0
           for REVIEW_FAMILY in $MAESTRO_DEVICE_FAMILY; do
           echo "Review device family: $REVIEW_FAMILY"
           export MAESTRO_DEVICE_FAMILY_CURRENT="$REVIEW_FAMILY"
@@ -344,12 +345,14 @@ workflows:
           if [ "$RESULT" -ne 0 ]; then
             echo "FAIL:$REVIEW_FAMILY" >> "$CM_BUILD_DIR/build/ios-native-review-result.txt"
             echo 'Native UI flow failed. Raw credential-bearing logs were kept private and are not uploaded.'
-            exit "$RESULT"
-          fi
+            REVIEW_FAILURE=1
+          else
           echo "PASS:$REVIEW_FAMILY" >> "$CM_BUILD_DIR/build/ios-native-review-result.txt"
           echo "PASS: Apple Test login and module screenshots completed on $REVIEW_FAMILY simulator."
+          fi
           xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true
           done
+          exit "$REVIEW_FAILURE"
     artifacts:
       - build/ios-authenticated-screenshots/**/*.png
 
