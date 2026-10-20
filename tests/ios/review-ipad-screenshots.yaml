@@ -42,6 +42,10 @@ name: PerdePRO Apple Test iPad screenshots
     visible: "Yönetici Paneli"
     timeout: 60000
 - waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
 - takeScreenshot: 02-Panel
 - assertVisible: "(?i)apple test"
 - assertNotVisible: "Satın Al / Yükselt"
@@ -50,11 +54,19 @@ name: PerdePRO Apple Test iPad screenshots
     visible: "Siparişlerinizi yönetin ve yeni sipariş oluşturun."
     timeout: 30000
 - waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
 - takeScreenshot: 03-Siparisler
 - tapOn: "Tedarikçiler"
 - extendedWaitUntil:
     visible: "Kumaş ve donanım tedarikçilerinizi yönetin"
     timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
 - waitForAnimationToEnd
 - takeScreenshot: 04-Tedarikciler
 - tapOn: "Müşteriler"
@@ -62,11 +74,19 @@ name: PerdePRO Apple Test iPad screenshots
     visible: "Müşteri İlişkileri \\(CRM\\)"
     timeout: 30000
 - waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
 - takeScreenshot: 06-Musteriler
 - tapOn: "Ölçü & Teklifler"
 - extendedWaitUntil:
     visible: "Ölçü kayıtları gruplanmış teklifler olarak görünür."
     timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
 - waitForAnimationToEnd
 - takeScreenshot: 07-Teklifler
 - tapOn: "Randevular"
@@ -74,10 +94,18 @@ name: PerdePRO Apple Test iPad screenshots
     visible: "Ölçü, montaj ve müşteri görüşmelerinizi tek ekrandan takip edin."
     timeout: 30000
 - waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
+- waitForAnimationToEnd
 - takeScreenshot: 08-Randevular
 - tapOn: "Tahsilat ve Ödemeler"
 - extendedWaitUntil:
     visible: "Müşterilerden alacaklarınızı, tedarikçi ve montajcılara ödemelerinizi tek ekrandan takip edin."
     timeout: 30000
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    notVisible: ".*[Yy]ükleniyor.*"
+    timeout: 45000
 - waitForAnimationToEnd
 - takeScreenshot: 09-Tahsilatlar
