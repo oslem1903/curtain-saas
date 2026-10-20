@@ -18,9 +18,26 @@ name: PerdePRO Apple Test iPad screenshots
     text: ${MAESTRO_DEMO_PASSWORD}
     label: Enter dedicated Apple Test password
 - waitForAnimationToEnd
-- hideKeyboard
+- pressKey: enter
 - waitForAnimationToEnd
-- tapOn: ".*PerdePRO hesabına Giriş Yap.*"
+- extendedWaitUntil:
+    notVisible: ".*Giriş yapılıyor.*"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+      notVisible: ".*(E-posta veya şifre hatalı|alanlarını doldurun|Sunucuya bağlanılamadı|Çok fazla deneme|Lütfen geçerli bir e-posta).*"
+    commands:
+      - hideKeyboard
+      - scrollUntilVisible:
+          element:
+            text: ".*PerdePRO hesabına Giriş Yap.*"
+          direction: DOWN
+          centerElement: true
+          timeout: 15000
+      - tapOn:
+          text: ".*PerdePRO hesabına Giriş Yap.*"
+          retryTapIfNoChange: true
 - extendedWaitUntil:
     visible: "Yönetici Paneli"
     timeout: 60000

@@ -217,7 +217,10 @@ workflows:
           set -euo pipefail
           export PATH="$HOME/.maestro/bin:$PATH"
           export MAESTRO_CLI_NO_ANALYTICS=1
+          mkdir -p "$CM_BUILD_DIR/build"
+          : > "$CM_BUILD_DIR/build/ios-native-review-result.txt"
           for REVIEW_FAMILY in $MAESTRO_DEVICE_FAMILY; do
+          echo "Review device family: $REVIEW_FAMILY"
           export MAESTRO_DEVICE_FAMILY_CURRENT="$REVIEW_FAMILY"
           export PERDEPRO_MAESTRO_PRIVATE="/tmp/perdepro-maestro-private-$REVIEW_FAMILY"
           if [ "$REVIEW_FAMILY" = iPad ]; then
@@ -336,9 +339,11 @@ workflows:
 
           PYCODE
           if [ "$RESULT" -ne 0 ]; then
+            echo "FAIL:$REVIEW_FAMILY" >> "$CM_BUILD_DIR/build/ios-native-review-result.txt"
             echo 'Native UI flow failed. Raw credential-bearing logs were kept private and are not uploaded.'
             exit "$RESULT"
           fi
+          echo "PASS:$REVIEW_FAMILY" >> "$CM_BUILD_DIR/build/ios-native-review-result.txt"
           echo "PASS: Apple Test login and module screenshots completed on $REVIEW_FAMILY simulator."
           xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true
           done
@@ -387,10 +392,23 @@ workflows:
           xcode-project build-ipa --project ios/App/App.xcodeproj --scheme App
       - *ios_sim_build
       - *maestro_install
-      - *maestro_capture
+      - <<: *maestro_capture
+        ignore_failure: true
+      - name: Diagnose failed login and require genuine device checks
+        script: |
+          bash tests/ios/run-login-diagnostics.sh || true
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build/ios-native-review-result.txt')
+          states = p.read_text().splitlines() if p.exists() else []
+          if states != ['PASS:iPhone', 'PASS:iPad']:
+              raise SystemExit('Native device checks remain incomplete; diagnostic results do not count as a pass.')
+          print('Both genuine simulator screenshot flows passed.')
+          PY
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ios-authenticated-screenshots/**/*.png
+      - build/ios-native-review-result.txt
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
