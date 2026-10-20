@@ -202,6 +202,9 @@ workflows:
             exit 1
           fi
       - *npm_install
+      - &demo_auth_check
+        name: Validate dedicated demo authentication without exposing credentials
+        script: node tests/ios/check-demo-auth.mjs
       - *web_build
       - *cap_sync
       - *ios_sim_build
@@ -383,6 +386,7 @@ workflows:
     scripts:
       - *demo_credentials
       - *npm_install
+      - *demo_auth_check
       - *web_build
       - *cap_sync
       - name: Apply iOS signing profiles
@@ -428,5 +432,4 @@ workflows:
     scripts:
       - *demo_credentials
       - *npm_install
-      - name: Validate dedicated demo authentication without exposing credentials
-        script: node tests/ios/check-demo-auth.mjs
+      - *demo_auth_check
