@@ -7,6 +7,7 @@ import { CompanySettingsCard } from "../components/CompanySettingsCard";
 import { LicenseCard } from "../components/LicenseCard";
 import { exportBackupWorkbook } from "../utils/backupExport";
 import { getEffectiveTenantContext } from "../supabaseClient";
+import { useAuth } from "../context/AuthContext";
 
 type MyTicket = {
     id: string;
@@ -36,6 +37,7 @@ import {
 
 export const Settings = () => {
     const navigate = useNavigate();
+    const { isOwner } = useAuth();
     const [role, setRole] = useState<RoleState>("unknown");
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
     const [notificationSettings, setNotificationSettings] = useState(() => getNotificationSettings());
@@ -145,10 +147,10 @@ export const Settings = () => {
                 </div>
             )}
 
-            {/* Company Settings Card */}
-            <CompanySettingsCard />
+            {/* Firma kimligi, yedek ve lisans yalniz firma sahibine acik (ekip uyeleri gormez) */}
+            {isOwner && <CompanySettingsCard />}
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+            {isOwner && <section className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
                         <h2 className="text-lg font-bold text-slate-900 dark:text-white">Veri Yedekleme</h2>
@@ -158,10 +160,10 @@ export const Settings = () => {
                         <Download className="h-4 w-4" /> {backupLoading ? "Hazırlanıyor..." : "Excel Yedeği İndir"}
                     </button>
                 </div>
-            </section>
+            </section>}
 
             {/* License Card */}
-            <LicenseCard />
+            {isOwner && <LicenseCard />}
 
             {/* Profile & Personal Settings */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">

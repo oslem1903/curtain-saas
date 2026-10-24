@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ArrowRight, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Sparkles } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Loader2, Lock, Mail, Sparkles } from "lucide-react";
 
 import { supabase } from "../supabaseClient";
 import AuthShell, {
@@ -190,18 +190,9 @@ export default function Login() {
             title="PerdePRO"
             subtitle="Hesabınıza giriş yapın ya da kendi işletmeniz için 7 günlük ücretsiz denemeyi hemen başlatın."
             footer={
-                <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm">
-                    <KeyRound className="w-4 h-4 text-slate-400" />
-                    <span className="text-slate-500 dark:text-slate-400">Davet mi aldınız?</span>
-                    <button
-                        type="button"
-                        onClick={() => nav("/join")}
-                        className="font-bold text-primary-700 dark:text-primary-300 hover:underline"
-                        disabled={loading}
-                    >
-                        Davet kodum var
-                    </button>
-                </div>
+                <p className="text-center text-xs text-slate-500 dark:text-slate-400">
+                    Firma yöneticiniz sizi davet ettiyse e-postanızdaki bağlantıyı açın; şifrenizi orada belirlersiniz.
+                </p>
             }
         >
             <form onSubmit={handleLogin} className="space-y-4" noValidate>

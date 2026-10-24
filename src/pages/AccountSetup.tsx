@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { Building2, KeyRound, Loader2, LogOut, Sparkles, User } from "lucide-react";
+import { Building2, Loader2, LogOut, Sparkles, User } from "lucide-react";
 
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
@@ -9,7 +9,6 @@ import AuthShell, {
     authInputClass,
     authLabelClass,
     authPrimaryButtonClass,
-    authSecondaryButtonClass,
     scrollFieldIntoView,
 } from "../components/AuthShell";
 import { friendlyAuthError } from "../utils/authErrors";
@@ -158,12 +157,8 @@ export default function AccountSetup() {
                 <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
             </div>
 
-            <button type="button" onClick={() => nav("/join")} className={authSecondaryButtonClass} disabled={loading}>
-                <KeyRound className="w-5 h-5" />
-                Davet kodum var
-            </button>
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Bir işletmede çalışıyorsanız yöneticinizin verdiği kodla o işletmeye katılın; yeni işletme açılmaz.
+                Bir işletmede çalışıyorsanız yöneticinizin e-postanıza gönderdiği davet bağlantısını açın; yeni işletme açılmaz.
             </p>
         </AuthShell>
     );

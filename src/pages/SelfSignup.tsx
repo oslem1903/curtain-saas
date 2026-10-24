@@ -239,9 +239,6 @@ export default function SelfSignup() {
                     <button type="button" onClick={() => nav("/login")} className="font-bold text-primary-700 dark:text-primary-300 hover:underline">
                         Zaten hesabım var, giriş yap
                     </button>
-                    <button type="button" onClick={() => nav("/join")} className="text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">
-                        Davet kodum var
-                    </button>
                 </div>
             }
         >

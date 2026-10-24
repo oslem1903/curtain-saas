@@ -42,11 +42,23 @@ function getUpgradeUrl(moduleName: string) {
 }
 
 export default function ModuleGate({ module, children }: { module: string; children: ReactNode }) {
-    const { hasModule, company } = useAuth();
+    const { hasModule, company, isOwner, enabledModules } = useAuth();
 
     if (hasModule(module)) return <>{children}</>;
 
     const label = MODULE_LABELS[module] ?? module;
+    // Ekip uyesi: modul firma paketinde var ama sahip bu kullaniciya vermemis.
+    if (!isOwner && enabledModules.includes(module)) {
+        return (
+            <div className="m-4 rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-500 shadow-sm dark:bg-slate-800">
+                    <LockKeyhole className="h-8 w-8" />
+                </div>
+                <h2 className="text-xl font-black">{label} — Yetkiniz Yok</h2>
+                <p className="mx-auto mt-2 max-w-xl text-sm leading-6">Bu modülü görme yetkiniz yok. Firma sahibinizden erişim isteyin.</p>
+            </div>
+        );
+    }
     const requiredPlan = MODULE_REQUIRED_PLAN[module];
     const currentPlan = company?.subscription_plan || "starter";
 

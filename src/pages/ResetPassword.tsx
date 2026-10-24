@@ -49,6 +49,8 @@ export default function ResetPassword() {
         text: "Şifre sıfırlama bağlantısı kontrol ediliyor...",
     });
     const [elsewhere, setElsewhere] = useState(false);
+    // Ekip daveti baglantisi (type=invite): ayni ekran, "hesabini olustur" dili. Token'lar temizlenmeden once okunur.
+    const [isInvite] = useState(() => getRecoveryParams().get("type") === "invite");
     const savingRef = useRef(false);
 
     useEffect(() => {
@@ -89,7 +91,7 @@ export default function ResetPassword() {
                 // Token'ları adres çubuğundan temizle.
                 window.history.replaceState(null, document.title, `${window.location.pathname}#/reset-password`);
                 setPhase("ready");
-                setMessage({ tone: "info", text: "Yeni şifrenizi belirleyin." });
+                setMessage({ tone: "info", text: isInvite ? "Firmanızın davetini kabul ettiniz. Hesabınız için bir şifre belirleyin; sonra bu e-posta adresiyle giriş yapacaksınız." : "Yeni şifrenizi belirleyin." });
             } catch (error) {
                 if (!alive) return;
                 setPhase("invalid");
@@ -102,7 +104,7 @@ export default function ResetPassword() {
         return () => {
             alive = false;
         };
-    }, []);
+    }, [isInvite]);
 
     async function endRecoverySession() {
         // Kurtarma oturumunu sonlandır: önce tüm cihazlarda, olmazsa en azından bu cihazda.
@@ -174,7 +176,7 @@ export default function ResetPassword() {
 
     return (
         <AuthShell
-            title="Şifre sıfırlama"
+            title={isInvite ? "Şifrenizi belirleyin" : "Şifre sıfırlama"}
             icon={phase === "done" ? <CheckCircle2 className="w-7 h-7" /> : <KeyRound className="w-7 h-7" />}
             footer={
                 phase === "done" ? null : (

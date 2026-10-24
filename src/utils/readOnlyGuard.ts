@@ -23,7 +23,7 @@ const TELEMETRY_RPCS = ["record_login", "record_user_activity", "report_client_e
 const TELEMETRY_TABLES = ["app_devices", "audit_logs", "activity_logs", "user_activity", "error_logs"];
 
 // Veri DEGISTIRMEYEN, ekran/PDF icin gereken okuma RPC'leri (abonelik kapisi yok, yazma yok).
-const READ_RPCS = ["get_supplier_ledger", "get_branch_stats"];
+const READ_RPCS = ["get_supplier_ledger", "get_branch_stats", "list_company_team"];
 
 const ALLOWED_RPC = new RegExp(`/rest/v1/rpc/(${[...ACCESS_RPCS, ...READ_RPCS, ...TELEMETRY_RPCS].join("|")})$`);
 // Destek: sure bitince de destek talebi acilabilmeli (024: "destek talebi acabilmeli"). Sunucuda

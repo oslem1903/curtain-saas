@@ -108,6 +108,8 @@ type AuthContextValue = {
     readOnly: boolean;
     enabledModules: string[];
     hasModule: (module: string) => boolean;
+    /** Firma sahibi mi? Ekip uyeleri (davetle eklenenler) sahip degildir; yonetim ekranlari yalniz sahibe aciktir. */
+    isOwner: boolean;
     lockReason: LockReason | null;
     refreshAuth: () => Promise<void>;
     isPasswordRecovery: boolean;
@@ -171,6 +173,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [role, setRole] = useState<RoleState>("unknown");
     const [memberRole, setMemberRole] = useState<RoleState>("unknown");
+    const [isOwner, setIsOwner] = useState(true);
+    const [memberModules, setMemberModules] = useState<string[] | null>(null);
     const [company, setCompany] = useState<CompanyState | null>(null);
     const [lockReason, setLockReason] = useState<LockReason | null>(null);
     const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
@@ -273,6 +277,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setMemberRole(profileRole);
 
         if (profileRole === "super_admin") {
+            setIsOwner(true);
+            setMemberModules(null);
             const demoCompanyId = localStorage.getItem("demo_company_id");
             if (demoCompanyId) {
                 const { data: demoCompany, error: demoError } = await withTimeout(
@@ -345,6 +351,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setCompany(activeCompany);
+        // Migration 038 oncesi kolonlar yoktur: hata durumunda sahip sayilir (eski davranis), giris bozulmaz.
+        try {
+            const { data: access, error: accessErr } = await withTimeout(
+                supabase.from("company_members").select("is_owner,allowed_modules")
+                    .eq("user_id", sessionUser.id).eq("company_id", activeCompany.id).maybeSingle(),
+                "Uyelik yetkileri",
+            );
+            const restricted = !accessErr && access?.is_owner === false;
+            setIsOwner(!restricted);
+            setMemberModules(restricted && Array.isArray(access?.allowed_modules) ? access.allowed_modules as string[] : null);
+        } catch {
+            setIsOwner(true);
+            setMemberModules(null);
+        }
         const activeMemberRole = normalizeRole(member.role) === "unknown" ? profileRole : normalizeRole(member.role);
         setRole(activeMemberRole);
         setMemberRole(activeMemberRole);
@@ -435,6 +455,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setCompany(null);
             setRole("unknown");
             setMemberRole("unknown");
+            setIsOwner(true);
+            setMemberModules(null);
             setLockReason(null);
             setAppReadOnlyMode(false);
             hasLoadedOnce.current = false;
@@ -512,13 +534,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         hasModule: (module: string) => {
             if (role === "super_admin" && !localStorage.getItem("demo_company_id")) return true;
             const aliases = MODULE_ALIASES[module] ?? [module];
-            return aliases.some((item) => enabledModules.includes(item));
+            if (!aliases.some((item) => enabledModules.includes(item))) return false;
+            // Ekip uyesi: firma paketi ile sahibin verdigi modullerin kesisimi. Panel (admin) her zaman acik.
+            if (memberModules && module !== "admin") {
+                const own = normalizeEnabledModules(memberModules);
+                return aliases.some((item) => own.includes(item));
+            }
+            return true;
         },
+        isOwner,
         lockReason,
         refreshAuth: loadAuth,
         isPasswordRecovery,
         accessError,
-    }), [company, enabledModules, lockReason, memberRole, role, status, user, isPasswordRecovery, accessError, loadAuth]);
+    }), [company, enabledModules, isOwner, memberModules, lockReason, memberRole, role, status, user, isPasswordRecovery, accessError, loadAuth]);
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

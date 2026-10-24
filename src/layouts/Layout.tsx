@@ -351,7 +351,7 @@ async function getContext() {
  * ----------------------*/
 export const Layout = () => {
   const { effectiveRole: role, realRole, viewingRole, viewingUserId, viewingLabel, isSimulating, setViewingRoleAndUser } = useRole();
-  const { hasModule, company, readOnly, refreshAuth } = useAuth();
+  const { hasModule, company, readOnly, refreshAuth, isOwner } = useAuth();
   // Periyodik firma kontrolü kapanışta eski değerleri görmesin diye ref'te tutulur.
   const authCompanyRef = useRef(company);
   authCompanyRef.current = company;
@@ -946,8 +946,9 @@ export const Layout = () => {
               {hasModule("collections") && !hasModule("accounting") && <NavItem to="/collections" icon={Wallet} label="Tahsilat ve Ödemeler" onClick={closeMobileMenu} />}
               {hasModule("catalogs") && <NavItem to="/catalogs" icon={Palette} label="Kartela Yönetimi" onClick={closeMobileMenu} />}
               {hasModule("staff") && <NavItem to="/staff" icon={UserCog} label="Personel" onClick={closeMobileMenu} />}
+              {isOwner && <NavItem to="/team" icon={Users} label="Kullanıcılar" onClick={closeMobileMenu} />}
               <NavItem to="/settings" icon={Settings} label="Ayarlar" onClick={closeMobileMenu} />
-              {BILLING_UI_ENABLED && !isNativeApp() && (
+              {BILLING_UI_ENABLED && !isNativeApp() && isOwner && (
                 <NavItem to="/subscription" icon={CreditCard} label="Abonelik" onClick={closeMobileMenu} />
               )}
             </>

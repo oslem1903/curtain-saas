@@ -181,8 +181,7 @@ test("expired pending invite has a useful error and does not create another comp
   await page.goto("/");
   await expect(page.getByText("Davetin süresi dolmuş.", { exact: false })).toBeVisible();
   expect(state.member).toBe(false);
-  await page.getByRole("button", { name: "Davet Kodu Gir" }).click();
-  await expect(page).toHaveURL(/#\/join/);
+  await expect(page.getByRole("button", { name: "Davet Kodu Gir" })).toHaveCount(0);
 });
 
 test("empty callback never claims that verification succeeded", async ({ page }) => {
@@ -281,7 +280,7 @@ test("account without membership or pending invite sees clear setup guidance, no
   const state = await mockApi(page, { signedIn: true });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Hesap kurulumu" })).toBeVisible({ timeout: 15000 });
-  await expect(page.getByRole("button", { name: "Davet kodum var" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Davet kodum var" })).toHaveCount(0);
   expect(state.claims).toBe(1);
   expect(state.trialCompaniesCreated).toBe(0);
 });

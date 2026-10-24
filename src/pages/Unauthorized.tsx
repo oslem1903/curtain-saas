@@ -56,13 +56,6 @@ export default function Unauthorized() {
                     </button>
                     <button
                         type="button"
-                        onClick={() => { window.location.hash = "#/join"; }}
-                        className="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm font-black text-blue-700 hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/40"
-                    >
-                        Davet Kodu Gir
-                    </button>
-                    <button
-                        type="button"
                         onClick={logout}
                         className="rounded-2xl border border-slate-300 px-5 py-3 text-sm font-black text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                     >

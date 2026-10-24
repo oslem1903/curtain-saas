@@ -9,6 +9,7 @@ import { ImpersonationProvider } from "./context/ImpersonationContext";
 import TenantGuard from "./components/TenantGuard";
 import SuperAdminGuard from "./components/SuperAdminGuard";
 import ModuleGate from "./components/ModuleGate";
+import OwnerGate from "./components/OwnerGate";
 import SignupWithCode from "./pages/SignupWithCode";
 import Login from "./pages/Login";
 import SelfSignup from "./pages/SelfSignup";
@@ -59,6 +60,7 @@ const Quotes = lazy(() => import("./pages/Quotes"));
 const ReportsPage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.ReportsPage })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 const StaffManagement = lazy(() => import("./pages/StaffManagement"));
+const TeamManagement = lazy(() => import("./pages/TeamManagement"));
 const SuperAdminBackupCenter = lazy(() => import("./pages/SuperAdminBackupCenter"));
 const SuperAdminCompanies = lazy(() => import("./pages/SuperAdminCompanies"));
 const SuperAdminDatabaseHealth = lazy(() => import("./pages/SuperAdminDatabaseHealth"));
@@ -343,7 +345,9 @@ export default function App() {
                 path="appointments/new"
                 element={
                   <RoleGate allow={["admin"]}>
-                    <NewAppointment />
+                    <ModuleGate module="measurements">
+                      <NewAppointment />
+                    </ModuleGate>
                   </RoleGate>
                 }
               />
@@ -351,7 +355,9 @@ export default function App() {
                 path="appointments/:id"
                 element={
                   <RoleGate allow={["admin", "installer"]}>
-                    <AppointmentDetail />
+                    <ModuleGate module="measurements">
+                      <AppointmentDetail />
+                    </ModuleGate>
                   </RoleGate>
                 }
               />
@@ -543,7 +549,9 @@ export default function App() {
                     path="subscription"
                     element={
                       <RoleGate allow={["admin", "accountant"]}>
-                        <Subscription />
+                        <OwnerGate>
+                          <Subscription />
+                        </OwnerGate>
                       </RoleGate>
                     }
                   />
@@ -594,11 +602,24 @@ export default function App() {
 
 
                 <Route
+                path="team"
+                element={
+                  <RoleGate allow={["admin"]}>
+                    <OwnerGate>
+                      <TeamManagement />
+                    </OwnerGate>
+                  </RoleGate>
+                }
+              />
+
+                <Route
                 path="staff"
                 element={
                   <RoleGate allow={["admin"]}>
                     <ModuleGate module="staff">
-                      <StaffManagement />
+                      <OwnerGate>
+                        <StaffManagement />
+                      </OwnerGate>
                     </ModuleGate>
                   </RoleGate>
                 }
@@ -609,7 +630,9 @@ export default function App() {
                 element={
                   <RoleGate allow={["admin", "super_admin"]}>
                     <ModuleGate module="branches">
-                      <BranchManagement />
+                      <OwnerGate>
+                        <BranchManagement />
+                      </OwnerGate>
                     </ModuleGate>
                   </RoleGate>
                 }

@@ -52,7 +52,7 @@ test.describe("Kodsuz kayıt ekranları (public)", () => {
     await page.goto("/#/login");
     await expect(page.getByRole("button", { name: "Giriş Yap" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Kayıt ol — 7 gün ücretsiz dene" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Davet kodum var" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Davet kodum var" })).toHaveCount(0);
   });
 
   test("7 gün ücretsiz dene kayıt formunu açar", async ({ page }) => {
@@ -114,11 +114,10 @@ test.describe("Kodsuz kayıt ekranları (public)", () => {
     expect(trialCalls).toBe(0);
   });
 
-  test("davet kodum var mevcut kodla katıl ekranını açar", async ({ page }) => {
+  test("giriş ve kurulum ekranlarında kodla katılım girişi yok; davet e-posta bağlantısıyla gelir", async ({ page }) => {
     await page.goto("/#/login");
-    await page.getByRole("button", { name: "Davet kodum var" }).click();
-    await expect(page).toHaveURL(/#\/join/);
-    await expect(page.getByRole("heading", { name: "Davet kodum var" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Davet kodum var" })).toHaveCount(0);
+    await expect(page.getByText("e-postanızdaki bağlantıyı açın", { exact: false })).toBeVisible();
   });
 
   test("oturumsuz kurulum ekranı girişe yönlendirir", async ({ page }) => {
