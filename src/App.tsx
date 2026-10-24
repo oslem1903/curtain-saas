@@ -1,4 +1,4 @@
-﻿import React, { lazy, Suspense, useEffect } from "react";
+import React, { lazy, Suspense, useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Layout } from "./layouts/Layout";
@@ -21,7 +21,8 @@ import Locked from "./pages/Locked";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { canAccess, type AppRole } from "./auth/roles";
 import { initLocalNotificationNavigation } from "./utils/localNotifications";
-import { isNativeAndroid } from "./utils/nativeRuntime";
+import ExistingAccountOnly from "./components/ExistingAccountOnly";
+import { isNativeIos, isNativeAndroid } from "./utils/nativeRuntime";
 import { getNativeAuthCallbackHash } from "./utils/authRedirect";
 
 // ---------------------------------------------------------------------------
@@ -218,16 +219,16 @@ export default function App() {
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={<SelfSignup />} />
-                <Route path="/setup" element={<AccountSetup />} />
+                <Route path="/signup" element={isNativeIos() ? <ExistingAccountOnly /> : <SelfSignup />} />
+                <Route path="/setup" element={isNativeIos() ? <ExistingAccountOnly /> : <AccountSetup />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/unauthorized" element={<Unauthorized />} />
                 <Route path="/locked" element={<Locked />} />
 
                 {/* PROTECTED */}
-                <Route path="/join" element={<SignupWithCode />} />
-                <Route path="/join/:token" element={<SignupWithCode />} />
+                <Route path="/join" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
+                <Route path="/join/:token" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
                 <Route
                   path="/"
                   element={
