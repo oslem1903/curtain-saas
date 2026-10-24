@@ -88,6 +88,20 @@ function normalizeEnabledModules(modules: string[]) {
 type AuthStatus = "loading" | "unauthenticated" | "ready" | "unauthorized" | "locked" | "needs_setup" | "access_error";
 type LockReason = "inactive_user" | "inactive_member" | "inactive_company" | "expired_trial" | "read_only" | "device_limit" | "unknown";
 
+// Ayni tarayicida onceki super admin oturumundan kalan "firma olarak giris" bayraklari; super admin
+// olmayan bir kullanici girdiginde gecersizdir ve bant/okuma-modu karisikligi yaratir.
+const STALE_SUPER_ADMIN_KEYS = [
+    "demo_company_id", "demo_read_only", "demo_viewing_role", "demo_viewing_user_id",
+    "impersonation_session_id", "impersonation_company_id", "impersonation_company_name", "impersonation_read_only",
+];
+function clearStaleSuperAdminContext() {
+    let found = false;
+    for (const key of STALE_SUPER_ADMIN_KEYS) {
+        if (localStorage.getItem(key) !== null) { found = true; localStorage.removeItem(key); }
+    }
+    if (found) window.dispatchEvent(new Event("impersonation-cleared"));
+}
+
 export function getDeviceId() {
     const key = "curtain_saas_device_id";
     let id = localStorage.getItem(key);
@@ -273,6 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const profileRole = normalizeRole(profile.role);
+        if (profileRole !== "super_admin") clearStaleSuperAdminContext();
         setRole(profileRole);
         setMemberRole(profileRole);
 

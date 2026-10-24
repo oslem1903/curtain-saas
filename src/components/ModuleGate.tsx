@@ -4,6 +4,10 @@ import { LockKeyhole } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 const MODULE_LABELS: Record<string, string> = {
+    customers:    "Müşteriler",
+    orders:       "Siparişler",
+    measurements: "Ölçü, Teklif ve Randevular",
+    appointments: "Randevular",
     accounting:   "Muhasebe & Finans",
     suppliers:    "Tedarikçiler",
     installation: "Montaj Takibi",

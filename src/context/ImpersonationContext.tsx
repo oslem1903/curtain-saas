@@ -41,9 +41,20 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
       setIsImpersonating(true);
     };
 
+    // Super admin olmayan kullanici girince kalinti bayraklar temizlenir (bkz. AuthContext).
+    const handleImpersonationCleared = () => {
+      setSessionId(null);
+      setCompanyId(null);
+      setCompanyName(null);
+      setReadOnly(true);
+      setIsImpersonating(false);
+    };
+
     window.addEventListener("impersonation-started", handleImpersonationStarted);
+    window.addEventListener("impersonation-cleared", handleImpersonationCleared);
     return () => {
       window.removeEventListener("impersonation-started", handleImpersonationStarted);
+      window.removeEventListener("impersonation-cleared", handleImpersonationCleared);
     };
   }, []);
 
