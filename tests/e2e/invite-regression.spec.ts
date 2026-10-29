@@ -2,6 +2,13 @@ import { test, expect, type Page } from "@playwright/test";
 import { friendlyInviteJoinError } from "../../src/utils/inviteJoin";
 import { getNativeAuthCallbackHash } from "../../src/utils/authRedirect";
 import { isSpecialAccessActive, isTrialExpired } from "../../src/utils/trialLicense";
+import { requiresNativeUpdate } from "../../src/utils/nativeUpdatePolicy";
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "ios") return;
+  await page.addInitScript(() => {
+    Object.assign(window, { webkit: { messageHandlers: { bridge: { postMessage() {} } } } });
+  });
+});
 const userId = "27000000-0000-0000-0000-000000000001";
 const companyId = "27000000-0000-0000-0000-000000000101";
 const email = "join@example.test";
@@ -51,6 +58,9 @@ async function mockApi(page: Page, options: { pending?: boolean; metadata?: Reco
     if (url.origin !== "http://127.0.0.1:54329") return route.abort();
     const respond = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     const path = url.pathname;
+    if (path.endsWith("/app_platform_releases")) return respond(null);
+    if (path.endsWith("/auth/v1/recover")) return respond({});
+    if (path.endsWith("/auth/v1/resend")) return respond({});
     if (path.endsWith("/auth/v1/user")) return respond({ ...user, user_metadata: state.metadata });
     if (path.endsWith("/auth/v1/token")) {
       state.authExchanges++;
@@ -250,7 +260,7 @@ test("self signup email callback activates one Solo company", async ({ page, con
   await page.getByPlaceholder("Örn. Yıldız Perde").fill("Solo Test Perde");
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[type="password"]').fill("test-password-123");
-  await page.getByRole("button", { name: "Ücretsiz denemeyi başlat" }).click();
+  await page.getByRole("button", { name: "Hesabımı oluştur" }).click();
   await expect(page.getByRole("heading", { name: "E-postanızı doğrulayın" })).toBeVisible();
   expect(state.signup?.data).toMatchObject({ full_name: "New Test User", company_name: "Solo Test Perde", signup_intent: "self_trial" });
 
@@ -283,4 +293,166 @@ test("account without membership or pending invite sees clear setup guidance, no
   await expect(page.getByRole("button", { name: "Davet kodum var" })).toHaveCount(0);
   expect(state.claims).toBe(1);
   expect(state.trialCompaniesCreated).toBe(0);
+});
+
+test("new user reaches signup from login and chooses their own password", async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto("/#/login");
+  await page.getByRole("button", { name: "Kayıt ol", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Kayıt ol", exact: true })).toBeVisible();
+  await page.getByLabel("Ad Soyad", { exact: true }).fill("Yeni Kullanıcı");
+  await page.getByLabel("İşletme adı", { exact: true }).fill("Yeni Perde");
+  await page.getByLabel("E-posta", { exact: true }).fill("NEW@example.test");
+  await page.getByLabel("Şifre", { exact: true }).fill("new-account-password-123");
+  await page.getByRole("button", { name: "Hesabımı oluştur" }).click();
+  await expect(page.getByRole("heading", { name: "E-postanızı doğrulayın" })).toBeVisible();
+  expect(state.signup).toMatchObject({ email: "new@example.test", password: "new-account-password-123" });
+  expect(state.trialCalls).toBe(0);
+  await page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }).click();
+  await expect(page.getByRole("status")).toContainText("tekrar gönderildi");
+});
+
+test("password reset guides unregistered users to signup without creating an account", async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto("/#/login");
+  await page.getByLabel("Giriş e-posta adresi").fill(email);
+  await page.getByRole("button", { name: "Şifremi unuttum" }).click();
+  await expect(page.getByRole("status")).toContainText('"Kayıt ol" ile hesap açabilir');
+  expect(state.signup).toBeNull();
+  expect(state.trialCalls).toBe(0);
+});
+
+test("duplicate email stays on signup and offers sign in", async ({ page }) => {
+  const state = await mockApi(page);
+  await page.route("**/auth/v1/signup**", route => route.fulfill({ json: { ...user, identities: [] } }));
+  await page.goto("/#/signup");
+  await page.getByLabel("Ad Soyad", { exact: true }).fill("Test Kullanıcı");
+  await page.getByLabel("İşletme adı", { exact: true }).fill("Test Perde");
+  await page.getByLabel("E-posta", { exact: true }).fill(email);
+  await page.getByLabel("Şifre", { exact: true }).fill("test-password-123");
+  await page.getByRole("button", { name: "Hesabımı oluştur" }).click();
+  await expect(page.getByRole("alert")).toContainText("zaten bir hesap var");
+  await expect(page.getByRole("button", { name: "Giriş ekranına git" })).toBeVisible();
+  expect(state.trialCalls).toBe(0);
+});
+
+test("iOS update gate runs before login and can be remotely disabled", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "ios", "Native iOS policy only");
+  await mockApi(page);
+  let enabled = true;
+  await page.route("**/rest/v1/app_platform_releases**", route => route.fulfill({ json: {
+    platform: "ios", minimum_version: "1.0.23", store_url: "https://apps.apple.com/tr/app/perdepro/id1234567890", enabled,
+  } }));
+  await page.goto("/#/login");
+  await expect(page.getByRole("heading", { name: "PerdePRO’yu güncelleyin" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Kayıt ol", exact: true })).toHaveCount(0);
+  enabled = false;
+  await page.getByRole("button", { name: "Tekrar kontrol et" }).click();
+  await expect(page.getByRole("button", { name: "Kayıt ol", exact: true })).toBeVisible();
+});
+
+test("unavailable release metadata does not prevent signup", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/rest/v1/app_platform_releases**", route => route.fulfill({ status: 503, json: { message: "Offline" } }));
+  await page.goto("/#/signup");
+  await expect(page.getByRole("heading", { name: "Kayıt ol", exact: true })).toBeVisible();
+});
+
+test("required update validates platform, version and App Store destination", () => {
+  const policy = { platform: "ios", enabled: true, minimum_version: "1.0.22", store_url: "https://apps.apple.com/tr/app/perdepro/id1234567890" };
+  expect(requiresNativeUpdate(policy, "ios", "1.0.20")).toBe(true);
+  expect(requiresNativeUpdate(policy, "ios", "1.0.22")).toBe(false);
+  expect(requiresNativeUpdate(policy, "ios", "1.0.100")).toBe(false);
+  expect(requiresNativeUpdate(policy, "android", "1.0.20")).toBe(false);
+  expect(requiresNativeUpdate(policy, "web", "1.0.20")).toBe(false);
+  expect(requiresNativeUpdate({ ...policy, enabled: false }, "ios", "1.0.20")).toBe(false);
+  expect(requiresNativeUpdate({ ...policy, store_url: "https://example.test/id123" }, "ios", "1.0.20")).toBe(false);
+  expect(requiresNativeUpdate({ ...policy, store_url: "https://apps.apple.com.evil.test/id123" }, "ios", "1.0.20")).toBe(false);
+  expect(requiresNativeUpdate({ ...policy, minimum_version: "invalid" }, "ios", "1.0.20")).toBe(false);
+});
+
+const deletionReceipt = { id: "29000000-0000-0000-0000-000000000001", receipt_secret: "29000000-0000-0000-0000-000000000002", status: "pending", requested_at: "2026-10-29T09:00:00Z", due_at: "2026-11-05T09:00:00Z", completed_at: null, completion_note: null };
+
+test("account deletion requires explicit confirmation and only queues the caller", async ({ page }) => {
+  await mockApi(page, { signedIn: true });
+  let calls = 0; let body: unknown;
+  await page.route("**/rest/v1/rpc/request_my_account_deletion", async route => {
+    calls++; body = route.request().postDataJSON();
+    await route.fulfill({ json: deletionReceipt });
+  });
+  await page.goto("/#/account/delete");
+  const submit = page.getByRole("button", { name: "Kalıcı silme talebini gönder" });
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Silme onayı").fill("SİL");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("checkbox").check();
+  await submit.click();
+  await expect(page.getByRole("status")).toContainText("Hesabınız henüz silinmedi");
+  expect(calls).toBe(1);
+  expect(body).toEqual({ p_confirm: "HESABIMI SIL" });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Talebin durumunu kontrol et" })).toBeVisible();
+  expect(calls).toBe(1);
+});
+
+test("account deletion backend failure never claims success", async ({ page }) => {
+  await mockApi(page, { signedIn: true });
+  await page.route("**/rest/v1/rpc/request_my_account_deletion", route => route.fulfill({ status: 503, json: { message: "Unavailable" } }));
+  await page.goto("/#/account/delete");
+  await page.getByLabel("Silme onayı").fill("SİL");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Kalıcı silme talebini gönder" }).click();
+  await expect(page.getByRole("alert")).toContainText("kaydedilemedi");
+  await expect(page.getByRole("button", { name: "Talebin durumunu kontrol et" })).toHaveCount(0);
+});
+
+test("deletion completion remains trackable without an Auth account", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/rest/v1/rpc/get_account_deletion_receipt", route => route.fulfill({ json: { ...deletionReceipt, status: "completed", completed_at: "2026-10-30T09:00:00Z", completion_note: "Kişisel veriler silindi. Saklanan kayıt yok." } }));
+  await page.goto("/#/account/delete");
+  await page.getByLabel("Takip kodu", { exact: true }).fill(`${deletionReceipt.id}:${deletionReceipt.receipt_secret}`);
+  await page.getByRole("button", { name: "Talebimi bul" }).click();
+  await expect(page.getByRole("status")).toContainText("kalıcı silme işlemi tamamlandı");
+  await expect(page.getByText("Kişisel veriler silindi. Saklanan kayıt yok.", { exact: false })).toBeVisible();
+});
+
+test("account deletion is accessible from settings and account setup", async ({ page }) => {
+  await mockApi(page, { ready: true, role: "admin" });
+  await page.goto("/#/settings");
+  await page.getByRole("button", { name: "Kalıcı hesap silme ekranını aç", exact: true }).click();
+  await expect(page).toHaveURL(/#\/account\/delete$/);
+  await expect(page.getByRole("heading", { name: "Hesabımı sil" })).toBeVisible();
+});
+
+test("auth background tap releases form focus without breaking labels or values", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/signup");
+  const email = page.getByLabel("E-posta", { exact: true });
+  await email.fill("keyboard@example.test");
+  await expect(email).toBeFocused();
+  await page.getByRole("heading", { name: "Kayıt ol", exact: true }).click();
+  await expect(email).not.toBeFocused();
+  await expect(email).toHaveValue("keyboard@example.test");
+  await page.getByText("Ad Soyad", { exact: true }).click();
+  await expect(page.getByLabel("Ad Soyad", { exact: true })).toBeFocused();
+});
+
+test("closed mobile sidebar hides duplicate account deletion links", async ({ page }, testInfo) => {
+  await mockApi(page, { ready: true, role: "admin" });
+  await page.goto("/#/settings");
+  await expect(page.getByRole("heading", { name: "Ayarlar", exact: true })).toBeVisible();
+  const sidebar = page.locator('[data-chrome="sidebar"]');
+  if (testInfo.project.name === "desktop") {
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Hesabımı sil", exact: true })).toBeVisible();
+  } else {
+    await expect(sidebar).toBeHidden();
+    await expect(page.getByRole("link", { name: "Hesabımı sil", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Diğer", exact: true }).tap();
+    await expect(sidebar).toBeVisible();
+    await sidebar.getByRole("link", { name: "Ayarlar", exact: true }).tap();
+    await expect(sidebar).toBeHidden();
+    await page.getByRole("button", { name: "Kalıcı hesap silme ekranını aç", exact: true }).tap();
+    await expect(page.getByRole("heading", { name: "Hesabımı sil", exact: true })).toBeVisible();
+  }
 });

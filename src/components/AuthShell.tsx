@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import type { FocusEvent, ReactNode } from "react";
+import type { FocusEvent, PointerEvent, ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 
 /**
@@ -13,12 +13,21 @@ import { ShieldCheck } from "lucide-react";
 export function scrollFieldIntoView(event: FocusEvent<HTMLElement>) {
     const target = event.currentTarget;
     window.setTimeout(() => {
+        if (document.activeElement !== target) return;
         try {
             target.scrollIntoView({ block: "center", behavior: "smooth" });
         } catch {
             // Eski WebView'larda seçenek nesnesi desteklenmeyebilir.
         }
     }, 280);
+}
+
+function dismissAuthKeyboard(event: PointerEvent<HTMLDivElement>) {
+    const target = event.target;
+    // Keep label-to-input focus and normal control activation intact.
+    if (!(target instanceof Element) || target.closest("input,textarea,select,button,a,label,[role='button'],summary")) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches("input,textarea,select,[contenteditable='true']")) active.blur();
 }
 
 export default function AuthShell({
@@ -36,6 +45,7 @@ export default function AuthShell({
 }) {
     return (
         <div
+            onPointerDown={dismissAuthKeyboard}
             className="min-h-[100dvh] overflow-y-auto bg-slate-50 dark:bg-slate-950 flex justify-center items-start sm:items-center px-4"
             style={{
                 paddingTop: "max(1.25rem, env(safe-area-inset-top))",

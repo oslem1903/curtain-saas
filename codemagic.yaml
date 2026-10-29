@@ -275,7 +275,7 @@ workflows:
           except ValueError:
               pass
           known_ui = {
-              'login_screen': 'Mevcut PerdePRO hesabınızla giriş yapın.',
+              'login_screen': 'Hesabınıza giriş yapın. İlk kez kullanıyorsanız Kayıt ol ile hesabınızı oluşturun.',
               'admin_dashboard': 'Yönetici Paneli',
               'device_limit': 'Cihaz limiti doldu',
               'access_check_failed': 'Hesabınız kontrol edilemedi',
@@ -500,3 +500,31 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
+
+  ios-account-flow-smoke:
+    name: PerdePRO iPhone kayıt ve hesap silme testi (sentetik)
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    environment:
+      node: 24.17.0
+      xcode: latest
+    scripts:
+      - *npm_install
+      - name: Build isolated synthetic web app (never production)
+        script: |
+          set -euo pipefail
+          VITE_SUPABASE_URL=http://127.0.0.1:54329 VITE_SUPABASE_URI=http://127.0.0.1:54329 VITE_SUPABASE_ANON_KEY=synthetic-local-test-only npm run build
+          npx cap sync ios
+          # ATS override is applied ONLY to this disposable unsigned simulator checkout.
+          /usr/libexec/PlistBuddy -c 'Delete :NSAppTransportSecurity' ios/App/App/Info.plist || true
+          /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity dict' ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true' ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true' ios/App/App/Info.plist
+      - *ios_sim_build
+      - *maestro_install
+      - name: Test native iPhone signup and erasure-request UI
+        script: bash tests/ios/run-account-flow-smoke.sh
+    artifacts:
+      - build/ios-account-flow-smoke/**/*
+      - /tmp/perdepro-simulator-build.log
+    # No signing integration, production environment group, IPA or publishing step.

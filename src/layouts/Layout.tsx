@@ -888,7 +888,7 @@ export const Layout = () => {
         data-chrome="sidebar"
         className={cn(
           "fixed lg:sticky top-0 left-0 z-[60] lg:z-30 h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
-          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          isMobileMenuOpen ? "visible translate-x-0" : "invisible -translate-x-full lg:visible"
         )}
       >
         <div className="p-6 flex items-center justify-between">
@@ -925,6 +925,7 @@ export const Layout = () => {
               <NavItem to="/super-admin/deployment/history" icon={TrendingUp} label="Deployment Geçmişi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/mobile" icon={MonitorSmartphone} label="Mobil Uygulama Yönetimi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/observability" icon={Activity} label="Kullanım ve Hata İzleme" onClick={closeMobileMenu} />
+              <NavItem to="/super-admin/account-deletions" icon={LifeBuoy} label="Hesap Silme Talepleri" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/support" icon={LifeBuoy} label="Destek / Hata Merkezi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/updates" icon={Megaphone} label="Güncellemeler" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/notifications" icon={Megaphone} label="Bildirimler" onClick={closeMobileMenu} />
@@ -974,6 +975,8 @@ export const Layout = () => {
               {hasModule("customers") && <NavItem to="/field/customers" icon={Users} label="Müşterilerim" onClick={closeMobileMenu} />}
             </>
           )}
+
+            <NavItem to="/account/delete" icon={UserCog} label="Hesabımı sil" onClick={closeMobileMenu} />
 
             {/* Support Button for customer users */}
             {role !== "super_admin" && (

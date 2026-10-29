@@ -1,5 +1,6 @@
 import { isNativeIos } from "../utils/nativeRuntime";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Clock, LockKeyhole, MonitorSmartphone, RefreshCw, ShieldOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { getDeviceId, useAuth } from "../context/AuthContext";
@@ -137,6 +138,7 @@ export default function Locked() {
                     </p>
                 )}
 
+                <Link to="/account/delete" className="mt-4 inline-block text-sm font-bold text-red-700 underline dark:text-red-300">Hesabımı sil</Link>
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
                     <button
                         type="button"

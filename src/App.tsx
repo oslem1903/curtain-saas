@@ -14,6 +14,7 @@ import SignupWithCode from "./pages/SignupWithCode";
 import Login from "./pages/Login";
 import SelfSignup from "./pages/SelfSignup";
 import AccountSetup from "./pages/AccountSetup";
+import AccountDeletion from "./pages/AccountDeletion";
 import AuthCallback from "./pages/AuthCallback";
 import ResetPassword from "./pages/ResetPassword";
 import Unauthorized from "./pages/Unauthorized";
@@ -21,8 +22,8 @@ import Locked from "./pages/Locked";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { canAccess, type AppRole } from "./auth/roles";
 import { initLocalNotificationNavigation } from "./utils/localNotifications";
-import ExistingAccountOnly from "./components/ExistingAccountOnly";
-import { isNativeIos, isNativeAndroid } from "./utils/nativeRuntime";
+import NativeUpdateGate from "./components/NativeUpdateGate";
+import { isNativeAndroid } from "./utils/nativeRuntime";
 import { getNativeAuthCallbackHash } from "./utils/authRedirect";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ const Orders = lazy(() => import("./pages/Orders"));
 const Products = lazy(() => import("./pages/Products"));
 const Quotes = lazy(() => import("./pages/Quotes"));
 const ReportsPage = lazy(() => import("./pages/AccountingSubPages").then((m) => ({ default: m.ReportsPage })));
+const SuperAdminAccountDeletions = lazy(() => import("./pages/SuperAdminAccountDeletions"));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 const StaffManagement = lazy(() => import("./pages/StaffManagement"));
 const TeamManagement = lazy(() => import("./pages/TeamManagement"));
@@ -207,6 +209,7 @@ function RouteFallback() {
 export default function App() {
   return (
     <ErrorBoundary>
+      <NativeUpdateGate>
       <HashRouter>
         <AuthProvider>
           <ImpersonationProvider>
@@ -219,16 +222,17 @@ export default function App() {
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={isNativeIos() ? <ExistingAccountOnly /> : <SelfSignup />} />
-                <Route path="/setup" element={isNativeIos() ? <ExistingAccountOnly /> : <AccountSetup />} />
+                <Route path="/signup" element={<SelfSignup />} />
+                <Route path="/setup" element={<AccountSetup />} />
+                <Route path="/account/delete" element={<AccountDeletion />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/unauthorized" element={<Unauthorized />} />
                 <Route path="/locked" element={<Locked />} />
 
                 {/* PROTECTED */}
-                <Route path="/join" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
-                <Route path="/join/:token" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
+                <Route path="/join" element={<SignupWithCode />} />
+                <Route path="/join/:token" element={<SignupWithCode />} />
                 <Route
                   path="/"
                   element={
@@ -680,6 +684,10 @@ export default function App() {
                 }
               />
                 <Route
+                path="super-admin/account-deletions"
+                element={<SuperAdminGuard><SuperAdminAccountDeletions /></SuperAdminGuard>}
+              />
+                <Route
                 path="super-admin/support"
                 element={
                   <SuperAdminGuard>
@@ -897,6 +905,7 @@ export default function App() {
           </ImpersonationProvider>
         </AuthProvider>
       </HashRouter>
+      </NativeUpdateGate>
     </ErrorBoundary>
   );
 }

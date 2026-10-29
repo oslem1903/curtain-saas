@@ -4,9 +4,9 @@ name: PerdePRO Apple Test screenshots
 - launchApp:
     clearState: true
 - extendedWaitUntil:
-    visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+    visible: "Hesabınıza giriş yapın. İlk kez kullanıyorsanız Kayıt ol ile hesabınızı oluşturun."
     timeout: 120000
-- assertNotVisible: ".*7 gün ücretsiz.*"
+- assertVisible: "Kayıt ol"
 - takeScreenshot: 01-Giris
 - tapOn: ".*Giriş e-posta adresi.*"
 - inputText:
@@ -25,7 +25,7 @@ name: PerdePRO Apple Test screenshots
     timeout: 20000
 - runFlow:
     when:
-      visible: "Mevcut PerdePRO hesabınızla giriş yapın."
+      visible: "Hesabınıza giriş yapın. İlk kez kullanıyorsanız Kayıt ol ile hesabınızı oluşturun."
       notVisible: ".*(E-posta veya şifre hatalı|alanlarını doldurun|Sunucuya bağlanılamadı|Çok fazla deneme|Lütfen geçerli bir e-posta).*"
     commands:
       - hideKeyboard

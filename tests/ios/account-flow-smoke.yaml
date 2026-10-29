@@ -1,0 +1,81 @@
+appId: com.curtainsaas.app
+name: Synthetic iOS signup and permanent erasure request
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Kayıt ol"
+    timeout: 120000
+- takeScreenshot: 01-Login
+- tapOn: "Kayıt ol"
+- extendedWaitUntil:
+    visible: "Hesabımı oluştur"
+    timeout: 30000
+- tapOn: "Ad Soyad"
+- inputText: "Simulator User"
+- tapOn: "İşletme adı"
+- inputText: "Simulator Perde"
+- tapOn: "E-posta"
+- inputText: "ios-smoke@example.test"
+- tapOn: "Şifre"
+- inputText: "synthetic-password-123"
+- scrollUntilVisible:
+    element: "Kayıt ol"
+    direction: UP
+    timeout: 15000
+- tapOn: "Kayıt ol"
+- waitForAnimationToEnd
+- takeScreenshot: 02-Signup
+- scrollUntilVisible:
+    element: "Hesabımı oluştur"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Hesabımı oluştur"
+- extendedWaitUntil:
+    visible: "E-postanızı doğrulayın"
+    timeout: 30000
+- takeScreenshot: 03-Verification
+- tapOn: "Doğruladım, devam et"
+- extendedWaitUntil:
+    visible: "Yönetici Paneli"
+    timeout: 60000
+- takeScreenshot: 04-Dashboard
+- tapOn: "Diğer"
+- scrollUntilVisible:
+    element: "Ayarlar"
+    direction: DOWN
+    timeout: 20000
+- tapOn: "Ayarlar"
+- scrollUntilVisible:
+    element: "Kalıcı hesap silme ekranını aç"
+    direction: DOWN
+    timeout: 20000
+- tapOn: "Kalıcı hesap silme ekranını aç"
+- extendedWaitUntil:
+    visible: ".*Hesabınızın ve ilişkili kişisel verilerinizin.*"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "Silme onayı"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Hesabımın kalıcı olarak silinmesini istiyorum."
+- tapOn: "Silme onayı"
+- inputText: "SIL"
+- scrollUntilVisible:
+    element: "Hesabımı sil"
+    direction: UP
+    timeout: 15000
+- tapOn: "Hesabımı sil"
+- waitForAnimationToEnd
+- takeScreenshot: 05-DeleteConfirmation
+- scrollUntilVisible:
+    element: "Kalıcı silme talebini gönder"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Kalıcı silme talebini gönder"
+- extendedWaitUntil:
+    visible: ".*Kalıcı hesap silme talebiniz alındı.*"
+    timeout: 30000
+- takeScreenshot: 06-DeletionReceipt
+- tapOn: "Talebin durumunu kontrol et"
+- assertVisible: ".*Hesabınız henüz silinmedi.*"
