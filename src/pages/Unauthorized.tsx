@@ -1,4 +1,4 @@
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useState } from "react";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { supabase } from "../supabaseClient";
@@ -44,6 +44,7 @@ export default function Unauthorized() {
                 <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {accessError || "Firma erişiminiz henüz tamamlanmamış. Davet kodunuzla katılabilir veya firma yöneticinizle iletişime geçebilirsiniz."}
                 </p>
+                <Link to="/account/delete" className="mt-4 inline-block text-sm font-bold text-red-700 underline dark:text-red-300">Hesabımı sil</Link>
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
                     <button
                         type="button"

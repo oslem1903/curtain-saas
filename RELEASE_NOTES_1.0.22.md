@@ -1,4 +1,4 @@
-# iOS 1.0.22 (24): first-use registration and update policy
+# iOS 1.0.22 (25): first-use registration and update policy
 
 ## Problem and behavior
 
@@ -6,7 +6,7 @@ The 1.0.20 App Review change hid signup and blocked /signup, /setup and /join on
 
 This hotfix restores the complete registration and invitation routes, lets users choose their own password, verifies their email and calls the existing authenticated, idempotent start_self_service_trial RPC. The existing seven-day trial, server authorization, tenant isolation and native purchase restrictions remain in place. Password recovery explains how an unregistered user can create an account without exposing whether an address is registered.
 
-The source package and Xcode project are prepared as 1.0.22, build 24. Android native version numbers are unchanged.
+The source package and Xcode project are prepared as 1.0.22, build 25. Android native version numbers are unchanged.
 
 ## Required updates
 
@@ -23,19 +23,24 @@ After the desired minimum version is approved and actually downloadable in the t
 - TypeScript project compilation and changed-source ESLint passed.
 - Vite production bundle compiled with a local test backend configuration; this is NOT a production IPA.
 - Capacitor iOS synchronization passed. The generated web assets are ignored by Git; Codemagic rebuilds them with its production environment group.
-- 8 targeted Chromium tests with the Capacitor iOS bridge and iPhone viewport passed.
-- 12 targeted desktop and mobile-web tests passed.
+- Follow-up validation: 28 targeted desktop/mobile/iOS-bridge browser tests passed (2 iOS-only cases correctly skipped on other platforms).
+- One browser flow exercised the exact synthetic HTTP fixture used by the native workflow, including menu navigation and the erasure receipt.
+- 18 isolated PostgreSQL/PGlite account-deletion security and completion checks passed.
 - Tests intercept all external requests, use synthetic users and do not send emails or create live businesses.
 - Native iOS compilation/signing, a real iPhone, actual email delivery and the live database policy have NOT been validated here.
 
 ## Build and App Review handoff
 
-1. Codemagic: branch `fix/ios-signup-required-update`, workflow `perdepro-ios` (PerdePRO iOS imzali IPA), using the existing `perdepro_env` production configuration. Build version must be 1.0.22 (24).
+1. Codemagic: branch `fix/ios-signup-required-update`, workflow `perdepro-ios` (PerdePRO iOS imzali IPA), using the existing `perdepro_env` production configuration. Build version must be 1.0.22 (25).
 2. Test the signed build on a real iPhone: signup, email verification, return to app, trial dashboard, existing-account login and password recovery. Validate the live self-service RPC/configuration. Re-test invitation acceptance.
 3. The previous submission explicitly removed business registration for App Review. Disclose the restored registration and seven-day trial in the new submission; do not claim that Apple has approved this new flow. Keep native purchase links disabled.
-4. Apple guideline 5.1.1(v) requires in-app account deletion when account creation is offered. No end-user account deletion implementation was found in the reviewed source. This is an outstanding submission prerequisite, not a feature implemented by this hotfix; verify/implement it before claiming review readiness. App Review approval is not guaranteed.
+4. Adds in-app permanent erasure initiation, a seven-day manual processing deadline, a super-admin queue and receipt tracking after Auth deletion. Apply the dedicated account-deletion migration and establish the operator process in ACCOUNT_DELETION_OPERATIONS.md. It is not automatic erasure: the operator must actually delete the account and associated personal data. Verify live installation before submission. App Review approval is not guaranteed.
 5. Select the signed build in a new 1.0.22 App Store Connect version, provide accurate review notes and request expedited review for the first-use blocker after submission.
 6. Only activate any compatible mandatory-update policy once the target release is available. First-update instructions for existing anonymous users remain necessary because of the compatibility limit above.
 
 Suggested review explanation (verify against the final signed build):
 "This update fixes a first-use account access blocker. A new user can choose Create account, enter their business name, email and a password, verify their email and return to the app. Password recovery remains available for existing accounts. The app offers a seven-day trial without payment-card collection or automatic charges. No external payment links have been added. Please review the restored registration flow and its trial behavior."
+
+## Build 25 follow-up
+
+Adds permanent erasure initiation from settings/setup/locked screens and public receipt tracking. Completion refuses while Auth/profile/membership/storage ownership still exists, then removes identity fields from the request. Shared companies are not automatically deleted. Requires the dedicated database migration and documented manual operation. The new unsigned ios-account-flow-smoke workflow uses synthetic loopback data and sends no live email. Already-uploaded build 24 lacks this follow-up; replace it with build 25 after validation.

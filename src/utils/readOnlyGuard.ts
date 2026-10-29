@@ -7,6 +7,7 @@ const BLOCKED_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
 // Oturum/davet/erisim akisi: salt okunur hesap bile girebilmeli.
 const ACCESS_RPCS = [
+  "request_my_account_deletion", "get_account_deletion_receipt",
   "get_current_auth_context", "register_device_and_touch_login", "complete_pending_invite_for_current_user",
   "claim_pending_invites_for_current_user", "accept_invite_code_for_current_user", "accept_invite_for_current_user",
   "get_invite_by_token", "get_invite_by_email_code",

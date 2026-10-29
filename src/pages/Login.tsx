@@ -190,9 +190,10 @@ export default function Login() {
             title="PerdePRO"
             subtitle="Hesabınıza giriş yapın. İlk kez kullanıyorsanız Kayıt ol ile hesabınızı oluşturun."
             footer={
+                <div className="space-y-3"><button type="button" onClick={() => nav("/account/delete")} className="w-full text-center text-xs font-semibold text-slate-500 underline">Hesap silme talebi takibi</button>
                 <p className="text-center text-xs text-slate-500 dark:text-slate-400">
                     Firma yöneticiniz sizi davet ettiyse e-postanızdaki bağlantıyı açın; şifrenizi orada belirlersiniz.
-                </p>
+                </p></div>
             }
         >
             <form onSubmit={handleLogin} className="space-y-4" noValidate>

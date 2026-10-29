@@ -248,6 +248,7 @@ export default function SelfSignup() {
                     <div className="mt-1.5 relative">
                         <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            aria-label="Ad Soyad"
                             value={fullName}
                             onChange={(e) => setFullName(e.target.value)}
                             onFocus={scrollFieldIntoView}
@@ -265,6 +266,7 @@ export default function SelfSignup() {
                     <div className="mt-1.5 relative">
                         <Building2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            aria-label="İşletme adı"
                             value={companyName}
                             onChange={(e) => setCompanyName(e.target.value)}
                             onFocus={scrollFieldIntoView}
@@ -282,6 +284,7 @@ export default function SelfSignup() {
                     <div className="mt-1.5 relative">
                         <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            aria-label="E-posta"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             onFocus={scrollFieldIntoView}
@@ -302,6 +305,7 @@ export default function SelfSignup() {
                     <div className="mt-1.5 relative">
                         <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
+                            aria-label="Şifre"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             onFocus={scrollFieldIntoView}

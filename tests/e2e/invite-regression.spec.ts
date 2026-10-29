@@ -370,3 +370,56 @@ test("required update validates platform, version and App Store destination", ()
   expect(requiresNativeUpdate({ ...policy, store_url: "https://apps.apple.com.evil.test/id123" }, "ios", "1.0.20")).toBe(false);
   expect(requiresNativeUpdate({ ...policy, minimum_version: "invalid" }, "ios", "1.0.20")).toBe(false);
 });
+
+const deletionReceipt = { id: "29000000-0000-0000-0000-000000000001", receipt_secret: "29000000-0000-0000-0000-000000000002", status: "pending", requested_at: "2026-10-29T09:00:00Z", due_at: "2026-11-05T09:00:00Z", completed_at: null, completion_note: null };
+
+test("account deletion requires explicit confirmation and only queues the caller", async ({ page }) => {
+  await mockApi(page, { signedIn: true });
+  let calls = 0; let body: unknown;
+  await page.route("**/rest/v1/rpc/request_my_account_deletion", async route => {
+    calls++; body = route.request().postDataJSON();
+    await route.fulfill({ json: deletionReceipt });
+  });
+  await page.goto("/#/account/delete");
+  const submit = page.getByRole("button", { name: "Kalıcı silme talebini gönder" });
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Silme onayı").fill("SİL");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("checkbox").check();
+  await submit.click();
+  await expect(page.getByRole("status")).toContainText("Hesabınız henüz silinmedi");
+  expect(calls).toBe(1);
+  expect(body).toEqual({ p_confirm: "HESABIMI SIL" });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Talebin durumunu kontrol et" })).toBeVisible();
+  expect(calls).toBe(1);
+});
+
+test("account deletion backend failure never claims success", async ({ page }) => {
+  await mockApi(page, { signedIn: true });
+  await page.route("**/rest/v1/rpc/request_my_account_deletion", route => route.fulfill({ status: 503, json: { message: "Unavailable" } }));
+  await page.goto("/#/account/delete");
+  await page.getByLabel("Silme onayı").fill("SİL");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Kalıcı silme talebini gönder" }).click();
+  await expect(page.getByRole("alert")).toContainText("kaydedilemedi");
+  await expect(page.getByRole("button", { name: "Talebin durumunu kontrol et" })).toHaveCount(0);
+});
+
+test("deletion completion remains trackable without an Auth account", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/rest/v1/rpc/get_account_deletion_receipt", route => route.fulfill({ json: { ...deletionReceipt, status: "completed", completed_at: "2026-10-30T09:00:00Z", completion_note: "Kişisel veriler silindi. Saklanan kayıt yok." } }));
+  await page.goto("/#/account/delete");
+  await page.getByLabel("Takip kodu", { exact: true }).fill(`${deletionReceipt.id}:${deletionReceipt.receipt_secret}`);
+  await page.getByRole("button", { name: "Talebimi bul" }).click();
+  await expect(page.getByRole("status")).toContainText("kalıcı silme işlemi tamamlandı");
+  await expect(page.getByText("Kişisel veriler silindi. Saklanan kayıt yok.", { exact: false })).toBeVisible();
+});
+
+test("account deletion is accessible from settings and account setup", async ({ page }) => {
+  await mockApi(page, { ready: true, role: "admin" });
+  await page.goto("/#/settings");
+  await page.getByRole("button", { name: "Hesabımı sil", exact: true }).click();
+  await expect(page).toHaveURL(/#\/account\/delete$/);
+  await expect(page.getByRole("heading", { name: "Hesabımı sil" })).toBeVisible();
+});

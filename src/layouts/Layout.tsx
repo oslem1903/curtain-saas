@@ -925,6 +925,7 @@ export const Layout = () => {
               <NavItem to="/super-admin/deployment/history" icon={TrendingUp} label="Deployment Geçmişi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/mobile" icon={MonitorSmartphone} label="Mobil Uygulama Yönetimi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/observability" icon={Activity} label="Kullanım ve Hata İzleme" onClick={closeMobileMenu} />
+              <NavItem to="/super-admin/account-deletions" icon={LifeBuoy} label="Hesap Silme Talepleri" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/support" icon={LifeBuoy} label="Destek / Hata Merkezi" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/updates" icon={Megaphone} label="Güncellemeler" onClick={closeMobileMenu} />
               <NavItem to="/super-admin/notifications" icon={Megaphone} label="Bildirimler" onClick={closeMobileMenu} />
@@ -974,6 +975,8 @@ export const Layout = () => {
               {hasModule("customers") && <NavItem to="/field/customers" icon={Users} label="Müşterilerim" onClick={closeMobileMenu} />}
             </>
           )}
+
+            <NavItem to="/account/delete" icon={UserCog} label="Hesabımı sil" onClick={closeMobileMenu} />
 
             {/* Support Button for customer users */}
             {role !== "super_admin" && (
