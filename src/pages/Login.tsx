@@ -15,8 +15,6 @@ import { getAuthRedirectUrl, markResetStartedHere } from "../utils/authRedirect"
 import { friendlyAuthError } from "../utils/authErrors";
 import { PASSWORD_UPDATED_EMAIL, PASSWORD_UPDATED_FLAG } from "./ResetPassword";
 
-import { isNativeIos } from "../utils/nativeRuntime";
-
 const PASSWORD_UPDATED_TEXT = "Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz.";
 
 /** Şifre sıfırlamadan gelindiyse bayrağı okuyup hemen temizler (tek seferlik mesaj). */
@@ -166,7 +164,7 @@ export default function Login() {
                 tone: "success",
                 // Hesabin var olup olmadigi ACIKLANMAZ (Supabase de ayni 200 yanitini verir); yalnizca yazilan adres
                 // geri gosterilir ve kullaniciya adres/kayit kontrolu yaptirilir.
-                text: isNativeIos() ? `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Gelen kutusu ve spam klasörünü kontrol edin. Hesap erişiminiz için firma yöneticinizle görüşün.` : `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Birkaç dakika içinde gelmezse spam klasörünü ve adresin doğru yazıldığını kontrol edin. Bu adresle PerdePRO'da kayıt olmadıysanız bağlantı gönderilmez; "7 gün ücretsiz dene" ile kayıt olabilir ya da kayıt olurken kullandığınız adresi yazabilirsiniz.`,
+                text: `"${cleanEmail}" adresi için hesap varsa şifre sıfırlama bağlantısı gönderildi. Birkaç dakika içinde gelmezse spam klasörünü ve adresin doğru yazıldığını kontrol edin. Bu adresle PerdePRO'da kayıt olmadıysanız bağlantı gönderilmez; "Kayıt ol" ile hesap açabilir ya da kayıt olurken kullandığınız adresi yazabilirsiniz.`,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String((error as { message?: string })?.message || "");
@@ -190,8 +188,8 @@ export default function Login() {
     return (
         <AuthShell
             title="PerdePRO"
-            subtitle={isNativeIos() ? "Mevcut PerdePRO hesabınızla giriş yapın." : "Hesabınıza giriş yapın ya da kendi işletmeniz için 7 günlük ücretsiz denemeyi hemen başlatın."}
-            footer={isNativeIos() ? undefined :
+            subtitle="Hesabınıza giriş yapın. İlk kez kullanıyorsanız Kayıt ol ile hesabınızı oluşturun."
+            footer={
                 <p className="text-center text-xs text-slate-500 dark:text-slate-400">
                     Firma yöneticiniz sizi davet ettiyse e-postanızdaki bağlantıyı açın; şifrenizi orada belirlersiniz.
                 </p>
@@ -279,7 +277,6 @@ export default function Login() {
                 </button>
             </form>
 
-            {!isNativeIos() && <>
             <div className="my-4 flex items-center gap-3 text-xs font-bold uppercase tracking-wider text-slate-400">
                 <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
                 Hesabınız yok mu?
@@ -288,12 +285,11 @@ export default function Login() {
 
             <button type="button" onClick={() => nav("/signup")} className={authSecondaryButtonClass} disabled={loading}>
                 <Sparkles className="w-5 h-5" />
-                Kayıt ol — 7 gün ücretsiz dene
+                Kayıt ol
             </button>
             <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
-                Kredi kartı gerekmez. Kod beklemeden kendi hesabınızı açın.
+                Şifrenizi kayıt sırasında kendiniz belirlersiniz. Kredi kartı gerekmez.
             </p>
-            </>}
         </AuthShell>
     );
 }

@@ -21,8 +21,8 @@ import Locked from "./pages/Locked";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { canAccess, type AppRole } from "./auth/roles";
 import { initLocalNotificationNavigation } from "./utils/localNotifications";
-import ExistingAccountOnly from "./components/ExistingAccountOnly";
-import { isNativeIos, isNativeAndroid } from "./utils/nativeRuntime";
+import NativeUpdateGate from "./components/NativeUpdateGate";
+import { isNativeAndroid } from "./utils/nativeRuntime";
 import { getNativeAuthCallbackHash } from "./utils/authRedirect";
 
 // ---------------------------------------------------------------------------
@@ -207,6 +207,7 @@ function RouteFallback() {
 export default function App() {
   return (
     <ErrorBoundary>
+      <NativeUpdateGate>
       <HashRouter>
         <AuthProvider>
           <ImpersonationProvider>
@@ -219,16 +220,16 @@ export default function App() {
                 <Routes>
                 {/* PUBLIC */}
                 <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={isNativeIos() ? <ExistingAccountOnly /> : <SelfSignup />} />
-                <Route path="/setup" element={isNativeIos() ? <ExistingAccountOnly /> : <AccountSetup />} />
+                <Route path="/signup" element={<SelfSignup />} />
+                <Route path="/setup" element={<AccountSetup />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/unauthorized" element={<Unauthorized />} />
                 <Route path="/locked" element={<Locked />} />
 
                 {/* PROTECTED */}
-                <Route path="/join" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
-                <Route path="/join/:token" element={isNativeIos() ? <ExistingAccountOnly /> : <SignupWithCode />} />
+                <Route path="/join" element={<SignupWithCode />} />
+                <Route path="/join/:token" element={<SignupWithCode />} />
                 <Route
                   path="/"
                   element={
@@ -897,6 +898,7 @@ export default function App() {
           </ImpersonationProvider>
         </AuthProvider>
       </HashRouter>
+      </NativeUpdateGate>
     </ErrorBoundary>
   );
 }

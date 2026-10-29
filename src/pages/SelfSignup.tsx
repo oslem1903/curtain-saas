@@ -231,9 +231,9 @@ export default function SelfSignup() {
 
     return (
         <AuthShell
-            title="7 gün ücretsiz deneyin"
+            title="Kayıt ol"
             icon={<Sparkles className="w-7 h-7" />}
-            subtitle="Kendi işletme hesabınızı açın. Kod beklemenize gerek yok."
+            subtitle="E-posta adresiniz ve belirleyeceğiniz şifreyle işletme hesabınızı oluşturun. 7 gün ücretsiz deneyin."
             footer={
                 <div className="flex flex-col items-center gap-2 text-sm">
                     <button type="button" onClick={() => nav("/login")} className="font-bold text-primary-700 dark:text-primary-300 hover:underline">
@@ -307,6 +307,9 @@ export default function SelfSignup() {
                             onFocus={scrollFieldIntoView}
                             type={showPassword ? "text" : "password"}
                             autoComplete="new-password"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             placeholder={`En az ${MIN_PASSWORD_LENGTH} karakter`}
                             className={`${authInputClass} pr-12`}
                             disabled={loading}
@@ -331,10 +334,10 @@ export default function SelfSignup() {
 
                 <button type="submit" className={authPrimaryButtonClass} disabled={loading}>
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                    {loading ? "Hesap oluşturuluyor..." : "Ücretsiz denemeyi başlat"}
+                    {loading ? "Hesap oluşturuluyor..." : "Hesabımı oluştur"}
                 </button>
                 <p className="text-center text-xs text-slate-500 dark:text-slate-400">
-                    7 günlük deneme süresi sunucuda tutulur. Süre bitince verileriniz silinmez.
+                    7 gün ücretsiz kullanım. Kredi kartı gerekmez; otomatik ücret alınmaz. Süre bitince verileriniz silinmez ve salt okunur görüntülenir.
                 </p>
             </form>
         </AuthShell>
