@@ -753,10 +753,10 @@ export default function NewOrder() {
                 // S pile, 1'e 3 perde ile ayni carpani kullanir.
                 const pm = it.pile === "2" ? 2 : 3;
                 const pileLabel = it.pile === "S" ? "S pile (1'e 3)" : `Pile 1'e ${pm}`;
-                fabric_width_cm = width * pm + 15;
+                fabric_width_cm = width * pm + 20;
                 area = fabric_width_cm / 100; roundedWidth = width; roundedHeight = height;
                 line_total = area * qty * unit;
-                calculation_note = `${pileLabel}: ${width} x ${pm} + 15 cm dikim payi = ${fabric_width_cm} cm kumas`;
+                calculation_note = `${pileLabel}: ${width} x ${pm} + 20 cm dikim payi = ${fabric_width_cm} cm kumas`;
             }
             if (it.product_type === "jalousie" || it.product_type === "picasso") {
                 const mf = it.mechanism === "reducer" ? 1.12 : 1;

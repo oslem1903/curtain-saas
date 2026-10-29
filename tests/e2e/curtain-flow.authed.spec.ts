@@ -17,7 +17,7 @@ test.describe("Ölçü → Teklif → Sipariş (Test Company 1, tül ürün alan
   test.skip(!hasAuthState(), "storageState yok — önce: node scripts/e2e-record-auth.mjs");
   test.skip(!allowWrites(), "Yazma testi kapalı (E2E_ALLOW_WRITES=1 gerekir).");
 
-  test("tül ölçüsü doğru alanla (pile*genişlik+15) sipariş kalemine kadar korunuyor", async ({ page }) => {
+  test("tül ölçüsü doğru alanla (pile*genişlik+20) sipariş kalemine kadar korunuyor", async ({ page }) => {
     // Bu akış (demo moda giriş + 37+ firmalı süper admin listesinin yüklenmesi + ölçü formu +
     // teklif + sipariş dönüşümü) varsayılan 40s test timeout'undan fazla sürüyor — uzatıldı.
     test.setTimeout(180_000);
@@ -44,7 +44,7 @@ test.describe("Ölçü → Teklif → Sipariş (Test Company 1, tül ürün alan
     const qty = 1;
     // calculate() (MeasurementEntry.tsx / measurementConstants.ts) ile AYNI formül, testin
     // kendisi tarafından BAĞIMSIZ hesaplanır (test edilen koddan kopyalanmaz):
-    const expectedFabricWidthCm = widthCm * pile + 15; // 200*3+15 = 615
+    const expectedFabricWidthCm = widthCm * pile + 20; // 200*3+20 = 620
     const expectedAreaM2 = expectedFabricWidthCm / 100; // 6.15
     const expectedTotal = expectedAreaM2 * qty * unitPrice; // 2583
 
