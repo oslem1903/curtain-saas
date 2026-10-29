@@ -25,7 +25,9 @@ test('native simulator fixture completes signup, trial and erasure request throu
     await expect(page.getByRole('heading', { name: 'Yönetici Paneli' })).toBeVisible({ timeout: 20000 });
     await page.getByRole('button', { name: 'Diğer', exact: true }).click();
     await page.getByRole('link', { name: 'Ayarlar', exact: true }).click();
-    await page.getByRole('button', { name: 'Hesabımı sil', exact: true }).click();
+    await expect(page.locator('[data-chrome="sidebar"]')).toBeHidden();
+    await expect(page.getByRole('link', { name: 'Hesabımı sil', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Kalıcı hesap silme ekranını aç', exact: true }).tap();
     await page.screenshot({ path: testInfo.outputPath('deletion-confirmation.png'), fullPage: true });
     await page.getByRole('checkbox').check();
     await page.getByLabel('Silme onayı').fill('SIL');

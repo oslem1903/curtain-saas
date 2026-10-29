@@ -168,7 +168,7 @@ export const Settings = () => {
             <section className="rounded-2xl border border-red-200 p-6 dark:border-red-900">
                 <h2 className="text-lg font-bold text-slate-900 dark:text-white">Hesap silme</h2>
                 <p className="my-3 text-sm text-slate-600 dark:text-slate-300">Hesabınızın ve ilişkili kişisel verilerinizin kalıcı silinmesini başlatın veya talebinizin durumunu takip edin.</p>
-                <button type="button" onClick={() => navigate("/account/delete")} className="rounded-xl border border-red-300 px-4 py-3 font-bold text-red-700 dark:text-red-300">Hesabımı sil</button>
+                <button type="button" aria-label="Kalıcı hesap silme ekranını aç" onClick={() => navigate("/account/delete")} className="rounded-xl border border-red-300 px-4 py-3 font-bold text-red-700 dark:text-red-300">Hesabımı sil</button>
             </section>
 
             {/* Profile & Personal Settings */}

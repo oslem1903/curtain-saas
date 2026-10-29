@@ -47,13 +47,17 @@ name: Synthetic iOS signup and permanent erasure request
     timeout: 20000
 - tapOn: "Ayarlar"
 - scrollUntilVisible:
-    element: "Hesabımı sil"
+    element: "Kalıcı hesap silme ekranını aç"
     direction: DOWN
     timeout: 20000
-- tapOn: "Hesabımı sil"
+- tapOn: "Kalıcı hesap silme ekranını aç"
 - extendedWaitUntil:
-    visible: "Silme onayı"
+    visible: ".*Hesabınızın ve ilişkili kişisel verilerinizin.*"
     timeout: 30000
+- scrollUntilVisible:
+    element: "Silme onayı"
+    direction: DOWN
+    timeout: 15000
 - tapOn: "Hesabımın kalıcı olarak silinmesini istiyorum."
 - tapOn: "Silme onayı"
 - inputText: "SIL"

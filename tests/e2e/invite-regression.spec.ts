@@ -419,7 +419,7 @@ test("deletion completion remains trackable without an Auth account", async ({ p
 test("account deletion is accessible from settings and account setup", async ({ page }) => {
   await mockApi(page, { ready: true, role: "admin" });
   await page.goto("/#/settings");
-  await page.getByRole("button", { name: "Hesabımı sil", exact: true }).click();
+  await page.getByRole("button", { name: "Kalıcı hesap silme ekranını aç", exact: true }).click();
   await expect(page).toHaveURL(/#\/account\/delete$/);
   await expect(page.getByRole("heading", { name: "Hesabımı sil" })).toBeVisible();
 });
@@ -435,4 +435,24 @@ test("auth background tap releases form focus without breaking labels or values"
   await expect(email).toHaveValue("keyboard@example.test");
   await page.getByText("Ad Soyad", { exact: true }).click();
   await expect(page.getByLabel("Ad Soyad", { exact: true })).toBeFocused();
+});
+
+test("closed mobile sidebar hides duplicate account deletion links", async ({ page }, testInfo) => {
+  await mockApi(page, { ready: true, role: "admin" });
+  await page.goto("/#/settings");
+  await expect(page.getByRole("heading", { name: "Ayarlar", exact: true })).toBeVisible();
+  const sidebar = page.locator('[data-chrome="sidebar"]');
+  if (testInfo.project.name === "desktop") {
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Hesabımı sil", exact: true })).toBeVisible();
+  } else {
+    await expect(sidebar).toBeHidden();
+    await expect(page.getByRole("link", { name: "Hesabımı sil", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Diğer", exact: true }).tap();
+    await expect(sidebar).toBeVisible();
+    await sidebar.getByRole("link", { name: "Ayarlar", exact: true }).tap();
+    await expect(sidebar).toBeHidden();
+    await page.getByRole("button", { name: "Kalıcı hesap silme ekranını aç", exact: true }).tap();
+    await expect(page.getByRole("heading", { name: "Hesabımı sil", exact: true })).toBeVisible();
+  }
 });

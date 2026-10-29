@@ -888,7 +888,7 @@ export const Layout = () => {
         data-chrome="sidebar"
         className={cn(
           "fixed lg:sticky top-0 left-0 z-[60] lg:z-30 h-[100dvh] w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-transform duration-300 ease-in-out lg:translate-x-0 flex flex-col shadow-xl lg:shadow-none",
-          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          isMobileMenuOpen ? "visible translate-x-0" : "invisible -translate-x-full lg:visible"
         )}
       >
         <div className="p-6 flex items-center justify-between">
