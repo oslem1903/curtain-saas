@@ -17,6 +17,8 @@ test('native simulator fixture completes signup, trial and erasure request throu
     await page.getByLabel('İşletme adı', { exact: true }).fill('Simulator Perde');
     await page.getByLabel('E-posta', { exact: true }).fill('ios-smoke@example.test');
     await page.getByLabel('Şifre', { exact: true }).fill('synthetic-password-123');
+    await page.getByRole('heading', { name: 'Kayıt ol', exact: true }).tap();
+    await expect(page.getByLabel('Şifre', { exact: true })).not.toBeFocused();
     await page.getByRole('button', { name: 'Hesabımı oluştur' }).click();
     await expect(page.getByRole('heading', { name: 'E-postanızı doğrulayın' })).toBeVisible();
     await page.getByRole('button', { name: 'Doğruladım, devam et' }).click();
@@ -27,6 +29,8 @@ test('native simulator fixture completes signup, trial and erasure request throu
     await page.screenshot({ path: testInfo.outputPath('deletion-confirmation.png'), fullPage: true });
     await page.getByRole('checkbox').check();
     await page.getByLabel('Silme onayı').fill('SIL');
+    await page.getByRole('heading', { name: 'Hesabımı sil', exact: true }).tap();
+    await expect(page.getByLabel('Silme onayı')).not.toBeFocused();
     await page.getByRole('button', { name: 'Kalıcı silme talebini gönder' }).click();
     await expect(page.getByRole('status')).toContainText('Hesabınız henüz silinmedi');
     await page.getByRole('button', { name: 'Talebin durumunu kontrol et' }).click();

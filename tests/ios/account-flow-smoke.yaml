@@ -19,8 +19,17 @@ name: Synthetic iOS signup and permanent erasure request
 - inputText: "ios-smoke@example.test"
 - tapOn: "Şifre"
 - inputText: "synthetic-password-123"
-- hideKeyboard
+- scrollUntilVisible:
+    element: "Kayıt ol"
+    direction: UP
+    timeout: 15000
+- tapOn: "Kayıt ol"
+- waitForAnimationToEnd
 - takeScreenshot: 02-Signup
+- scrollUntilVisible:
+    element: "Hesabımı oluştur"
+    direction: DOWN
+    timeout: 15000
 - tapOn: "Hesabımı oluştur"
 - extendedWaitUntil:
     visible: "E-postanızı doğrulayın"
@@ -48,8 +57,17 @@ name: Synthetic iOS signup and permanent erasure request
 - tapOn: "Hesabımın kalıcı olarak silinmesini istiyorum."
 - tapOn: "Silme onayı"
 - inputText: "SIL"
-- hideKeyboard
+- scrollUntilVisible:
+    element: "Hesabımı sil"
+    direction: UP
+    timeout: 15000
+- tapOn: "Hesabımı sil"
+- waitForAnimationToEnd
 - takeScreenshot: 05-DeleteConfirmation
+- scrollUntilVisible:
+    element: "Kalıcı silme talebini gönder"
+    direction: DOWN
+    timeout: 15000
 - tapOn: "Kalıcı silme talebini gönder"
 - extendedWaitUntil:
     visible: ".*Kalıcı hesap silme talebiniz alındı.*"

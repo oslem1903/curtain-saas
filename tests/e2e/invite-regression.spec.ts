@@ -423,3 +423,16 @@ test("account deletion is accessible from settings and account setup", async ({ 
   await expect(page).toHaveURL(/#\/account\/delete$/);
   await expect(page.getByRole("heading", { name: "Hesabımı sil" })).toBeVisible();
 });
+
+test("auth background tap releases form focus without breaking labels or values", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/signup");
+  const email = page.getByLabel("E-posta", { exact: true });
+  await email.fill("keyboard@example.test");
+  await expect(email).toBeFocused();
+  await page.getByRole("heading", { name: "Kayıt ol", exact: true }).click();
+  await expect(email).not.toBeFocused();
+  await expect(email).toHaveValue("keyboard@example.test");
+  await page.getByText("Ad Soyad", { exact: true }).click();
+  await expect(page.getByLabel("Ad Soyad", { exact: true })).toBeFocused();
+});

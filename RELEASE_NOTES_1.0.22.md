@@ -44,3 +44,7 @@ Suggested review explanation (verify against the final signed build):
 ## Build 25 follow-up
 
 Adds permanent erasure initiation from settings/setup/locked screens and public receipt tracking. Completion refuses while Auth/profile/membership/storage ownership still exists, then removes identity fields from the request. Shared companies are not automatically deleted. Requires the dedicated database migration and documented manual operation. The new unsigned ios-account-flow-smoke workflow uses synthetic loopback data and sends no live email. Already-uploaded build 24 lacks this follow-up; replace it with build 25 after validation.
+
+## Native smoke failure diagnosis (October 29)
+
+Codemagic run 6ae306b5206ce93970c729c0 compiled the simulator app, opened signup and entered all four fields. Its commands.json and screenshot show the first hideKeyboard command failing before the signup request; later steps did not run. Replaced both hideKeyboard calls with safe heading taps. AuthShell blurs a focused form field on background/heading pointer taps while leaving controls/labels intact, and ignores delayed scroll requests for fields no longer focused. Seven targeted desktop/mobile/iOS-bridge browser checks passed (two non-iOS fixture cases skipped); these include background focus dismissal, label activation and the synthetic HTTP signup-to-erasure flow. TypeScript and AuthShell ESLint passed. Native success still requires another Codemagic run; no production auth/email success is inferred from this failure.
