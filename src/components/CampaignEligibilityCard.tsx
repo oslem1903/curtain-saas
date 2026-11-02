@@ -11,7 +11,7 @@ const REASONS: Record<string, string> = {
   ok: "Kampanyaya uygun",
   no_campaign: "Kampanya şu an kapalı",
   sold_out: "Kontenjan dolu",
-  already_purchased_yearly: "Daha önce yıllık satın almış / elle ücretli lisans verilmiş sayılıyor",
+  already_purchased: "Daha önce ücretli satın almış (herhangi bir paket) / elle ücretli lisans verilmiş sayılıyor",
   not_yearly: "—",
 };
 
@@ -32,7 +32,7 @@ export default function CampaignEligibilityCard({ companyId }: { companyId: stri
   if (!st) return null;
 
   async function setOverride(allow: boolean | null) {
-    const note = allow === null ? "" : window.prompt(allow ? "Hediye/ücretsiz erişim — not (zorunlu):" : "Elle verilmiş ücretli yıllık lisans — not (zorunlu):");
+    const note = allow === null ? "" : window.prompt(allow ? "Hediye/ücretsiz erişim — not (zorunlu):" : "Elle verilmiş ücretli lisans — not (zorunlu):");
     if (allow !== null && !note?.trim()) return;
     setBusy(true);
     await supabase.rpc("billing_campaign_set_override", { p_company_id: companyId, p_allow: allow, p_note: note ?? null });
@@ -46,11 +46,11 @@ export default function CampaignEligibilityCard({ companyId }: { companyId: stri
       <div className="text-sm font-black text-slate-900 dark:text-white">Lansman kampanyası uygunluğu</div>
       <div className="mt-1 text-sm text-slate-700 dark:text-slate-200">
         {REASONS[st.eval.reason] ?? st.eval.reason}
-        {st.override ? ` · istisna: ${st.override.allow ? "hediye/ücretsiz (uygun)" : "ücretli yıllık (uygun değil)"}${st.override.note ? ` — ${st.override.note}` : ""}` : ""}
+        {st.override ? ` · istisna: ${st.override.allow ? "hediye/ücretsiz (uygun)" : "ücretli lisans (uygun değil)"}${st.override.note ? ` — ${st.override.note}` : ""}` : ""}
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className={btn} disabled={busy} onClick={() => void setOverride(true)}>Hediye/ücretsiz say</button>
-        <button type="button" className={btn} disabled={busy} onClick={() => void setOverride(false)}>Ücretli yıllık say</button>
+        <button type="button" className={btn} disabled={busy} onClick={() => void setOverride(false)}>Ücretli lisans say</button>
         {st.override ? <button type="button" className={btn} disabled={busy} onClick={() => void setOverride(null)}>İstisnayı kaldır</button> : null}
       </div>
     </div>

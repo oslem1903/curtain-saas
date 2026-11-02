@@ -31,15 +31,15 @@ create table public.companies(id uuid primary key default gen_random_uuid(), nam
 create function public.is_super_admin() returns boolean language sql as $$ select false $$;
 create function public.is_company_admin(c uuid) returns boolean language sql as $$ select true $$;`);
   for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql',
-    'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql']) {
+    'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql', 'supabase_migration_040_all_plans_campaign.sql']) {
     await pool.query(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   await q(`update billing_plans set is_purchasable=true; update billing_campaigns set is_enabled=true`);
 
   const mkCo = async (n) => (await q(`insert into companies(name,plan_status,trial_ends_at,package_code,subscription_plan) values($1,'trial',now()+interval '3 days','solo','trial') returning id`, [n]))[0].id;
   const intent = (co, plan = 'solo_yearly') => q(`select billing_create_intent('paytr',$1,$2,null) r`, [co, plan]).then((r) => r[0].r);
-  const pay = (i, amount, test = false) => q(`select billing_apply_charge('paytr',$1,$2,'solo_yearly',$1,$3,'TRY',null,'{}'::jsonb,$4) r`,
-    ['PRD' + i.intent_id.replace(/-/g, ''), i.company, amount, test]).then((r) => r[0].r);
+  const pay = (i, amount, test = false) => q(`select billing_apply_charge('paytr',$1,$2,$5,$1,$3,'TRY',null,'{}'::jsonb,$4) r`,
+    ['PRD' + i.intent_id.replace(/-/g, ''), i.company, amount, test, i.plan || 'solo_yearly']).then((r) => r[0].r);
   const state = async () => (await q(`select
     (select count(*)::int from billing_campaign_claims where status='consumed' and not is_test) consumed,
     (select count(*)::int from billing_campaign_claims where status='reserved' and reserved_until>now() and not is_test) reserved,
@@ -97,6 +97,25 @@ create function public.is_company_admin(c uuid) returns boolean language sql as 
   ok(mixed.every((m) => m.status === 'fulfilled'), 'E) eszamanli baslatma + odeme: hata / kilitlenme yok');
   const st2 = await state();
   ok(st2.consumed + st2.reserved <= 20, `E) kesinlesen+rezerve = ${st2.consumed + st2.reserved} (<=20)`);
+
+  // F) ORTAK kontenjan: 60 isletme ayni anda KARISIK (aylik/yillik) baslatir -> toplam tam 20 kampanyali
+  await q(`delete from billing_campaign_claims; delete from billing_payments; delete from billing_events; delete from billing_subscriptions; delete from billing_intents;
+           update companies set plan_status='trial', license_expires_at=null`);
+  const fc = await Promise.all(Array.from({ length: 60 }, (_, i) => mkCo('F' + i)));
+  const fi = await Promise.all(fc.map((c, i) => intent(c, i % 2 ? 'solo_monthly' : 'solo_yearly').then((r) => ({ ...r, company: c, plan: i % 2 ? 'solo_monthly' : 'solo_yearly' }))));
+  const camp = (i) => i.amount_minor === (i.plan === 'solo_monthly' ? 24950 : 249500);
+  ok(fi.filter(camp).length === 20, `F) 60 eszamanli karisik baslatma: kampanyali = ${fi.filter(camp).length} (ortak kontenjan tam 20)`);
+  ok(fi.filter((i) => !camp(i)).every((i) => i.amount_minor === (i.plan === 'solo_monthly' ? 49900 : 499000)), 'F) kalanlar normal fiyat (499 / 4.990 TL)');
+  // G) Ayni isletme ayni anda aylik + yillik baslatir -> tek aktif rezervasyon, tek kullanim
+  const g = await mkCo('G');
+  await q(`delete from billing_campaign_claims; delete from billing_intents`);
+  const gi = await Promise.all(Array.from({ length: 10 }, (_, i) => intent(g, i % 2 ? 'solo_monthly' : 'solo_yearly').then((r) => ({ ...r, company: g, plan: i % 2 ? 'solo_monthly' : 'solo_yearly' }))));
+  const gl = await q(`select count(*)::int n from billing_campaign_claims where company_id=$1 and status='reserved'`, [g]);
+  ok(gl[0].n === 1, `G) ayni isletme eszamanli aylik+yillik: aktif rezervasyon ${gl[0].n} (beklenen 1)`);
+  // H) Ayni isletmenin iki paketi icin iki ODEME ayni anda gelirse yalniz biri kampanyali kesinlesir
+  const hp = await Promise.all(gi.filter((i) => i.campaign_code).map((i) => pay(i, i.amount_minor)));
+  const cons = await q(`select count(*)::int n from billing_campaign_claims where company_id=$1 and status='consumed'`, [g]);
+  ok(cons[0].n <= 1, `H) ayni isletme: kesinlesen kampanya kullanimi ${cons[0].n} (<=1)`);
 } finally {
   await pool.end().catch(() => {});
   await pgsrv.stop().catch(() => {});

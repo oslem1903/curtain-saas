@@ -20,7 +20,7 @@ create table public.companies(id uuid primary key default gen_random_uuid(), nam
 create function public.is_super_admin() returns boolean language sql as $$ select coalesce(current_setting('test.super', true),'')='1' $$;
 create function public.is_company_admin(c uuid) returns boolean language sql as $$ select coalesce(current_setting('test.admin_of', true),'')=c::text $$;`);
 for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql',
-  'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql']) {
+  'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql', 'supabase_migration_040_all_plans_campaign.sql']) {
   await db.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
 await db.exec(`update billing_plans set is_purchasable=true`);
@@ -121,7 +121,9 @@ const cl = await claim(intentA);
 ok(cl.status === 'reserved' && (new Date(cl.reserved_until) - Date.now()) > 44 * 60e3 && (new Date(cl.reserved_until) - Date.now()) <= 45 * 60e3,
   '1) rezervasyon 45 dk sureli (timeout 30 + tampon 15)');
 r = await startCheckout(coA, 'solo_monthly');
-ok(r.status === 200 && r.paytr.get('payment_amount') === '49900', '1) aylik paket 499 TL (kampanya yok)');
+ok(r.status === 200 && r.paytr.get('payment_amount') === '24950', '1) aylik paket: kampanyali ilk donem 249,50 TL (24950 kurus)');
+const bkm = JSON.parse(Buffer.from(r.paytr.get('user_basket'), 'base64').toString('utf8'));
+ok(bkm[0][1] === '249.50', '1) aylik sepet satiri 249.50');
 const q = (await one(`select billing_campaign_quote($1,'solo_yearly') q`, [coA]).catch(() => null));
 ok(q === null, '1) quote: oturumsuz/yetkisiz cagri reddedilir');
 await db.exec(`select set_config('request.jwt.claim.sub','22222222-2222-2222-2222-222222222222',false); select set_config('test.admin_of','${coA}',false);`);
@@ -164,11 +166,13 @@ ok(r.paytr.get('payment_amount') === '499000', '2) kampanya oncesi yillik almis 
 const coMon = await mkCo('SadeceAylik');
 await db.query(`insert into billing_intents(company_id,plan_code,channel,amount_minor,currency,status) values($1,'solo_monthly','paytr',49900,'TRY','paid')`, [coMon]);
 r = await startCheckout(coMon, 'solo_yearly');
-ok(r.paytr.get('payment_amount') === '249500', '2) yalniz aylik almis isletme ilk YILLIK alimda kampanyali');
+ok(r.paytr.get('payment_amount') === '499000', '2) onceki ucretli (aylik) alimi olan isletme kampanya disi: yillik 4.990 TL');
+r = await startCheckout(coMon, 'solo_monthly');
+ok(r.paytr.get('payment_amount') === '49900', '2) onceki ucretli alimi olan isletme: aylik de normal 499 TL');
 // Sonraki donem: tuketilmis isletme icin bir daha asla
 {
   const x = (await one(`select billing_campaign_eval($1,'solo_yearly') e`, [coA])).e;
-  ok(x.applied === false && x.reason === 'already_purchased_yearly', '2) eval: aynisletme ikinci kez uygun degil (already_purchased_yearly)');
+  ok(x.applied === false && x.reason === 'already_purchased', '2) eval: aynisletme ikinci kez uygun degil (already_purchased)');
 }
 
 // ===== 4) Basarisiz / iptal / test / suresi dolan: kalici kontenjan tuketmez =====
@@ -259,7 +263,7 @@ await db.exec(`delete from billing_campaign_claims where status<>'consumed'; del
   const manual = await mkCo('ElleYillik');
   await db.query(`update companies set plan_status='active', license_expires_at=now()+interval '300 days' where id=$1`, [manual]);
   let e = await el(manual);
-  ok(e.applied === false && e.reason === 'already_purchased_yearly', 'super admin elle ucretli aktif lisans vermis firma kampanyadan yararlanamaz');
+  ok(e.applied === false && e.reason === 'already_purchased', 'super admin elle ucretli aktif lisans vermis firma kampanyadan yararlanamaz');
   r = await startCheckout(manual, 'solo_yearly');
   ok(r.paytr.get('payment_amount') === '499000', 'elle lisansli firma yillik odemede 4.990 TL');
   const gift = await mkCo('Hediye');
@@ -278,12 +282,55 @@ await db.exec(`delete from billing_campaign_claims where status<>'consumed'; del
   await db.exec(`select set_config('test.super','0',false);`);
   ok((await one(`select billing_campaign_set_override($1,true,'x') r`, [manual]).catch(() => 'forbidden')) === 'forbidden', 'super admin olmayan istisna koyamaz');
   await db.exec(`select set_config('request.jwt.claim.sub','',false); select set_config('test.super','',false);`);
-  // Aylik fatura ile aktif olan firma ILK YILLIK alimda hala uygun
-  const mon = await mkCo('AylikFatura');
+  // Aylik KAMPANYA odemesi yapan isletme sonradan yillik indirimi (ve tekrar aylik indirimi) kullanamaz
+  const mon = await mkCo('AylikKampanya');
   const mi = await startCheckout(mon, 'solo_monthly');
-  await pay(mi.body.intent_id, 49900).catch(() => null);
-  const monPay = await post({ merchant_oid: oidOf(mi.body.intent_id), status: 'success', total_amount: '49900', hash: hash(oidOf(mi.body.intent_id), 'success', '49900'), currency: 'TL', test_mode: '0' });
-  ok((await one('select plan_status p from companies where id=$1', [mon])).p === 'active' && (await el(mon)).applied === true, 'aylik faturayla aktif firma ilk yillik alimda kampanyaya uygun');
+  ok(mi.paytr.get('payment_amount') === '24950', 'aylik kampanya: 249,50 TL');
+  await pay(mi.body.intent_id, 24950);
+  ok((await one('select plan_status p from companies where id=$1', [mon])).p === 'active', 'aylik kampanyali odeme lisansi acti');
+  ok((await claim(mi.body.intent_id)).status === 'consumed' && await used() === 1, 'aylik kampanya TEK ortak kontenjani kesinlestirdi');
+  ok((await el(mon)).applied === false, 'aylik indirim kullanan isletme yillik indirime uygun degil');
+  r = await startCheckout(mon, 'solo_yearly');
+  ok(r.paytr.get('payment_amount') === '499000', 'aylik indirim kullanan isletme: yillik 4.990 TL');
+  r = await startCheckout(mon, 'solo_monthly');
+  ok(r.paytr.get('payment_amount') === '49900', 'aylik indirim kullanan isletme: sonraki aylik 499 TL (normal)');
+  // Yillik indirim kullanan sonradan aylik indirimi kullanamaz
+  const yr = await mkCo('YillikKampanya');
+  const yi = await startCheckout(yr, 'solo_yearly');
+  await pay(yi.body.intent_id, 249500);
+  ok((await claim(yi.body.intent_id)).status === 'consumed' && await used() === 2, 'yillik kampanya ayni ortak kontenjandan (2/20)');
+  r = await startCheckout(yr, 'solo_monthly');
+  ok(r.paytr.get('payment_amount') === '49900', 'yillik indirim kullanan isletme: aylik 499 TL (indirim yok)');
+  // Kampanya KAPALIYKEN yapilan normal (indirimsiz) odeme de "onceki ucretli alim" sayilir
+  await db.exec(`update billing_campaigns set is_enabled=false`);
+  const nrm = await mkCo('NormalOdeme');
+  const ni = await startCheckout(nrm, 'solo_monthly');
+  await pay(ni.body.intent_id, 49900);
+  await db.exec(`update billing_campaigns set is_enabled=true`);
+  ok((await el(nrm)).applied === false && (await el(nrm)).reason === 'already_purchased', 'kampanya oncesi normal fiyatla odeme yapmis isletme kampanya disi');
+  // Ortak kontenjan: 18 daha (2 + 18 = 20) karisik plan -> 21. ve sonrasi normal fiyat
+  const mix = [];
+  for (let i = 0; i < 24; i++) { const id = await mkCo('Mix' + i); const plan = i % 2 ? 'solo_monthly' : 'solo_yearly'; mix.push({ plan, ...(await startCheckout(id, plan)) }); }
+  const amts = mix.map((m) => m.paytr.get('payment_amount'));
+  const disc = mix.filter((m) => m.paytr.get('payment_amount') === (m.plan === 'solo_monthly' ? '24950' : '249500')).length;
+  ok(disc === 18 - 0 + 0 && await used() === 20, `karisik aylik+yillik: ortak kontenjan ${await used()}/20, kampanyali ${disc} (beklenen 18; 2'si once kesinlesti)`);
+  ok(mix.slice(18).every((m) => m.paytr.get('payment_amount') === (m.plan === 'solo_monthly' ? '49900' : '499000')), 'kontenjan dolunca her iki paket normal fiyat');
+  ok(JSON.stringify((await one(`select billing_campaign_public_status() s`)).s) === '{"active":false}', 'ortak kontenjan dolunca genel durum kapali');
+  // Genel durum: acikken her iki plan
+  await db.exec(`delete from billing_campaign_claims where status='reserved'`);
+  const ps = (await one(`select billing_campaign_public_status() s`)).s;
+  ok(ps.active === true && ps.plans.length === 2 && ps.plans.find((x) => x.plan_code === 'solo_monthly').price_minor === 24950 && ps.plans.find((x) => x.plan_code === 'solo_yearly').price_minor === 249500 && ps.price_minor === 249500,
+    'genel durum: plans[] aylik 24950 + yillik 249500 (eski yillik alanlar korunur)');
+  // Gec bildirim, AYLIK: kontenjan dolmus -> lisans acilmaz, iade kaydi
+  await db.exec(`delete from billing_campaign_claims where status='reserved'; delete from billing_intents where status='created'`);
+  const lateM = await mkCo('GecAylik');
+  const lm = await startCheckout(lateM, 'solo_monthly');
+  await db.exec(`update billing_campaign_claims set status='expired', reserved_until=now()-interval '2 hours' where intent_id='${lm.body.intent_id}'`);
+  for (let i = 0; i < 18; i++) { const id = await mkCo('Dolgu2_' + i); await startCheckout(id, 'solo_yearly'); }
+  ok(await used() === 20, 'gec aylik senaryo: 20/20');
+  await pay(lm.body.intent_id, 24950);
+  ok((await one('select plan_status p from companies where id=$1', [lateM])).p === 'trial' && (await one('select count(*)::int n from billing_refund_cases where company_id=$1', [lateM])).n === 1,
+    'gec gelen AYLIK kampanya odemesi + dolu kontenjan: lisans acilmaz, iade kaydi acilir');
 }
 
 // ===== QA onizleme: kampanya KAPALIYKEN yalniz test firmasina =====
@@ -344,6 +391,9 @@ await db.exec(`delete from billing_campaign_claims; delete from billing_payments
   const rl = await one(`select (select count(*) from billing_campaign_claims where intent_id=$1) n`, [x.body.intent_id]);
   ok(Number(rl.n) === 0, 'aylik/normal alimlar kampanya kaydi olusturmaz');
   // Rollback dosyasi uygulanabilir
+  await db.exec(fs.readFileSync(path.join(ROOT, 'supabase_migration_040_rollback.sql'), 'utf8'));
+  const e40 = (await one(`select billing_campaign_eval($1,'solo_monthly') e`, [co])).e;
+  ok(e40.applied === false, '040 geri alma: aylik plan kampanya disi (yalniz yillik kampanya)');
   await db.exec(fs.readFileSync(path.join(ROOT, 'supabase_migration_039_rollback.sql'), 'utf8'));
   const fns = await rows(`select proname from pg_proc where proname like 'billing_campaign%'`);
   ok(fns.length === 0, 'geri alma: kampanya fonksiyonlari kalkti');

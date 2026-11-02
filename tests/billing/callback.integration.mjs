@@ -18,7 +18,7 @@ create function auth.uid() returns uuid language sql stable as $$ select nullif(
 create table public.companies(id uuid primary key default gen_random_uuid(), name text, is_active boolean default true, plan_status text, subscription_status text, trial_ends_at timestamptz, license_expires_at timestamptz, package_code text, subscription_plan text, enabled_modules text[], updated_at timestamptz, created_at timestamptz default now());
 create function public.is_super_admin() returns boolean language sql as $$ select false $$;
 create function public.is_company_admin(c uuid) returns boolean language sql as $$ select true $$;`);
-for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql', 'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql']) {
+for (const f of ['supabase_migration_033_solo_billing_modules.sql', 'supabase_migration_034_solo_plans.sql', 'supabase_migration_035_billing_event_keys.sql', 'supabase_migration_036_test_company_checkout.sql', 'supabase_migration_039_launch_campaign.sql', 'supabase_migration_040_all_plans_campaign.sql']) {
   await db.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
 const rows = async (s, p) => (await db.query(s, p)).rows;

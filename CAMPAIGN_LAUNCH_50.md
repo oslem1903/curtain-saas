@@ -53,3 +53,12 @@ bu yoldan geçmez (Metraj360 yalnız `PRD…` siparişlerini iletir). Gerçek ka
 `release/1.0.14-access-trial7` dalı artık iOS/hesap silme işini de içerir; web'i yayınlamadan önce
 `supabase/migrations/20261029100000_account_deletion_requests.sql` (ACCOUNT_DELETION_OPERATIONS.md) canlıda uygulanmış olmalı,
 aksi halde "Hesabımı sil" ekranı çalışmaz.
+
+## 040 — kampanya TÜM paketlerde (aylık + yıllık), ortak kontenjan
+`supabase_migration_040_all_plans_campaign.sql` (039 değiştirilmedi; geri alma: `supabase_migration_040_rollback.sql`).
+- Aylık 499 → 249,50 TL (24950 kuruş), yıllık 4.990 → 2.495 TL (249500 kuruş); ilk 20 işletme için TEK ortak kontenjan.
+- İşletme yalnız bir kez, seçtiği paketin ilk alımında yararlanır (aylık indirimi kullanan yıllığı, tersi de, kullanamaz).
+- Önceki ücretli alımı olan (herhangi plan; indirimsiz normal ödeme dahil) işletme kampanya dışı. Deneme ve hediye sayılmaz.
+- `billing_campaign_public_status()` eski yıllık alanlarını korur, `plans[]` ekler; site yeni sürümü `plans[]` + `all_plans` ister
+  (iki plan da tutarlı değilse kampanya gösterilmez).
+- Uygulama sırası: 040 (SQL Editor) → site/web yayını. `billing-checkout` DEĞİŞMEDİ. Kampanya kapalı (`is_enabled=false`) kalır.

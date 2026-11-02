@@ -35,7 +35,7 @@ export default function LaunchCampaignCard() {
   async function toggle() {
     if (!status || busy) return;
     const next = !status.is_enabled;
-    if (!window.confirm(next ? "Kampanya açılsın mı? Yeni yıllık ödemeler indirimli başlar." : "Kampanya kapatılsın mı? Yeni yıllık ödemeler normal fiyatla başlar.")) return;
+    if (!window.confirm(next ? "Kampanya açılsın mı? Yeni ödemeler (aylık ve yıllık) indirimli başlar." : "Kampanya kapatılsın mı? Yeni ödemeler normal fiyatla başlar.")) return;
     setBusy(true);
     setError("");
     const { error: e } = await supabase.rpc("billing_campaign_set_enabled", { p_code: status.code, p_enabled: next });
@@ -48,7 +48,7 @@ export default function LaunchCampaignCard() {
     <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-black text-slate-900 dark:text-white">Lansman kampanyası · yıllık paket %{status.discount_percent}</div>
+          <div className="text-sm font-black text-slate-900 dark:text-white">Lansman kampanyası · tüm paketler %{status.discount_percent}</div>
           <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
             {status.is_enabled ? "Açık" : "Kapalı"} · kesinleşen {status.consumed}/{status.max_slots} · bekleyen rezervasyon {status.reserved_active}
           </div>

@@ -82,7 +82,7 @@ export default function Subscription() {
       // Kampanyali yillik fiyat: sunucu karari. Hata/yok ise normal fiyat gosterilir (kampanya gosterilmez).
       const nextQuotes: Record<string, Quote> = {};
       if (memberRole === "admin") {
-        await Promise.all(planList.filter((x) => x.period === "year").map(async (x) => {
+        await Promise.all(planList.map(async (x) => {
           const qr = await supabase.rpc("billing_campaign_quote", { p_company_id: company.id, p_plan_code: x.code });
           const qd = qr.data as Quote | null;
           if (!qr.error && qd?.applied === true && Number.isInteger(qd.amount_minor)) nextQuotes[x.code] = qd;
@@ -170,7 +170,7 @@ export default function Subscription() {
         <div key={rf.id} role="alert" className="rounded-2xl border-2 border-red-300 bg-red-50 p-4 text-sm leading-6 text-red-900">
           <div className="font-black">Lisansınız AÇILMADI — ödemeniz iade edilecek</div>
           <p className="mt-1 font-semibold">
-            {formatTrialDateTR(rf.created_at)} tarihli {money(rf.amount_minor, rf.currency)} tutarındaki kampanyalı yıllık ödemeniz alındı, ancak
+            {formatTrialDateTR(rf.created_at)} tarihli {money(rf.amount_minor, rf.currency)} tutarındaki kampanyalı ödemeniz alındı, ancak
             kampanya kontenjanı doldu veya kampanyadan daha önce yararlanılmış olduğu için bu ödemeyle lisans tanımlanamadı.
             Tutar kartınıza iade edilecektir. İsterseniz güncel fiyatla yeniden satın alabilirsiniz. Destek için bu ödeme referansını iletin:
             <span className="ml-1 break-all font-mono text-xs">{rf.provider_ref}</span>
@@ -279,14 +279,14 @@ export default function Subscription() {
                           Lansmana Özel
                         </span>
                         <p className="mt-2 text-sm font-bold leading-6 text-slate-900 dark:text-white">
-                          İlk {quote.max_slots ?? 20} işletmeye yıllık pakette %{quote.discount_percent ?? 50} indirim
+                          Lansmana özel, ilk {quote.max_slots ?? 20} işletmeye tüm PerdePRO paketlerinde %{quote.discount_percent ?? 50} indirim!
                         </p>
                         <p className="mt-2 text-base font-semibold text-slate-600 line-through dark:text-slate-300">
                           <span className="sr-only">Normal fiyat: </span>{money(quote.list_price_minor, quote.currency)}
                         </p>
                         <div className="flex flex-wrap items-baseline gap-x-2">
                           <span className="text-4xl font-black leading-none text-slate-900 dark:text-white">{money(quote.amount_minor, quote.currency)}</span>
-                          <span className="text-sm font-bold text-slate-900 dark:text-white">/ ilk yıl</span>
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">{p.period === "year" ? "/ ilk yıl" : "/ ilk ay"}</span>
                         </div>
                         <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">KDV dahil</p>
                       </div>
@@ -310,7 +310,7 @@ export default function Subscription() {
                     </div>
                     {quote ? (
                       <p className="mt-3 text-xs leading-5 text-slate-700 dark:text-slate-200">
-                        Kampanya, ilk {quote.max_slots ?? 20} işletmenin ilk yıllık satın alımında geçerlidir. Sonraki dönemlerde geçerli paket fiyatı uygulanır. Otomatik yenileme yoktur.
+                        İndirim, seçilen paketin ilk satın alınan dönemi için geçerlidir. Sonraki dönemlerde geçerli paket fiyatı uygulanır. Otomatik yenileme yoktur.
                       </p>
                     ) : null}
                     {canPurchase ? (
