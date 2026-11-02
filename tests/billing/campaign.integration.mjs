@@ -294,8 +294,10 @@ await db.exec(`delete from billing_campaign_claims where status<>'consumed'; del
   await db.exec(`insert into billing_test_companies(company_id) values ('${qa}')`);
   r = await startCheckout(real, 'solo_yearly');
   ok(r.paytr.get('payment_amount') === '499000', 'QA onizleme: gercek firmaya kampanya UYGULANMAZ (4.990 TL)');
+  ok(r.paytr.get('test_mode') === '0', 'gercek firma: PayTR CANLI mod (test_mode=0), satis etkilenmez');
   r = await startCheckout(qa, 'solo_yearly');
   ok(r.paytr.get('payment_amount') === '249500', 'QA onizleme: yalniz test firmasina 2.495 TL');
+  ok(r.paytr.get('test_mode') === '1', 'test firmasi: PayTR TEST modu zorlanir (gercek kart cekilmez)');
   ok(JSON.stringify((await one(`select billing_campaign_public_status() s`)).s) === '{"active":false}', 'QA onizleme: genel (site) durumu KAPALI kalir');
   ok((await one(`select count(*)::int n from billing_campaign_claims where is_test`)).n === 1 && await used() === 0, 'QA onizleme: test firmasi kontenjan tuketmez');
   await db.exec(`update billing_campaigns set qa_preview=false`);

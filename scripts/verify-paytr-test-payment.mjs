@@ -17,6 +17,9 @@ import { loadQaAccounts, passwordLogin } from './lib/qaAccounts.mjs';
 const STATE = '.qa-paytr-state.json';
 const METRAJ_CALLBACK = 'https://ijnfxovtochayjorlmrj.supabase.co/functions/v1/paytr-callback';
 const mode = process.argv[2];
+// PLAN=solo_yearly EXPECT_MINOR=249500 -> kampanyali yillik test (qa_preview=true, kampanya genel kapali). Varsayilan: aylik 49900.
+const PLAN = process.env.PLAN || 'solo_monthly';
+const EXPECT_MINOR = Number(process.env.EXPECT_MINOR || (PLAN === 'solo_yearly' ? 499000 : 49900));
 const { url, anon, accounts } = loadQaAccounts({ requireBoth: false });
 const acc = accounts.B;
 const { token } = await passwordLogin({ url, anon }, acc);
@@ -37,14 +40,15 @@ if (mode === 'start') {
   const test = await get(`billing_test_companies?select=company_id&company_id=eq.${companyId}`);
   rec('QA firmasi billing_test_companies icinde', test?.length === 1);
   const plans = await get('billing_plans?select=code,is_purchasable');
-  rec('herkese acik satin alma KAPALI (is_purchasable=false)', plans.every((p) => p.is_purchasable === false));
+  // Not: canli sistemde plan satisi acik olabilir; QA firmasi yine de PayTR TEST modunda calisir (sunucu zorlar).
   const before = await snapshot();
   const r = await fetch(`${url}/functions/v1/billing-checkout`, {
-    method: 'POST', headers: H, body: JSON.stringify({ company_id: companyId, plan_code: 'solo_monthly', accepted_terms: true }),
+    method: 'POST', headers: H, body: JSON.stringify({ company_id: companyId, plan_code: PLAN, accepted_terms: true, expected_amount_minor: EXPECT_MINOR }),
   });
   const j = await r.json().catch(() => ({}));
   rec('billing-checkout test odeme sayfasi dondu', r.ok && /^https:\/\/www\.paytr\.com\/odeme\/guvenli\//.test(j.paymentPageUrl || ''), `HTTP ${r.status} ${j.error || ''}`);
-  rec('test_mode=true', j.test_mode === true);
+  rec('test_mode=true (QA firmasi icin zorunlu)', j.test_mode === true);
+  rec(`sunucu tutari ${EXPECT_MINOR} kurus`, j.amount_minor === EXPECT_MINOR, String(j.amount_minor));
   if (r.ok) {
     fs.writeFileSync(STATE, JSON.stringify({ companyId, intent_id: j.intent_id, before, startedAt: new Date().toISOString() }));
     console.log('\nTEST odeme sayfasi (PayTR test karti ile, gercek para cekilmez):\n' + j.paymentPageUrl);
@@ -57,14 +61,17 @@ if (mode === 'start') {
   const base = new Date(st.before.license_expires_at || st.before.trial_ends_at).getTime();
   const end = new Date(after.license_expires_at).getTime();
   const days = (end - Math.max(base, Date.parse(st.startedAt))) / 86400000;
-  rec('bitis YALNIZ 1 dönem uzamis (28-31 gun)', days >= 27.5 && days <= 31.5, `${days.toFixed(1)} gun`);
+  const [lo, hi] = PLAN === 'solo_yearly' ? [364.5, 366.5] : [27.5, 31.5];
+  rec('bitis YALNIZ 1 dönem uzamis', days >= lo && days <= hi, `${days.toFixed(1)} gun`);
+  const pay = (await get(`billing_payments?select=amount_minor&company_id=eq.${st.companyId}&order=created_at.desc&limit=1`))[0];
+  rec(`odeme kaydi ${EXPECT_MINOR} kurus`, pay?.amount_minor === EXPECT_MINOR, String(pay?.amount_minor));
   fs.writeFileSync(STATE, JSON.stringify({ ...st, afterFirst: after }));
 } else if (mode === 'replay') {
   const key = process.env.PAYTR_MERCHANT_KEY, salt = process.env.PAYTR_MERCHANT_SALT;
   if (!key || !salt) { console.error('PAYTR_MERCHANT_KEY / PAYTR_MERCHANT_SALT ortam degiskenleri gerekli (yazdirilmaz).'); process.exit(2); }
   const st = JSON.parse(fs.readFileSync(STATE, 'utf8'));
   const oid = 'PRD' + st.intent_id.replace(/-/g, '');
-  const total = '49900';
+  const total = String(EXPECT_MINOR);
   const hash = createHmac('sha256', key).update(oid + salt + 'success' + total).digest('base64');
   const body = new URLSearchParams({ merchant_oid: oid, status: 'success', total_amount: total, hash, currency: 'TL', test_mode: '1', payment_type: 'card' });
   const before = await snapshot();

@@ -148,7 +148,7 @@ Deno.serve(async (req) => {
   const merchantSalt = Deno.env.get('PAYTR_MERCHANT_SALT');
   const appUrl = (Deno.env.get('APP_PUBLIC_URL') ?? '').replace(/\/+$/, '');
   if (!merchantId || !merchantKey || !merchantSalt || !appUrl) return json({ error: 'provider_not_configured' }, 503);
-  const testMode: 0 | 1 = Deno.env.get('PAYTR_TEST_MODE') === '1' ? 1 : 0;
+  const envTestMode: 0 | 1 = Deno.env.get('PAYTR_TEST_MODE') === '1' ? 1 : 0;
 
   const userClient = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, {
     global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
@@ -168,11 +168,11 @@ Deno.serve(async (req) => {
 
   const sb = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
 
-  if (testMode === 1) {
-    // Test modunda müşteriye ödeme ekranı açılmaz: yalnız işaretli test firmaları.
-    const { data: isTest } = await sb.rpc('billing_is_test_company', { p_company_id: company_id });
-    if (isTest !== true) return json({ error: 'billing_disabled' }, 503);
-  }
+  // Test firmalari (billing_test_companies; yalniz servis/SQL ile eklenir) HER ZAMAN PayTR TEST modunda odeme yapar:
+  // gercek kart cekilmez, gercek firmalarin satisi etkilenmez. Ortam anahtari (PAYTR_TEST_MODE=1) ise herkesi test'e alir.
+  const { data: isTest } = await sb.rpc('billing_is_test_company', { p_company_id: company_id });
+  if (envTestMode === 1 && isTest !== true) return json({ error: 'billing_disabled' }, 503);
+  const testMode: 0 | 1 = envTestMode === 1 || isTest === true ? 1 : 0;
 
   const { data: intent, error: ie } = await sb.rpc('billing_create_intent', {
     p_channel: 'paytr', p_company_id: company_id, p_plan_code: plan_code, p_created_by: u.user.id,
