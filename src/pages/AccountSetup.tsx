@@ -100,6 +100,7 @@ export default function AccountSetup() {
                 </button>
             }
         >
+            <button type="button" onClick={() => nav("/account/delete")} className="mb-4 text-sm font-bold text-red-700 underline">Hesabımı sil</button>
             <form
                 className="space-y-4"
                 onSubmit={(e) => {
