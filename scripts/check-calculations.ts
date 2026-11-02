@@ -127,20 +127,20 @@ t("iptal edilen tahsilat negatife duserse plan tutarsiz isaretlenir", () => {
 // ============================================================================
 {
   const pileCarpani = (p: "2" | "3" | "S") => (p === "3" || p === "S" ? 3 : 2);
-  const kumasEni = (en: number, p: "2" | "3" | "S") => en * pileCarpani(p) + 15;
+  const kumasEni = (en: number, p: "2" | "3" | "S") => en * pileCarpani(p) + 20;
 
   t("S pile = 1'e 3 (kumas eni)", () => {
     assert.equal(kumasEni(200, "S"), kumasEni(200, "3"));
-    assert.equal(kumasEni(200, "S"), 615);
-    assert.equal(kumasEni(200, "2"), 415);
+    assert.equal(kumasEni(200, "S"), 620);
+    assert.equal(kumasEni(200, "2"), 420);
     assert.notEqual(kumasEni(200, "S"), kumasEni(200, "2"));
   });
 
   t("S pile tutar: 200cm en, 2 adet, 420 TL/m", () => {
     const tutar = (p: "2" | "3" | "S") => (kumasEni(200, p) / 100) * 2 * 420;
     assert.equal(tutar("S"), tutar("3"));
-    assert.equal(Math.round(tutar("S") * 100) / 100, 5166);
-    assert.equal(Math.round(tutar("2") * 100) / 100, 3486);
+    assert.equal(Math.round(tutar("S") * 100) / 100, 5208);
+    assert.equal(Math.round(tutar("2") * 100) / 100, 3528);
   });
 }
 

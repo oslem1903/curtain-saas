@@ -116,7 +116,7 @@ export function calculate(
   if (productType === "tul" || productType === "fon" || productType === "kruvaze") {
     // "S" (S pile) 1'e 3 perde gibi hesaplanir.
     const pileMultiplier = pile === "3" || pile === "S" ? 3 : 2;
-    const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 15;
+    const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 20;
     const areaM2 = fabricWidthCm / 100;
     const total = areaM2 * Math.max(1, qty) * Math.max(0, unitPrice);
     return { roundedWidth: widthCm, roundedHeight: heightCm, areaM2, total, fabricWidthCm };

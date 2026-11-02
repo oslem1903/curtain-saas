@@ -26,7 +26,7 @@ const TC1_NAME_RE = /^oss$/i;
 async function createTulOrder(page: Page, companyId: string, step: (s: string) => void) {
   const customerName = `E2E QA Müşteri ${Date.now()}`;
   const widthCm = 200, heightCm = 250, pile = 3, unitPrice = 420, qty = 1;
-  const expectedTotal = ((widthCm * pile + 15) / 100) * qty * unitPrice; // 6.15 * 420 = 2583
+  const expectedTotal = ((widthCm * pile + 20) / 100) * qty * unitPrice; // 6.20 * 420 = 2604
 
   step("ölçü formu (/measurements/new)");
   await navHash(page, "/measurements/new");

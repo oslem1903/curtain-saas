@@ -52,3 +52,13 @@ Codemagic run 6ae306b5206ce93970c729c0 compiled the simulator app, opened signup
 ## Second native smoke failure diagnosis (October 29)
 
 Codemagic run 6ae3118b206ce93970c72d29 passed registration, simulated verification and the dashboard. After opening Settings, Maestro matched a stale offscreen sidebar link named Hesabımı sil instead of scrolling to the Settings button. The captured hierarchy places that link at [0,686][80,704] while the screenshot still shows the top of Settings. The sidebar previously used a transform alone, leaving its descendants exposed to iOS accessibility. Closed mobile sidebars now also use visibility:hidden; desktop lg:visible behavior is preserved. The Settings button also has a distinct accessible name (Kalıcı hesap silme ekranını aç) used by the native test. Regression checks require the closed sidebar to be hidden and its duplicate link absent before tapping the actual Settings control. Seven targeted desktop/mobile/iOS-bridge browser checks passed (two non-iOS fixture cases skipped), including closed/open sidebar accessibility, desktop navigation, and the HTTP signup-to-erasure flow. TypeScript, Settings ESLint and Vite compilation passed. A native rerun remains necessary.
+# PerdePRO 1.0.22 — Sürüm notları
+
+| | Android | iOS | Windows |
+|---|---|---|---|
+| Sürüm adı | 1.0.22 | 1.0.22 | 1.0.22 |
+| Sürüm kodu / build | **22** | **26** | — |
+
+## Yenilikler
+- Tül ve fon hesabında kumaş metresi `en × pile + 20 cm dikim payı` olarak güncellendi (önceden 15 cm).
+  Müşteri tutarı, tedarikçi maliyeti ve tedarikçi cari borcu aynı metre üzerinden hesaplanır.

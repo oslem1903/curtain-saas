@@ -80,7 +80,7 @@ function calculate(productType: ProductType, widthCm: number, heightCm: number, 
   }
   if (productType === "tul" || productType === "fon" || productType === "kruvaze") {
     const pileMultiplier = pile === "2" ? 2 : 3;
-    const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 15;
+    const fabricWidthCm = Math.max(0, widthCm) * pileMultiplier + 20;
     const areaM2 = fabricWidthCm / 100;
     const total = areaM2 * Math.max(1, qty) * Math.max(0, unitPrice);
     return { roundedWidth: widthCm, roundedHeight: heightCm, areaM2, total, fabricWidthCm };

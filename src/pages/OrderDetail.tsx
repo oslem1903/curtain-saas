@@ -297,10 +297,10 @@ function computeLineItem(params: {
         effectiveArea = 1;
         line_total = unit * qty;
     } else if (params.product_type === "tul" || params.product_type === "fon" || params.product_type === "kruvaze") {
-        // Tül/Fon: en × pile + 15 cm dikim payı → kumaş metresi (yükseklik hariç).
+        // Tül/Fon: en × pile + 20 cm dikim payı → kumaş metresi (yükseklik hariç).
         // "S" (S pile) 1'e 3 perde gibi hesaplanır.
         const pile = params.pile === "3" || params.pile === "S" ? 3 : 2;
-        effectiveArea = (w * pile + 15) / 100;
+        effectiveArea = (w * pile + 20) / 100;
         line_total = effectiveArea * unit * qty;
     } else if (params.product_type === "jalousie" || params.product_type === "picasso") {
         // Jaluzi/Picasso: alan bazlı tutara redüktör ve kurdele çarpanları.
