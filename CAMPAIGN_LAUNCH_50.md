@@ -39,3 +39,17 @@ Kampanya migration ile **kapalı** (`is_enabled=false`) gelir; açmak ayrı bir 
 - Callback zinciri (PayTR → Metraj360 → PerdePRO) yerel simülasyonu: `METRAJ_REPO=<oslem1903/metraj360 klasörü> node tests/billing/campaign.integration.mjs`
   (Metraj'ın GERÇEK paytr-callback kaynağı + PerdePRO callback; 73 kontrol). **Gerçek PayTR test ödemesi henüz yapılmadı** (migration/function canlıda yok).
 - `node tests/billing/callback.integration.mjs` (mevcut akış, 039 ile de geçer)
+
+## QA-only test (kampanya genel olarak KAPALI kalır)
+`qa_preview=true` iken kampanya yalnız `billing_test_companies` firmalarına uygulanır; site ve diğer firmalar normal fiyat görür.
+```
+-- QA firması test listesinde olmalı (BILLING_PAYTR_ROUTING.md); kampanya is_enabled=false kalır:
+update public.billing_campaigns set qa_preview = true where code = 'launch_solo_yearly_50';   -- test bitince false
+```
+PerdePRO `PAYTR_TEST_MODE=1` iken yalnız test firmaları ödeme başlatabilir; ortak PayTR mağazasındaki Metraj360 (`MTR…`) ödemeleri
+bu yoldan geçmez (Metraj360 yalnız `PRD…` siparişlerini iletir). Gerçek kart çekilmez: PayTR test kartı kullanılır.
+
+## Yayın notu (web uygulaması)
+`release/1.0.14-access-trial7` dalı artık iOS/hesap silme işini de içerir; web'i yayınlamadan önce
+`supabase/migrations/20261029100000_account_deletion_requests.sql` (ACCOUNT_DELETION_OPERATIONS.md) canlıda uygulanmış olmalı,
+aksi halde "Hesabımı sil" ekranı çalışmaz.

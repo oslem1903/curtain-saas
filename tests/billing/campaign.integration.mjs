@@ -286,6 +286,24 @@ await db.exec(`delete from billing_campaign_claims where status<>'consumed'; del
   ok((await one('select plan_status p from companies where id=$1', [mon])).p === 'active' && (await el(mon)).applied === true, 'aylik faturayla aktif firma ilk yillik alimda kampanyaya uygun');
 }
 
+// ===== QA onizleme: kampanya KAPALIYKEN yalniz test firmasina =====
+{
+  await db.exec(`update billing_campaigns set is_enabled=false, qa_preview=true; delete from billing_campaign_claims; delete from billing_intents where status='created'`);
+  const real = await mkCo('GercekMusteri');
+  const qa = await mkCo('QAFirma');
+  await db.exec(`insert into billing_test_companies(company_id) values ('${qa}')`);
+  r = await startCheckout(real, 'solo_yearly');
+  ok(r.paytr.get('payment_amount') === '499000', 'QA onizleme: gercek firmaya kampanya UYGULANMAZ (4.990 TL)');
+  r = await startCheckout(qa, 'solo_yearly');
+  ok(r.paytr.get('payment_amount') === '249500', 'QA onizleme: yalniz test firmasina 2.495 TL');
+  ok(JSON.stringify((await one(`select billing_campaign_public_status() s`)).s) === '{"active":false}', 'QA onizleme: genel (site) durumu KAPALI kalir');
+  ok((await one(`select count(*)::int n from billing_campaign_claims where is_test`)).n === 1 && await used() === 0, 'QA onizleme: test firmasi kontenjan tuketmez');
+  await db.exec(`update billing_campaigns set qa_preview=false`);
+  r = await startCheckout(qa, 'solo_yearly');
+  ok(r.paytr.get('payment_amount') === '499000', 'QA onizleme kapaninca test firmasi da normal fiyat');
+  await db.exec(`update billing_campaigns set is_enabled=true; delete from billing_campaign_claims; delete from billing_intents where status='created'`);
+}
+
 // ===== Tutar sabitleme + kapatma =====
 await db.exec(`delete from billing_campaign_claims; delete from billing_payments; delete from billing_intents; delete from billing_events; delete from billing_subscriptions; delete from companies;`);
 {

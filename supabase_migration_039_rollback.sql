@@ -28,6 +28,7 @@ DROP FUNCTION IF EXISTS public.billing_refund_cases_list(text);
 DROP FUNCTION IF EXISTS public.billing_refund_case_resolve(uuid, text, text);
 DROP FUNCTION IF EXISTS public.billing_campaign_company_status(uuid);
 DROP FUNCTION IF EXISTS public.billing_campaign_set_override(uuid, boolean, text);
+DROP FUNCTION IF EXISTS public.billing_campaign_set_qa_preview(text, boolean);
 DROP FUNCTION IF EXISTS public.billing_campaign_quote(uuid, text);
 DROP FUNCTION IF EXISTS public.billing_campaign_public_status();
 DROP FUNCTION IF EXISTS public.billing_campaign_set_enabled(text, boolean);

@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS public.billing_campaigns (
   payment_timeout_minutes integer NOT NULL DEFAULT 30 CHECK (payment_timeout_minutes BETWEEN 5 AND 120),
   reservation_grace_minutes integer NOT NULL DEFAULT 15 CHECK (reservation_grace_minutes BETWEEN 5 AND 240),
   is_enabled boolean NOT NULL DEFAULT false,
+  -- QA onizleme: is_enabled=false iken kampanya YALNIZ billing_test_companies firmalari icin uygulanir (genel kullanima acmadan test).
+  qa_preview boolean NOT NULL DEFAULT false,
   starts_at timestamptz,
   ends_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -188,13 +190,13 @@ BEGIN
                                'list_price_minor', v_plan.price_minor, 'amount_minor', v_plan.price_minor);
   IF v_plan.period <> 'year' THEN RETURN v_base || jsonb_build_object('reason', 'not_yearly'); END IF;
 
+  v_test := EXISTS (SELECT 1 FROM public.billing_test_companies t WHERE t.company_id = p_company_id);
   SELECT * INTO v_c FROM public.billing_campaigns
-   WHERE plan_code = p_plan_code AND is_enabled
+   WHERE plan_code = p_plan_code AND (is_enabled OR (qa_preview AND v_test))
      AND (starts_at IS NULL OR starts_at <= now()) AND (ends_at IS NULL OR ends_at > now())
    ORDER BY created_at LIMIT 1;
   IF NOT FOUND THEN RETURN v_base || jsonb_build_object('reason', 'no_campaign'); END IF;
 
-  v_test := EXISTS (SELECT 1 FROM public.billing_test_companies t WHERE t.company_id = p_company_id);
   IF NOT v_test THEN
     IF public.billing_company_has_yearly_purchase(p_company_id) THEN
       RETURN v_base || jsonb_build_object('reason', 'already_purchased_yearly');
@@ -528,6 +530,18 @@ BEGIN
 END
 $fn$;
 
+CREATE OR REPLACE FUNCTION public.billing_campaign_set_qa_preview(p_code text, p_on boolean)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+BEGIN
+  IF auth.uid() IS NOT NULL AND NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'PERDEPRO_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+  UPDATE public.billing_campaigns SET qa_preview = p_on, updated_at = now() WHERE code = p_code;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PERDEPRO_NOT_FOUND: kampanya'; END IF;
+  RETURN public.billing_campaign_admin_status(p_code);
+END
+$fn$;
+
 CREATE OR REPLACE FUNCTION public.billing_campaign_admin_status(p_code text DEFAULT NULL)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $fn$
 DECLARE v_c public.billing_campaigns%ROWTYPE;
@@ -537,7 +551,7 @@ BEGIN
   END IF;
   SELECT * INTO v_c FROM public.billing_campaigns WHERE p_code IS NULL OR code = p_code ORDER BY created_at LIMIT 1;
   IF NOT FOUND THEN RETURN NULL; END IF;
-  RETURN jsonb_build_object('code', v_c.code, 'plan_code', v_c.plan_code, 'is_enabled', v_c.is_enabled,
+  RETURN jsonb_build_object('code', v_c.code, 'plan_code', v_c.plan_code, 'is_enabled', v_c.is_enabled, 'qa_preview', v_c.qa_preview,
     'discount_percent', v_c.discount_percent, 'max_slots', v_c.max_slots,
     'consumed', (SELECT count(*) FROM public.billing_campaign_claims c WHERE c.campaign_code = v_c.code AND c.status = 'consumed' AND NOT c.is_test),
     'reserved_active', (SELECT count(*) FROM public.billing_campaign_claims c WHERE c.campaign_code = v_c.code AND c.status = 'reserved' AND c.reserved_until > now() AND NOT c.is_test));
@@ -548,6 +562,8 @@ REVOKE ALL ON FUNCTION public.billing_campaign_quote(uuid, text) FROM PUBLIC, an
 REVOKE ALL ON FUNCTION public.billing_campaign_public_status() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.billing_campaign_set_enabled(text, boolean) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.billing_campaign_admin_status(text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.billing_campaign_set_qa_preview(text, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.billing_campaign_set_qa_preview(text, boolean) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.billing_campaign_quote(uuid, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.billing_campaign_public_status() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.billing_campaign_set_enabled(text, boolean) TO authenticated, service_role;
