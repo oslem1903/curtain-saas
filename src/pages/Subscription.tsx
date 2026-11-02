@@ -81,7 +81,8 @@ export default function Subscription() {
       setPlans(planList);
       // Kampanyali yillik fiyat: sunucu karari. Hata/yok ise normal fiyat gosterilir (kampanya gosterilmez).
       const nextQuotes: Record<string, Quote> = {};
-      if (memberRole === "admin") {
+      // Mağaza (native) sürümlerinde kampanya sorgusu HİÇ çalışmaz: fiyat/satın alma bölümü zaten gösterilmez.
+      if (memberRole === "admin" && !native) {
         await Promise.all(planList.map(async (x) => {
           const qr = await supabase.rpc("billing_campaign_quote", { p_company_id: company.id, p_plan_code: x.code });
           const qd = qr.data as Quote | null;
@@ -98,7 +99,7 @@ export default function Subscription() {
     } finally {
       setLoading(false);
     }
-  }, [company?.id, memberRole]);
+  }, [company?.id, memberRole, native]);
 
   useEffect(() => { void load(); }, [load]);
 

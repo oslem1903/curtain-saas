@@ -1,46 +1,20 @@
-import { isNativeIos } from "../utils/nativeRuntime";
+import { isNativeApp } from "../utils/nativeRuntime";
+import { buildSupportTicket, getLockedContent, retryCheckMessage, supportButtonLabel, supportSuccessMessage } from "../utils/lockedContent";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Clock, LockKeyhole, MonitorSmartphone, RefreshCw, ShieldOff } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { getDeviceId, useAuth } from "../context/AuthContext";
 
-const REASON_CONTENT: Record<string, { title: string; text: string; icon: typeof LockKeyhole }> = {
-    inactive_user: {
-        title: "Hesabınız pasif",
-        text: "Kullanıcı hesabınız pasif durumda. Firma yöneticinizle iletişime geçin.",
-        icon: ShieldOff,
-    },
-    inactive_member: {
-        title: "Üyeliğiniz pasif",
-        text: "Firma içindeki kullanıcı üyeliğiniz pasife alınmış. Firma yöneticinizle iletişime geçin.",
-        icon: ShieldOff,
-    },
-    inactive_company: {
-        title: "Firma lisansı askıda",
-        text: "Firmanızın lisansı pasif veya askıya alınmış durumda. Devam etmek için lisans yöneticinizle iletişime geçin.",
-        icon: LockKeyhole,
-    },
-    expired_trial: {
-        title: "Deneme süreniz doldu",
-        text: "Deneme süreniz sona erdi. Verileriniz güvende — lisans satın aldığınızda kaldığınız yerden devam edersiniz.",
-        icon: Clock,
-    },
-    read_only: {
-        title: "Salt okunur mod",
-        text: "Firmanız şu anda sadece okuma modunda. Yeni kayıt eklemek için lisansınızı yenileyin.",
-        icon: LockKeyhole,
-    },
-    device_limit: {
-        title: "Cihaz limiti doldu",
-        text: "Lisansınızın izin verdiği cihaz sayısına ulaşıldı. Bu cihazdan kullanmak için yöneticinizden cihaz limitini artırmasını veya eski bir cihazı kaldırmasını isteyin.",
-        icon: MonitorSmartphone,
-    },
-    unknown: {
-        title: "Erişim kilitli",
-        text: "Hesabınız geçici olarak kilitli. Lütfen yöneticinizle iletişime geçin.",
-        icon: LockKeyhole,
-    },
+/** Metinler utils/lockedContent.ts'te (native'de satın alma dili yok); burada yalnızca simgeler. */
+const REASON_ICON: Record<string, typeof LockKeyhole> = {
+    inactive_user: ShieldOff,
+    inactive_member: ShieldOff,
+    inactive_company: LockKeyhole,
+    expired_trial: Clock,
+    read_only: LockKeyhole,
+    device_limit: MonitorSmartphone,
+    unknown: LockKeyhole,
 };
 
 export default function Locked() {
@@ -49,8 +23,9 @@ export default function Locked() {
     const [requesting, setRequesting] = useState(false);
     const [checkMessage, setCheckMessage] = useState("");
 
-    const content = REASON_CONTENT[lockReason || "unknown"] ?? REASON_CONTENT.unknown;
-    const Icon = content.icon;
+    const native = isNativeApp();
+    const content = getLockedContent(lockReason, native);
+    const Icon = REASON_ICON[lockReason || "unknown"] ?? LockKeyhole;
 
     async function handleRetry() {
         setChecking(true);
@@ -58,7 +33,7 @@ export default function Locked() {
         try {
             await refreshAuth();
             // refreshAuth sonrası hâlâ bu ekrandaysak lisans hâlâ kilitli demektir
-            setCheckMessage("Lisans durumu kontrol edildi. Erişim hâlâ kilitli görünüyor — değişiklik yapıldıysa birkaç dakika içinde tekrar deneyin.");
+            setCheckMessage(retryCheckMessage(native));
         } catch {
             setCheckMessage("Kontrol sırasında bağlantı sorunu oluştu. İnternet bağlantınızı kontrol edip tekrar deneyin.");
         } finally {
@@ -75,30 +50,21 @@ export default function Locked() {
         setRequesting(true);
         setCheckMessage("");
 
-        const isDeviceLimit = lockReason === "device_limit";
-        const payload = {
-            p_company_id: company.id,
-            p_title: isDeviceLimit ? "Cihaz limiti talebi" : "Lisans / destek talebi",
-            p_description: isDeviceLimit
-                ? `${company.name || "Firma"} icin yeni cihaz giris izni isteniyor. Super admin cihaz limitini artirabilir veya eski bir cihazi kaldirabilir.`
-                : `${company.name || "Firma"} icin lisans/destek talebi olusturuldu. Durum: ${lockReason || "unknown"}.`,
-            p_category: isDeviceLimit ? "payment" : "request",
-            p_priority: isDeviceLimit ? "high" : "medium",
-            p_page_url: window.location.href,
-            p_support_metadata: {
-                kind: isDeviceLimit ? "device_limit" : "license_support",
-                lock_reason: lockReason,
-                requested_device_id: getDeviceId(),
-                user_agent: navigator.userAgent.slice(0, 250),
-                device_name: [navigator.platform, navigator.language].filter(Boolean).join(" / ").slice(0, 120),
-            },
-        };
+        const payload = buildSupportTicket({
+            companyId: company.id,
+            companyName: company.name,
+            lockReason,
+            deviceId: getDeviceId(),
+            pageUrl: window.location.href,
+            userAgent: navigator.userAgent,
+            deviceName: [navigator.platform, navigator.language].filter(Boolean).join(" / "),
+        }, native);
 
         try {
             const { data, error } = await supabase.rpc("create_support_ticket_as_locked_user", payload);
             if (error) throw error;
             if (data?.error) throw new Error(data.error);
-            setCheckMessage("Talebiniz super admin paneline dustu. Onaylandiginda bu ekrandan Tekrar Dene ile giris yapabilirsiniz.");
+            setCheckMessage(supportSuccessMessage(native));
         } catch (e: any) {
             setCheckMessage(e?.message || "Talep olusturulamadi. Lutfen internet baglantinizi kontrol edip tekrar deneyin.");
         } finally {
@@ -126,7 +92,7 @@ export default function Locked() {
                 </div>
                 <h1 className="text-2xl font-black text-slate-900 dark:text-white">{content.title}</h1>
                 <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {isNativeIos() && ["expired_trial", "read_only"].includes(lockReason || "") ? "Hesabınız salt okunur modda. Erişim durumunuz için firma yöneticinizle görüşün." : content.text}
+                    {content.text}
                 </p>
                 {company?.name && (
                     <p className="mt-2 text-xs font-bold text-slate-400">Firma: {company.name}</p>
@@ -149,14 +115,14 @@ export default function Locked() {
                         <RefreshCw className={`h-4 w-4 ${checking ? "animate-spin" : ""}`} />
                         {checking ? "Kontrol ediliyor..." : "Tekrar Dene"}
                     </button>
-                    {!isNativeIos() && <button
+                    <button
                         type="button"
                         onClick={handleSupportRequest}
                         disabled={requesting}
                         className="inline-flex items-center justify-center rounded-2xl border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-black text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
                     >
-                        {requesting ? "Talep gonderiliyor..." : "Destek / Lisans Al"}
-                    </button>}
+                        {supportButtonLabel(native, requesting)}
+                    </button>
                     <button
                         type="button"
                         onClick={logout}
