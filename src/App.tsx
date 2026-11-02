@@ -1,3 +1,4 @@
+import { consumePostLoginTarget } from "./utils/postLoginTarget";
 import React, { lazy, Suspense, useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { App as CapacitorApp } from "@capacitor/app";
@@ -128,7 +129,8 @@ function HomeRedirect() {
   if (status === "locked") return <Navigate to="/locked" replace />;
   if (status === "needs_setup") return <Navigate to="/setup" replace />;
 
-  return <Navigate to={defaultPathForRole(role)} replace />;
+  const postLogin = role === "admin" ? consumePostLoginTarget() : null;
+  return <Navigate to={postLogin ?? defaultPathForRole(role)} replace />;
 }
 
 function AndroidBackButtonHandler() {

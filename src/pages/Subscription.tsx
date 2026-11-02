@@ -9,6 +9,9 @@ import { isNativeApp } from "../utils/nativeRuntime";
 
 type Plan = { code: string; name: string; period: "month" | "year"; price_minor: number; currency: string; package_code: string; is_purchasable: boolean; sort_order: number };
 type Payment = { id: string; created_at: string; amount_minor: number; currency: string; status: string; period_end: string | null; channel: string };
+/** Sunucu kampanya karari (billing_campaign_quote). Ekran yalniz GOSTERIR; tutari sunucu odeme aninda yeniden belirler. */
+type Quote = { applied: boolean; amount_minor: number; list_price_minor: number; currency: string; discount_percent?: number; max_slots?: number };
+type Refund = { id: string; amount_minor: number; currency: string; created_at: string; provider_ref: string };
 type Sub = { status: string; plan_code: string | null; current_period_end: string | null; cancel_at_period_end: boolean; channel: string };
 
 /** Sunucudaki durum kodlarini kullaniciya Turkce goster ("trial" -> "Deneme"). */
@@ -52,6 +55,8 @@ export default function Subscription() {
   const [available, setAvailable] = useState(true);
   const [accepted, setAccepted] = useState(false);
   const [isTestCompany, setIsTestCompany] = useState(false);
+  const [refunds, setRefunds] = useState<Refund[]>([]);
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const native = isNativeApp();
   const canPurchase = !native && memberRole === "admin";
   const paymentParam = params.get("payment");
@@ -72,15 +77,37 @@ export default function Subscription() {
       setIsTestCompany(Boolean(t.data?.company_id));
       // Tablolar henuz kurulu degilse (migration uygulanmamis) ekran "kullanilamiyor" gosterir.
       if (p.error && /relation|does not exist|schema cache/i.test(p.error.message)) { setAvailable(false); return; }
-      setPlans((p.data ?? []) as Plan[]);
+      const planList = (p.data ?? []) as Plan[];
+      setPlans(planList);
+      // Kampanyali yillik fiyat: sunucu karari. Hata/yok ise normal fiyat gosterilir (kampanya gosterilmez).
+      const nextQuotes: Record<string, Quote> = {};
+      if (memberRole === "admin") {
+        await Promise.all(planList.filter((x) => x.period === "year").map(async (x) => {
+          const qr = await supabase.rpc("billing_campaign_quote", { p_company_id: company.id, p_plan_code: x.code });
+          const qd = qr.data as Quote | null;
+          if (!qr.error && qd?.applied === true && Number.isInteger(qd.amount_minor)) nextQuotes[x.code] = qd;
+        }));
+      }
+      setQuotes(nextQuotes);
+      // Tahsil edilip lisansa donusmeyen (kampanya dolmus) odemeler: musteriye acikca iade bilgisi verilir.
+      const rf = await supabase.from("billing_refund_cases").select("id,amount_minor,currency,created_at,provider_ref")
+        .eq("company_id", company.id).eq("status", "open");
+      setRefunds(rf.error ? [] : ((rf.data ?? []) as Refund[]));
       setSub((s.data ?? null) as Sub | null);
       setPayments((h.data ?? []) as Payment[]);
     } finally {
       setLoading(false);
     }
-  }, [company?.id]);
+  }, [company?.id, memberRole]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Siteden ?plan=solo_yearly ile gelindiyse ilgili paket kartini gorunur yap.
+  const planParam = params.get("plan");
+  useEffect(() => {
+    if (loading || !planParam) return;
+    document.getElementById(`plan-${planParam}`)?.scrollIntoView({ block: "center" });
+  }, [loading, planParam]);
 
   // Odeme baska pencerede (tarayici) tamamlanabilir: uygulamaya donuldugunde durumu yenile.
   useEffect(() => {
@@ -106,14 +133,20 @@ export default function Subscription() {
   const special = company ? isSpecialAccessActive(company as never) : false;
   const planStatus = String(company?.plan_status ?? "").toLowerCase();
 
-  async function startCheckout(code: string) {
+  async function startCheckout(code: string, expectedAmountMinor?: number) {
     if (!company?.id || busyPlan) return;
     setBusyPlan(code);
     setError("");
     try {
       const { data, error: fnError } = await supabase.functions.invoke("billing-checkout", {
-        body: { company_id: company.id, plan_code: code, accepted_terms: accepted },
+        // expected_amount_minor yalniz bir onay korumasidir: fiyati sunucu belirler, farkliysa odeme baslatilmaz (409).
+        body: { company_id: company.id, plan_code: code, accepted_terms: accepted, ...(expectedAmountMinor ? { expected_amount_minor: expectedAmountMinor } : {}) },
       });
+      if (fnError && (fnError as { context?: { status?: number } }).context?.status === 409) {
+        setError("Fiyat güncellendi. Güncel fiyat aşağıda gösteriliyor; lütfen kontrol edip tekrar deneyin.");
+        await load();
+        return;
+      }
       const pageUrl = typeof data?.paymentPageUrl === "string" && /^https:\/\//.test(data.paymentPageUrl) ? data.paymentPageUrl : "";
       if (fnError || !pageUrl) {
         setError("Ödeme sayfası şu anda başlatılamadı. Lütfen daha sonra tekrar deneyin.");
@@ -133,9 +166,20 @@ export default function Subscription() {
     <div className="mx-auto flex max-w-4xl flex-col gap-5 p-4 sm:p-6">
       <h1 className="text-2xl font-black text-slate-900 dark:text-white">Abonelik</h1>
 
-      {paymentParam === "pending" && (
+      {refunds.map((rf) => (
+        <div key={rf.id} role="alert" className="rounded-2xl border-2 border-red-300 bg-red-50 p-4 text-sm leading-6 text-red-900">
+          <div className="font-black">Lisansınız AÇILMADI — ödemeniz iade edilecek</div>
+          <p className="mt-1 font-semibold">
+            {formatTrialDateTR(rf.created_at)} tarihli {money(rf.amount_minor, rf.currency)} tutarındaki kampanyalı yıllık ödemeniz alındı, ancak
+            kampanya kontenjanı doldu veya kampanyadan daha önce yararlanılmış olduğu için bu ödemeyle lisans tanımlanamadı.
+            Tutar kartınıza iade edilecektir. İsterseniz güncel fiyatla yeniden satın alabilirsiniz. Destek için bu ödeme referansını iletin:
+            <span className="ml-1 break-all font-mono text-xs">{rf.provider_ref}</span>
+          </p>
+        </div>
+      ))}
+      {paymentParam === "pending" && refunds.length === 0 && (
         <div role="status" className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm font-semibold text-sky-900">
-          Ödemeniz alındı; bankadan/sağlayıcıdan doğrulama bekleniyor. Erişiminiz doğrulama sonrası otomatik açılır, çıkış yapmanız gerekmez.
+          Ödeme sonucu doğrulanıyor. Başarılı olursa erişiminiz otomatik açılır, çıkış yapmanız gerekmez; bir sorun olursa bu ekranda bilgilendirileceksiniz.
         </div>
       )}
       {(paymentParam === "failed" || paymentParam === "error") && (
@@ -217,21 +261,44 @@ export default function Subscription() {
             ) : (
               plans.map((p) => {
                 const canPay = p.is_purchasable || isTestCompany;
+                const quote = quotes[p.code];
                 return (
                   <div
                     key={p.code}
-                    className="flex h-full min-w-0 flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+                    id={`plan-${p.code}`}
+                    className={`flex h-full min-w-0 flex-col rounded-3xl border bg-white p-6 shadow-sm dark:bg-slate-900 ${
+                      params.get("plan") === p.code ? "border-blue-500 ring-2 ring-blue-200 dark:border-blue-400 dark:ring-blue-900" : "border-slate-200 dark:border-slate-700"
+                    }`}
                   >
                     <div className="text-sm font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">
                       {p.period === "year" ? "1 yıllık kullanım" : "1 aylık kullanım"}
                     </div>
+                    {quote ? (
+                      <div className="mt-3">
+                        <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-black uppercase tracking-wide text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+                          Lansmana Özel
+                        </span>
+                        <p className="mt-2 text-sm font-bold leading-6 text-slate-900 dark:text-white">
+                          İlk {quote.max_slots ?? 20} işletmeye yıllık pakette %{quote.discount_percent ?? 50} indirim
+                        </p>
+                        <p className="mt-2 text-base font-semibold text-slate-600 line-through dark:text-slate-300">
+                          <span className="sr-only">Normal fiyat: </span>{money(quote.list_price_minor, quote.currency)}
+                        </p>
+                        <div className="flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-4xl font-black leading-none text-slate-900 dark:text-white">{money(quote.amount_minor, quote.currency)}</span>
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">/ ilk yıl</span>
+                        </div>
+                        <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">KDV dahil</p>
+                      </div>
+                    ) : (
                     <div className="mt-3 flex items-baseline gap-2">
                       <span className="text-4xl font-black leading-none text-slate-900 dark:text-white">{money(p.price_minor, p.currency)}</span>
                       <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">KDV dahil</span>
                     </div>
+                    )}
                     {/* Etiket alani iki kartta da ayni yuksekliktedir (hiza bozulmaz) */}
                     <div className="mt-3 min-h-[2rem]">
-                      {p.period === "year" ? (
+                      {quote ? null : p.period === "year" ? (
                         <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200">
                           Aylık ödemeye göre 2 ay avantajlı
                         </span>
@@ -241,6 +308,11 @@ export default function Subscription() {
                         </span>
                       )}
                     </div>
+                    {quote ? (
+                      <p className="mt-3 text-xs leading-5 text-slate-700 dark:text-slate-200">
+                        Kampanya, ilk {quote.max_slots ?? 20} işletmenin ilk yıllık satın alımında geçerlidir. Sonraki dönemlerde geçerli paket fiyatı uygulanır. Otomatik yenileme yoktur.
+                      </p>
+                    ) : null}
                     {canPurchase ? (
                       <div className="mt-auto pt-6">
                         {canPay ? (
@@ -248,12 +320,12 @@ export default function Subscription() {
                             <button
                               type="button"
                               disabled={Boolean(busyPlan) || !accepted}
-                              onClick={() => void startCheckout(p.code)}
+                              onClick={() => void startCheckout(p.code, quote?.amount_minor)}
                               aria-describedby="consent-help"
                               className="inline-flex min-h-[3rem] w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
                             >
                               {busyPlan === p.code ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-                              {p.is_purchasable ? "Ödemeye geç" : "Test ödemesine geç"}
+                              {quote ? "Kampanyadan Yararlan" : p.is_purchasable ? "Ödemeye geç" : "Test ödemesine geç"}
                             </button>
                             <p className="mt-2 min-h-[1.25rem] text-xs font-semibold text-slate-700 dark:text-slate-200">
                               {!accepted ? "Önce yukarıdaki onay kutusunu işaretleyin." : "\u00A0"}

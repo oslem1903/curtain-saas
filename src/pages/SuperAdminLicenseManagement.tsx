@@ -3,6 +3,8 @@ import { Lock, Calendar, Users, HardDrive } from "lucide-react";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { supabase } from "../supabaseClient";
+import LaunchCampaignCard from "../components/LaunchCampaignCard";
+import RefundCasesCard from "../components/RefundCasesCard";
 
 type Company = {
     id: string;
@@ -110,6 +112,9 @@ export default function SuperAdminLicenseManagement() {
                         Firma lisanslarını ve limitlerini yönet
                     </p>
                 </div>
+
+                <RefundCasesCard />
+                <LaunchCampaignCard />
 
                 {/* Search */}
                 <div className="mb-6">

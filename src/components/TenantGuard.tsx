@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { rememberPostLoginTarget } from "../utils/postLoginTarget";
 
 type TenantGuardMode = "any" | "super_admin" | "customer";
 
@@ -26,6 +27,7 @@ export default function TenantGuard({
     }
 
     if (status === "unauthenticated") {
+        rememberPostLoginTarget(location.pathname, location.search);
         return <Navigate to="/login" replace state={{ from: location.pathname }} />;
     }
 

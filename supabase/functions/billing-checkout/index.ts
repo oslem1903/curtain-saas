@@ -1,7 +1,9 @@
 /**
  * billing-checkout — Solo/PerdePRO tek seferlik dönem satın alma (PayTR iFrame API).
  *
- * Girdi : { company_id, plan_code, accepted_terms: true }   (JWT'li)
+ * Girdi : { company_id, plan_code, accepted_terms: true, expected_amount_minor? }   (JWT'li)
+ *          expected_amount_minor yalnız bir ONAY korumasıdır (ekranda gösterilen tutar); fiyatı BELİRLEMEZ.
+ *          Sunucu tutarı (kampanya dahil) farklıysa ödeme başlatılmaz: 409 price_changed.
  * Çıktı : { intent_id, paymentPageUrl }
  *
  * GÜVENLİK
@@ -155,7 +157,7 @@ Deno.serve(async (req) => {
   const { data: u } = await userClient.auth.getUser();
   if (!u?.user) return json({ error: 'unauthorized' }, 401);
 
-  const { company_id, plan_code, accepted_terms } = await req.json().catch(() => ({}));
+  const { company_id, plan_code, accepted_terms, expected_amount_minor } = await req.json().catch(() => ({}));
   if (!company_id || !plan_code) return json({ error: 'bad_request' }, 400);
   if (accepted_terms !== true) return json({ error: 'consent_required' }, 400);
 
@@ -174,7 +176,9 @@ Deno.serve(async (req) => {
 
   const { data: intent, error: ie } = await sb.rpc('billing_create_intent', {
     p_channel: 'paytr', p_company_id: company_id, p_plan_code: plan_code, p_created_by: u.user.id,
+    p_expected_amount_minor: Number.isInteger(expected_amount_minor) ? expected_amount_minor : null,
   });
+  if (ie && /PERDEPRO_PRICE_CHANGED/.test(ie.message ?? '')) return json({ error: 'price_changed' }, 409);
   if (ie || !intent?.intent_id) return json({ error: 'plan_unavailable' }, 400);
 
   const [{ data: co }, { data: prof }] = await Promise.all([
@@ -184,7 +188,10 @@ Deno.serve(async (req) => {
   const merchantOid = intentIdToOid(intent.intent_id);
   const amountMinor = Number(intent.amount_minor);
   const basket = buildBasketB64([
-    { name: String(intent.plan_name ?? 'PerdePRO').slice(0, 80), unitPrice: amountMinor / 100, qty: 1 },
+    {
+      name: String(`${intent.plan_name ?? 'PerdePRO'}${intent.campaign_code ? ' (Lansman Kampanyası)' : ''}`).slice(0, 80),
+      unitPrice: amountMinor / 100, qty: 1,
+    },
   ]);
   const email = paytrSafeEmail(u.user.email ?? '');
   const userIp = firstIp(req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip'));
@@ -205,7 +212,8 @@ Deno.serve(async (req) => {
     // Dönüş sayfası LİSANS AÇMAZ; yalnız durumu gösterir. Lisans paytr-callback bildirimiyle açılır.
     merchant_ok_url: `${appUrl}/#/subscription?payment=pending`,
     merchant_fail_url: `${appUrl}/#/subscription?payment=failed`,
-    timeout_limit: '30', currency: 'TL', test_mode: String(testMode), lang: 'tr',
+    // Kampanya rezervasyonu bu sureye (+ tampon) gore sunucuda hesaplanir; ikisi ayni kaynaktan gelir.
+    timeout_limit: String(Number(intent.payment_timeout_minutes) || 30), currency: 'TL', test_mode: String(testMode), lang: 'tr',
   });
 
   let iframeToken = '';
@@ -228,6 +236,8 @@ Deno.serve(async (req) => {
   await sb.rpc('billing_set_intent_token', { p_intent_id: intent.intent_id, p_token: iframeToken });
   return json({
     intent_id: intent.intent_id,
+    amount_minor: amountMinor,
+    campaign_code: intent.campaign_code ?? null,
     paymentPageUrl: `https://www.paytr.com/odeme/guvenli/${iframeToken}`,
     test_mode: testMode === 1,
   });

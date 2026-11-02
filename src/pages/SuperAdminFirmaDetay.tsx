@@ -1,3 +1,4 @@
+import CampaignEligibilityCard from "../components/CampaignEligibilityCard";
 import AdminInterventionPanel from "../components/AdminInterventionPanel";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -485,6 +486,8 @@ export default function SuperAdminFirmaDetay() {
                         </div>
                     ) : null}
                 </div>
+
+                {companyId ? <CampaignEligibilityCard companyId={companyId} /> : null}
 
                 {/* Stats Grid */}
                 {stats && (
