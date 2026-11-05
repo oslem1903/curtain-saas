@@ -1,7 +1,7 @@
 {
   "name": "perdepro",
   "private": true,
-  "version": "1.0.23",
+  "version": "1.0.24",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -57,7 +57,10 @@
       "!node_modules/**/*"
     ],
     "copyright": "Copyright © OZIDIJITAL",
-    "electronLanguages": ["tr", "en-US"]
+    "electronLanguages": [
+      "tr",
+      "en-US"
+    ]
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

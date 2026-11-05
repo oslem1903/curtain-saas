@@ -1,0 +1,40 @@
+name: Windows order hotfix package
+
+on:
+  push:
+    branches: [fix/solo-order-create-delete]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/load-release-client-config.mjs
+      - run: node --import tsx scripts/check-order-creation.ts
+      - run: node --import tsx scripts/check-strict-delete.ts
+      - run: node --import tsx scripts/check-calculations.ts
+      - run: npm run electron:build -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PerdePRO-1.0.24-Windows
+          path: release/PerdePRO-Setup-1.0.24.exe
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish Windows installer
+        run: gh release create windows-v1.0.24 release/PerdePRO-Setup-1.0.24.exe --repo oslem1903/curtain-saas --target "${{ github.sha }}" --title "PerdePRO Windows 1.0.24" --notes "Solo pakette sipariş kaydının Muhasebe modülüne bağımlılığı kaldırıldı. Başarısız kayıt geri alma sonuçları doğrulanıyor. Sipariş detayında bulunamayan kayıtlar için anlaşılır uyarı gösteriliyor."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
