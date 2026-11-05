@@ -4,7 +4,7 @@ import { useMemo, useState, useEffect, useRef, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Capacitor } from "@capacitor/core";
-import { supabase } from "../supabaseClient";
+import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { type RoleState } from "../auth/roles";
 import { useRole } from "../context/RoleContext";
 import { createReadScope } from "../utils/readScope";
@@ -433,9 +433,10 @@ export default function OrderDetail() {
         setStaffList([]);
         setItemPhotos({});
         try {
-            const { data: o, error: orderError } = await scope.read(supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("id", id).single());
+            const tenant = await getEffectiveTenantContext();
+            const { data: o, error: orderError } = await scope.read(supabase.from("orders").select("*, customers(id, name, phone, address, email)").eq("company_id", tenant.company_id).eq("id", id).is("deleted_at", null).maybeSingle());
             if (orderError) throw orderError;
-            if (!o) throw new Error("Sipariş bulunamadı veya görüntüleme yetkiniz yok.");
+            if (!o) throw new Error("Sipariş bu firmada bulunamadı veya görüntüleme yetkiniz yok. Siparişler listesini yenileyip tekrar açın.");
             // eslint-disable-next-line prefer-const
             let { data: i, error: itemsErr } = await scope.read(supabase
                 .from("order_items")

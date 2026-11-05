@@ -4,6 +4,9 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import { logAction } from "../utils/audit";
 import { useRole } from "../context/RoleContext";
+import { useAuth } from "../context/AuthContext";
+import { shouldCreateOrderInvoice, rollbackCreatedOrder, incompleteOrderMessage } from "../utils/orderCreation";
+import { getErrorMessage } from "../utils/errorMessage";
 import { normalizeRole } from "../auth/roles";
 import { ArrowLeft, Users, Phone, Trash2, Package, Save, Briefcase, Plus, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
@@ -346,6 +349,8 @@ export default function NewOrder() {
     const [newStaffRole, setNewStaffRole] = useState("installer");
     const [showAddStaff, setShowAddStaff] = useState(false);
     const { effectiveRole: role, realRole, viewingUserId } = useRole();
+    const { hasModule } = useAuth();
+    const [incompleteOrderId, setIncompleteOrderId] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState<string>("");
     // Quote dönüşümünde randevu ekleme formu gösterilmesin
@@ -867,6 +872,7 @@ export default function NewOrder() {
     }
 
     async function handleSave() {
+        if (saving || incompleteOrderId) return;
         setErr("");
         if (!companyId) { setErr("Şirket bilgisi yüklenemedi."); return; }
         if (!customerId && !customerInput.trim()) { setErr("Lütfen müşteri seçin."); return; }
@@ -927,6 +933,18 @@ export default function NewOrder() {
             const { data: orderRow, error: orderErr } = await supabase.from("orders").insert([{ customer_id: cid, company_id: companyId, note: note.trim() || null, status, total_amount: grandTotal, deposit_amount: 0, paid_amount: 0, remaining_amount: grandTotal, fabric_cost: safeNumber(totalCost), mechanism_cost: 0, installation_cost: 0, profit: safeNumber(profit), assigned_to: orderAssignedTo, assigned_staff_id: orderAssignedStaffId }]).select("id").single();
             if (orderErr) throw orderErr;
             const orderId = orderRow.id;
+            const rollbackOrder = async (itemIds: string[]) => {
+                try {
+                    await rollbackCreatedOrder({
+                        itemCount: itemIds.length,
+                        deleteItems: () => supabase.from("order_items").delete().eq("company_id", companyId).eq("order_id", orderId).in("id", itemIds).select("id"),
+                        deleteOrder: () => supabase.from("orders").delete().eq("company_id", companyId).eq("id", orderId).select("id"),
+                    });
+                } catch (rollbackError) {
+                    setIncompleteOrderId(orderId);
+                    throw new Error(incompleteOrderMessage(orderId, rollbackError));
+                }
+            };
             void logAction("order_created", "order", orderId, { source: "new_order" });
 
             const itemsPayload = itemsComputed.map((it) => ({ order_id: orderId, company_id: companyId, product_type: it.product_type, width_cm: it.width_cm, height_cm: it.height_cm, qty: it.qty, unit_price: it.unit_price, line_total: it.line_total, area_m2: it.area, room: it.room || null, note: [it.product_name, it.model_name, it.color_name].filter(Boolean).join(" / ") || null, fabric_width_cm: it.fabric_width_cm, sewing_allowance_cm: it.product_type === "tul" || it.product_type === "fon" ? 15 : null, calculation_note: it.calculation_note || null, supplier_id: it.supplier_id || fabricSupplierId || null, supplier_unit_cost: it.supplier_cost, supplier_total_cost: it.supplier_total_cost, profit: it.line_total - it.supplier_total_cost, product_options: { rounded_width_cm: it.roundedWidth, rounded_height_cm: it.roundedHeight, product_id: it.product_id, product_name: it.product_name, model_name: it.model_name, color_name: it.color_name, pile: it.pile, mechanism: it.mechanism, control_type: it.control_type } }));
@@ -944,10 +962,7 @@ export default function NewOrder() {
               if (itemErr) {
                 // Items error - şimdiye kadar eklenen kalemleri + order'ı temizle (orphan bırakma).
                 // Bu noktada henüz hiçbir finansal kayıt (tahsilat/plan) oluşmadı.
-                if (insertedItems.length > 0) {
-                  await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
-                }
-                await supabase.from("orders").delete().eq("id", orderId);
+                await rollbackOrder(insertedItems.map((i) => i.id));
                 throw new Error(`Sipariş kalemleri eklenemedi: ${itemErr.message}`);
               }
               insertedItems.push(insertedItem);
@@ -957,13 +972,12 @@ export default function NewOrder() {
             // önce atomik RPC ile oluşturulur. Başarısızsa sipariş ve kalemler temizlenir;
             // kullanıcıya yarım bir sipariş bırakılmaz.
             let createdInvoiceId: string | null = null;
-            if (status !== "quoted") {
+            if (shouldCreateOrderInvoice(status, hasModule("accounting"))) {
               try {
                 createdInvoiceId = await createSalesInvoiceForOrder({ company_id: companyId, orderId, customerId: cid, customerName, items: itemsComputed, notes: note, total: grandTotal, status });
               } catch (invoiceError) {
-                await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
-                await supabase.from("orders").delete().eq("id", orderId);
-                throw new Error(`Sipariş faturası oluşturulamadı; sipariş geri alındı: ${invoiceError instanceof Error ? invoiceError.message : String(invoiceError)}`);
+                await rollbackOrder(insertedItems.map((i) => i.id));
+                throw new Error(`Sipariş faturası oluşturulamadı; sipariş geri alındı: ${getErrorMessage(invoiceError, "Fatura kaydedilemedi.")}`);
               }
             }
 
@@ -986,13 +1000,11 @@ export default function NewOrder() {
                     invoiceRollbackError = rollbackError;
                   }
                 }
-                if (insertedItems.length > 0) {
-                  await supabase.from("order_items").delete().in("id", insertedItems.map((i) => i.id));
-                }
-                await supabase.from("orders").delete().eq("id", orderId);
                 if (invoiceRollbackError) {
-                  throw new Error(`Peşinat kaydedilemedi ve otomatik fatura geri alınamadı: ${invoiceRollbackError instanceof Error ? invoiceRollbackError.message : String(invoiceRollbackError)}`);
+                  setIncompleteOrderId(orderId);
+                  throw new Error(incompleteOrderMessage(orderId, invoiceRollbackError));
                 }
+                await rollbackOrder(insertedItems.map((i) => i.id));
                 throw new Error(`Peşinat kaydedilemedi: ${depositResult.status === "error" ? depositResult.error.message : "bilinmeyen hata"}`);
               }
               overpayment = depositResult.data.overpaymentAmount ?? 0;
@@ -1148,13 +1160,14 @@ export default function NewOrder() {
                 <div className="flex flex-wrap items-center gap-2">
                     <button type="button" onClick={() => window.print()} className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-800">PDF Oluştur</button>
                     <button onClick={() => nav("/orders")} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-900">İptal</button>
-                    <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg">
+                    <button onClick={handleSave} disabled={saving || Boolean(incompleteOrderId)} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg">
                         {saving ? "Kaydediliyor..." : "Teklifi / Siparişi Kaydet"}
                     </button>
                 </div>
             </div>
 
             {err && <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded-xl text-sm font-medium">{err}</div>}
+            {incompleteOrderId && <button type="button" onClick={() => nav(`/orders/${incompleteOrderId}`)} className="rounded-xl border border-red-300 px-4 py-3 font-bold text-red-700 dark:text-red-300">Kaydı kontrol etmek için siparişi aç</button>}
 
             {/* ── ALINAN ÖLÇÜLER ── */}
             <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden">
@@ -1541,7 +1554,7 @@ export default function NewOrder() {
                             <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Özel notlar..." className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border outline-none text-xs h-24" />
                         </div>
 
-                        <button onClick={handleSave} disabled={saving} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black shadow-lg flex items-center justify-center gap-2">
+                        <button onClick={handleSave} disabled={saving || Boolean(incompleteOrderId)} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black shadow-lg flex items-center justify-center gap-2">
                             <Save size={18} />
                             {saving ? "Kaydediliyor..." : "Teklifi / Siparişi Kaydet"}
                         </button>
@@ -1550,7 +1563,7 @@ export default function NewOrder() {
             </div>
 
             <div className="lg:hidden fixed bottom-6 left-4 right-4 z-40">
-                <button onClick={handleSave} disabled={saving} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-2xl flex items-center justify-center gap-2">
+                <button onClick={handleSave} disabled={saving || Boolean(incompleteOrderId)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-2xl flex items-center justify-center gap-2">
                     <Save size={20} /> {saving ? "Kaydediliyor..." : "Siparişi Kaydet"}
                 </button>
             </div>
