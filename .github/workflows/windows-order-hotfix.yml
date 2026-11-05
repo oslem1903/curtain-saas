@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -25,7 +25,7 @@ jobs:
       - run: node --import tsx scripts/check-order-creation.ts
       - run: node --import tsx scripts/check-strict-delete.ts
       - run: node --import tsx scripts/check-calculations.ts
-      - run: npm run electron:build
+      - run: npm run electron:build -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -34,3 +34,7 @@ jobs:
           path: release/PerdePRO-Setup-1.0.24.exe
           if-no-files-found: error
           retention-days: 14
+      - name: Publish Windows installer
+        run: gh release create windows-v1.0.24 release/PerdePRO-Setup-1.0.24.exe --repo oslem1903/curtain-saas --target "${{ github.sha }}" --title "PerdePRO Windows 1.0.24" --notes "Solo pakette sipariş kaydının Muhasebe modülüne bağımlılığı kaldırıldı. Başarısız kayıt geri alma sonuçları doğrulanıyor. Sipariş detayında bulunamayan kayıtlar için anlaşılır uyarı gösteriliyor."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
