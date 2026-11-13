@@ -18,6 +18,7 @@
     "cap:open-ios": "npx cap open ios",
     "cap:sync-ios": "npm run build && npx cap sync ios",
     "test:calc": "tsx scripts/check-calculations.ts",
+    "test:share": "tsx scripts/check-supplier-share-segments.ts",
     "qa:print": "node scripts/qa-print-check.mjs",
     "qa:tabstrip": "node scripts/qa-tabstrip-check.mjs",
     "qa:browser": "node scripts/qa-browser-check.mjs",

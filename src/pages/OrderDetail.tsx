@@ -25,7 +25,11 @@ import {
     Camera as CameraIcon,
     CheckCircle2,
     ChevronDown,
+    MessageCircle,
+    Copy,
 } from "lucide-react";
+import { buildSupplierMessage, distinctSupplierIds, itemsForSupplier, whatsappPhoneDigits, whatsappUrl } from "../utils/supplierWhatsapp";
+import { totalWidth } from "../utils/segmentedWidth";
 import SecureImage from "../components/SecureImage";
 import SecureLink from "../components/SecureLink";
 
@@ -54,7 +58,7 @@ type OrderRow = {
     customers?: { id?: string; name: string; phone: string; address?: string | null; email?: string | null } | null;
 };
 
-type SupplierRow = { id: string; name: string | null };
+type SupplierRow = { id: string; name: string | null; phone?: string | null };
 
 type CatalogCodePhoto = {
     id: string;
@@ -400,6 +404,11 @@ export default function OrderDetail() {
     const [pSupplierId, setPSupplierId] = useState("");
     const [pRoom, setPRoom] = useState("");
     const [pNote, setPNote] = useState("");
+    const [pSupplierNote, setPSupplierNote] = useState("");
+    // Tedarikçiye WhatsApp paylaşımı (salt-okunur; DB yazmaz)
+    const [shareOpen, setShareOpen] = useState(false);
+    const [shareSupplierId, setShareSupplierId] = useState("");
+    const [shareCopied, setShareCopied] = useState(false);
     const [pModelName, setPModelName] = useState("");
     const [pColorName, setPColorName] = useState("");
     // Ürün fotoğrafı state'leri
@@ -456,7 +465,7 @@ export default function OrderDetail() {
             if (o?.company_id) {
                 const { data: supplierRows, error: supplierRowsError } = await scope.read(supabase
                     .from("suppliers")
-                    .select("id, name")
+                    .select("id, name, phone")
                     .eq("company_id", o.company_id)
                     .order("name", { ascending: true }));
             if (supplierRowsError) throw supplierRowsError;
@@ -695,6 +704,7 @@ export default function OrderDetail() {
         setPSupplierId("");
         setPRoom("");
         setPNote("");
+        setPSupplierNote("");
         setPModelName("");
         setPColorName("");
         setPProductId("");
@@ -734,6 +744,7 @@ export default function OrderDetail() {
         const opts = item.product_options ?? {};
         setPModelName(opts.model_name ?? opts.product_name ?? "");
         setPColorName(opts.color_name ?? "");
+        setPSupplierNote(opts.supplier_note ?? "");
         setPPile(opts.pile === "S" ? "S" : opts.pile === "3" ? "3" : "2");
         setPMechanism(opts.mechanism === "reducer" ? "reducer" : "standard");
         setPControlType(opts.control_type === "tape" ? "tape" : "corded");
@@ -891,12 +902,13 @@ export default function OrderDetail() {
                 pRoom !== (o.room || "") ||
                 pNote !== (o.note || "") ||
                 pModelName !== (opts.model_name ?? opts.product_name ?? "") ||
-                pColorName !== (opts.color_name ?? "")
+                pColorName !== (opts.color_name ?? "") ||
+                pSupplierNote !== (opts.supplier_note ?? "")
             );
         }
         // Yeni satır modu: anlamlı bir alan dolduysa kirli say
-        return !!(pWidth || pHeight || pPrice || pModelName.trim() || pColorName.trim() || pRoom.trim() || pNote.trim() || pSupplierId);
-    }, [editingItemId, editingOriginal, pType, pWidth, pHeight, pQty, pPrice, pPurchaseCost, pSupplierId, pRoom, pNote, pModelName, pColorName]);
+        return !!(pWidth || pHeight || pPrice || pModelName.trim() || pColorName.trim() || pRoom.trim() || pNote.trim() || pSupplierNote.trim() || pSupplierId);
+    }, [editingItemId, editingOriginal, pType, pWidth, pHeight, pQty, pPrice, pPurchaseCost, pSupplierId, pRoom, pNote, pSupplierNote, pModelName, pColorName]);
 
     // Sayfa yenileme / kapatma / donanım geri tuşunda kaydedilmemiş değişiklik uyarısı
     useEffect(() => {
@@ -997,6 +1009,11 @@ export default function OrderDetail() {
         if (w <= 0 || (pType !== "dekoratif_ray" && h <= 0)) throw new Error(pType === "dekoratif_ray" ? "En 0'dan büyük olmalı." : "En ve boy 0'dan büyük olmalı.");
         if (u <= 0) throw new Error("Birim fiyat 0'dan büyük olmalı.");
 
+        // Düzenlemede kalemin mevcut product_options'ı (field_info, parçalı en vb.) korunur;
+        // en değiştiyse artık geçerli olmayan parçalı en bilgisi düşer.
+        const existingOptions: Record<string, any> = { ...((items.find(x => x.id === editingItemId)?.product_options as Record<string, any> | null) ?? {}) };
+        const seg = existingOptions.width_segments;
+        if (seg && Number(seg.covered_cm) !== w) delete existingOptions.width_segments;
         const cleanNote = pNote.trim();
         const finalNote = [cleanNote, photoUrl].filter(Boolean).join("\n");
 
@@ -1015,10 +1032,12 @@ export default function OrderDetail() {
             supplier_total_cost: computed.supplier_total_cost,
             profit: computed.profit,
             product_options: {
+                ...existingOptions,
                 ...(pType === "dekoratif_ray" ? { rounded_width_cm: decorativeRail(w).roundedWidth, rounded_height_cm: 0 } : {}),
                 product_name: pModelName.trim() || "",
                 model_name: pModelName.trim() || "",
                 color_name: pColorName.trim() || "",
+                supplier_note: pSupplierNote.trim() || "",
                 pile: pPile,
                 mechanism: pMechanism,
                 control_type: pControlType,
@@ -1505,6 +1524,80 @@ export default function OrderDetail() {
     );
     if (!order) return <div className="p-10 ">Sipariş bulunamadı.</div>;
 
+    // Yalnızca OKUR: yeni sipariş/tedarikçi hareketi/borç kaydı oluşturmaz.
+    function renderSupplierShareModal() {
+        const supplierIds = distinctSupplierIds(items);
+        const refNo = (order?.id ?? "").slice(0, 8).toUpperCase();
+        const chosen = supplierIds.includes(shareSupplierId) ? shareSupplierId : "";
+        const supplier = suppliers.find(s => s.id === chosen);
+        const shareItems = chosen ? itemsForSupplier(items, chosen) : [];
+        const message = chosen
+            ? buildSupplierMessage({
+                orderNo: refNo,
+                supplierName: supplier?.name || "",
+                items: shareItems.map(it => ({ ...it, productLabel: productLabel(it.product_type) })),
+            })
+            : "";
+        const phoneDigits = whatsappPhoneDigits(supplier?.phone);
+        const missingSupplierItems = items.filter(it => !it.supplier_id).length;
+        async function copyMessage() {
+            try {
+                await navigator.clipboard.writeText(message);
+                setShareCopied(true);
+            } catch {
+                setShareCopied(false);
+                window.prompt("Mesajı kopyalayın:", message);
+            }
+        }
+        return (
+            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Tedarikçiye WhatsApp'tan Gönder">
+                <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-xl dark:bg-slate-900">
+                    <div className="mb-3 flex items-center justify-between">
+                        <h3 className="text-base font-black text-slate-900 dark:text-white">Tedarikçiye WhatsApp'tan Gönder</h3>
+                        <button type="button" onClick={() => setShareOpen(false)} aria-label="Kapat" className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                    </div>
+                    {supplierIds.length === 0 ? (
+                        <div className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800" data-testid="share-no-supplier">Bu siparişin hiçbir kaleminde tedarikçi seçilmemiş. Önce ürün satırlarına tedarikçi atayın.</div>
+                    ) : (
+                        <>
+                            {supplierIds.length > 1 && (
+                                <label className="mb-3 block text-xs font-black uppercase tracking-wide text-slate-500">
+                                    Tedarikçi seçin
+                                    <select data-testid="share-supplier-select" value={chosen} onChange={e => { setShareSupplierId(e.target.value); setShareCopied(false); }} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm font-bold dark:border-slate-700 dark:bg-slate-950">
+                                        <option value="">— Seçin —</option>
+                                        {supplierIds.map(sid => <option key={sid} value={sid}>{suppliers.find(s => s.id === sid)?.name || "Tedarikçi"} ({itemsForSupplier(items, sid).length} kalem)</option>)}
+                                    </select>
+                                </label>
+                            )}
+                            {missingSupplierItems > 0 && <div className="mb-2 text-[11px] font-bold text-slate-500">{missingSupplierItems} kalemde tedarikçi seçilmediği için mesaja girmez.</div>}
+                            {chosen && (
+                                <>
+                                    <div className="mb-1 text-xs font-black uppercase tracking-wide text-slate-500">Mesaj önizleme (göndermeden önce kontrol edin)</div>
+                                    <pre data-testid="share-message" className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-xs text-slate-800 dark:bg-slate-800 dark:text-slate-100">{message}</pre>
+                                    {!phoneDigits && (
+                                        <div data-testid="share-phone-warning" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+                                            {supplier?.phone ? "Tedarikçinin kayıtlı telefonu geçersiz görünüyor." : "Tedarikçinin kayıtlı telefonu yok."} WhatsApp açılamaz. Tedarikçi kartına geçerli bir telefon ekleyin veya mesajı kopyalayıp elle gönderin.
+                                        </div>
+                                    )}
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        {phoneDigits && (
+                                            <a data-testid="share-open-whatsapp" href={whatsappUrl(phoneDigits, message)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-700">
+                                                <MessageCircle className="h-4 w-4" /> WhatsApp'ta Aç
+                                            </a>
+                                        )}
+                                        <button type="button" data-testid="share-copy" onClick={copyMessage} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">
+                                            <Copy className="h-4 w-4" /> {shareCopied ? "Kopyalandı" : "Mesajı Kopyala"}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     const itemSalesTotal = items.reduce((s, x) => s + safeNumber(x.line_total), 0);
     // Eski/yarım taşınmış kayıtlarda order_items boş olsa bile orders.total_amount
     // finansal başlıktaki kayıtlı toplamdır. Kullanıcıya yanlışlıkla ₺0 göstermeyelim.
@@ -1694,6 +1787,21 @@ export default function OrderDetail() {
                             </span>
                             <span className="text-xs text-slate-400 font-bold">Sipariş No: #{order.id.slice(0,8).toUpperCase()}</span>
                         </div>
+                        {order.status !== "draft" && (
+                            <button
+                                type="button"
+                                data-testid="supplier-whatsapp-btn"
+                                onClick={() => {
+                                    const ids = distinctSupplierIds(items);
+                                    setShareSupplierId(ids.length === 1 ? ids[0] : "");
+                                    setShareCopied(false);
+                                    setShareOpen(true);
+                                }}
+                                className="mb-2 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+                            >
+                                <MessageCircle className="h-4 w-4" /> Tedarikçiye WhatsApp'tan Gönder
+                            </button>
+                        )}
                         <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white uppercase tracking-tighter">
                             {order.customers?.name || "İsimsiz Müşteri"}
                         </h1>
@@ -1709,6 +1817,8 @@ export default function OrderDetail() {
                         <div className="text-2xl sm:text-3xl font-black text-primary-600 tracking-tighter">{fmtTL(salesTotal)}</div>
                     </div>
                 </div>
+
+                {shareOpen && renderSupplierShareModal()}
 
                 {(role === "admin" || role === "accountant") && (
                     <div className="mt-6 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
@@ -2148,7 +2258,8 @@ export default function OrderDetail() {
                             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
                                 <input placeholder="Model adı" value={pModelName} onChange={e => setPModelName(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                                 <input placeholder="Renk / kod" value={pColorName} onChange={e => setPColorName(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
-                                <input placeholder="Ürün notu" value={pNote} onChange={e => setPNote(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
+                                <input placeholder="Ürün notu (iç not)" value={pNote} onChange={e => setPNote(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
+                                <input placeholder="Tedarikçi notu (mesaja girer)" value={pSupplierNote} onChange={e => setPSupplierNote(e.target.value)} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border-none text-sm font-bold" />
                             </div>
                             {(pType === "tul" || pType === "fon" || pType === "kruvaze") && (
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
@@ -2271,9 +2382,11 @@ export default function OrderDetail() {
                                         const roundedWidth = (it.product_options as any)?.rounded_width_cm as number | undefined;
                                         const roundedHeight = (it.product_options as any)?.rounded_height_cm as number | undefined;
                                         const rowPhotos = itemPhotos[it.id] || [];
+                                        const widthSegs = ((it.product_options as any)?.width_segments?.parts ?? null) as Array<{ name: string; cm: number }> | null;
                                         const detailRows: Array<[string, string]> = [
                                             ["Gerçek Ölçü", it.product_type === "dekoratif_ray" ? railDescription(it.width_cm ?? 0) : `${it.width_cm ?? "—"}×${it.height_cm ?? "—"} cm`],
                                             ...(it.product_type !== "dekoratif_ray" && roundedWidth != null && roundedHeight != null ? [["Yuvarlanmış Üretim Ölçüsü", `${roundedWidth}×${roundedHeight} cm`] as [string, string]] : []),
+                                            ...(widthSegs ? [["Toplam En / Parçalar", `${totalWidth(widthSegs.map(g => ({ cm: Number(g.cm) })))} cm — ${widthSegs.map((g, gi) => `${(g.name || "").trim() || `Parça ${gi + 1}`} ${g.cm} cm`).join(" + ")}`] as [string, string]] : []),
                                             ["Adet", String(it.qty ?? 1)],
                                             ...(fieldInfo.color_name ? [["Renk / Kartela Kodu", fieldInfo.color_name] as [string, string]] : []),
                                             ...(fieldInfo.model_name ? [["Model", fieldInfo.model_name] as [string, string]] : []),

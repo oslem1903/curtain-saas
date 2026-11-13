@@ -15,6 +15,7 @@ import { createFinanceService } from "../services/finance";
 import { buildInstallmentPlanFromDraft } from "../utils/installments";
 import type { InstallmentDraftRow } from "../utils/installments";
 import PaymentSetupSection from "../components/PaymentSetupSection";
+import { stripSegmentsMarker } from "../utils/segmentedWidth";
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 async function getContext() { return getEffectiveTenantContext(); }
@@ -179,7 +180,7 @@ function resolveMeasurementFields(appt: MeasuredAppointment) {
     const parsedQty = parseQtyFromNotes(...noteSources);
     const parsedType = parseProductTypeFromNotes(...noteSources);
     const parsedUnitPrice = parseSaleUnitPriceFromNotes(...noteSources);
-    const notes = noteSources.filter(Boolean).join("\n");
+    const notes = stripSegmentsMarker(noteSources.filter(Boolean).join("\n"));
 
     const preferNotes = structured && Boolean(parsedDims?.width_cm && parsedDims?.height_cm);
 

@@ -10,6 +10,10 @@ import { getEffectiveTenantContext, supabase } from "../supabaseClient";
 import Quotes from "./Quotes";
 import FieldInfoSection from "../components/FieldInfoSection";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
+import {
+  MAX_WIDTH_SEGMENTS, coveredWidth, describeSegments, isValidCm, parseSegments,
+  serializeSegments, totalWidth, validateSegments, type SegmentedWidth,
+} from "../utils/segmentedWidth";
 
 // ---- TYPES & CONSTANTS ----
 export type ProductType = "stor" | "zebra" | "tul" | "fon" | "jalousie" | "picasso" | "plicell" | "rustik" | "dekoratif_ray" | "kruvaze" | "katlamali_mekanizma" | "ip_perde" | "aksesuar" | "diger";
@@ -37,6 +41,8 @@ export type MeasurementItem = {
   note: string;
   photos: Photo[];
   fieldNotes?: string;
+  /** Parçalı En (opsiyonel). null/undefined = klasik tek en girişi. */
+  segmented?: SegmentedWidth | null;
   kumasGrubu?: string;
   mekanizma?: string;
   zincirYonu?: string;
@@ -306,7 +312,9 @@ export default function MeasurementEntry() {
             .replace(/Korniş Tipi: .*/g, "")
             .replace(/Pile: [23S]/g, "")
             .replace(/\[Photos: .*\]/g, "")
+            .replace(/\[Parcalar: .*\]/g, "")
             .trim();
+          const segmented = parseSegments(noteStr);
 
           return {
             id: row.id,
@@ -331,6 +339,7 @@ export default function MeasurementEntry() {
             note: cleanNote,
             photos,
             fieldNotes: sahaBilgileri?.fieldNotes || "",
+            segmented,
           };
         });
         setItems(loadedItems);
@@ -406,7 +415,17 @@ export default function MeasurementEntry() {
   }
 
   function updateItem(id: string, updates: Partial<MeasurementItem>) {
-    setItems(items.map(it => it.id === id ? { ...it, ...updates } : it));
+    setItems(items.map(it => {
+      if (it.id !== id) return it;
+      const next = { ...it, ...updates };
+      // Parçalı En açıkken ürün eni = seçili parçaların toplamı (mevcut min/yuvarlama kuralları bu ene uygulanır).
+      if (next.segmented && "segmented" in updates) next.widthCm = coveredWidth(next.segmented);
+      return next;
+    }));
+  }
+
+  function updateSegments(id: string, sw: SegmentedWidth | null) {
+    updateItem(id, { segmented: sw });
   }
 
   function deleteItem(id: string) {
@@ -434,6 +453,19 @@ export default function MeasurementEntry() {
   async function saveMeasurementGroup() {
     if (items.length === 0) { setError("En az 1 ürün eklemelisiniz."); return; }
     if (!customerName.trim()) { setError("Müşteri adı girilmelidir."); return; }
+    for (const [i, it] of items.entries()) {
+      const label = `${i + 1}. ürün`;
+      if (it.segmented) {
+        const segErr = validateSegments(it.segmented);
+        if (segErr) { setError(`${label}: ${segErr}`); return; }
+      } else if (!isManual(it.productType) && !isValidCm(it.widthCm)) {
+        setError(`${label}: en 0'dan büyük geçerli bir sayı olmalı.`); return;
+      }
+      if (!isManual(it.productType) && !isLinear(it.productType) && !isValidCm(it.heightCm)) {
+        setError(`${label}: boy 0'dan büyük geçerli bir sayı olmalı.`); return;
+      }
+      if (!Number.isFinite(it.qty) || it.qty < 1) { setError(`${label}: adet en az 1 olmalı.`); return; }
+    }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -459,6 +491,8 @@ export default function MeasurementEntry() {
         if (it.kasaTipi) dynamicProps += `\nKasa Tipi: ${it.kasaTipi}`;
         if (it.kasaRengi) dynamicProps += `\nKasa Rengi: ${it.kasaRengi}`;
         if (it.kornisTipi) dynamicProps += `\nKorniş Tipi: ${it.kornisTipi}`;
+        const segMarker = serializeSegments(it.segmented);
+        if (segMarker) dynamicProps += `\n${segMarker}`;
         // Saha Bilgileri (FieldInfoSection): photos, color, model, fieldNotes — JSON with backward-compat [Photos:...] marker
         if (it.photos.length || it.colorName || it.modelName || it.fieldNotes) {
           dynamicProps += `\n[Photos: ${JSON.stringify({
@@ -653,7 +687,7 @@ export default function MeasurementEntry() {
                       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-100 text-xs font-black text-primary-700 dark:bg-primary-900/40 dark:text-primary-300">{idx + 1}</span>
                       <div className="min-w-0">
                         <div className="truncate font-bold text-slate-900 dark:text-white">{item.roomName || "Alan adı girilmedi"}</div>
-                        <div className="text-xs text-slate-500">{productLabel(item.productType)} • {item.widthCm}x{item.heightCm} cm • {item.qty} adet</div>
+                        <div className="text-xs text-slate-500">{productLabel(item.productType)} • {item.widthCm}x{item.heightCm} cm{item.segmented ? ` (toplam en ${totalWidth(item.segmented.segments)} cm)` : ""} • {item.qty} adet</div>
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -725,7 +759,7 @@ export default function MeasurementEntry() {
                         </label>
 
                         {/* Dimensions */}
-                        {!isManual(item.productType) && <label><span className={labelCls}>{item.productType === "dekoratif_ray" ? "En (cm)" : isLinear(item.productType) ? "Uzunluk (cm)" : "En (cm)"}</span>
+                        {!isManual(item.productType) && !item.segmented && <label><span className={labelCls}>{item.productType === "dekoratif_ray" ? "En (cm)" : isLinear(item.productType) ? "Uzunluk (cm)" : "En (cm)"}</span>
                           <input type="text" inputMode="decimal" value={item.widthCm > 0 ? item.widthCm : ""} onChange={e => {
                             const val = e.target.value.replace(/,/g, ".");
                             if (val === "") { updateItem(item.id, { widthCm: 0 }); return; }
@@ -734,6 +768,60 @@ export default function MeasurementEntry() {
                             if (item.widthCm <= 0) updateItem(item.id, { widthCm: 100 });
                           }} className={inputCls} placeholder="örn: 110.5" />
                         </label>}
+                        {!isManual(item.productType) && (
+                          <div className="sm:col-span-2 lg:col-span-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/40">
+                            <label className="flex items-center gap-2 text-sm font-bold text-slate-700 dark:text-slate-200">
+                              <input type="checkbox" checked={!!item.segmented} onChange={e => {
+                                if (e.target.checked) {
+                                  const first = { id: crypto.randomUUID(), name: "", cm: item.widthCm > 0 ? item.widthCm : 0 };
+                                  updateSegments(item.id, { segments: [first], selectedIds: [] });
+                                } else {
+                                  updateSegments(item.id, null);
+                                }
+                              }} />
+                              Parçalı En (duvarın enini bölümlere ayır)
+                            </label>
+                            {item.segmented && (() => {
+                              const sw = item.segmented;
+                              const total = totalWidth(sw.segments);
+                              const covered = coveredWidth(sw);
+                              const setSeg = (segId: string, patch: Partial<{ name: string; cm: number }>) =>
+                                updateSegments(item.id, { ...sw, segments: sw.segments.map(s => s.id === segId ? { ...s, ...patch } : s) });
+                              const toggleSel = (segId: string) =>
+                                updateSegments(item.id, { ...sw, selectedIds: sw.selectedIds.includes(segId) ? sw.selectedIds.filter(x => x !== segId) : [...sw.selectedIds, segId] });
+                              const removeSeg = (segId: string) =>
+                                updateSegments(item.id, { segments: sw.segments.filter(s => s.id !== segId), selectedIds: sw.selectedIds.filter(x => x !== segId) });
+                              return (
+                                <div className="mt-3 space-y-2">
+                                  <div className="text-[11px] text-slate-500">Soldan sağa sırayla girin. Ürünün kaplayacağı parçaları işaretleyin (işaret yoksa toplam en kullanılır).</div>
+                                  {sw.segments.map((seg, si) => (
+                                    <div key={seg.id} className="flex flex-wrap items-center gap-2" data-testid="segment-row">
+                                      <span className="w-5 text-xs font-black text-slate-400">{si + 1}</span>
+                                      <input aria-label={`Parça ${si + 1} bölüm adı`} value={seg.name} onChange={e => setSeg(seg.id, { name: e.target.value })} placeholder="Bölüm adı (Sol duvar, Pencere...)" className="min-w-[10rem] flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+                                      <input aria-label={`Parça ${si + 1} en (cm)`} type="text" inputMode="decimal" value={seg.cm > 0 ? seg.cm : ""} onChange={e => {
+                                        const val = e.target.value.replace(/,/g, ".");
+                                        if (val === "") { setSeg(seg.id, { cm: 0 }); return; }
+                                        if (/^\d*\.?\d*$/.test(val)) setSeg(seg.id, { cm: Number(val) });
+                                      }} placeholder="cm" className="w-24 rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+                                      <label className="flex items-center gap-1 text-xs font-bold text-slate-600 dark:text-slate-300">
+                                        <input type="checkbox" checked={sw.selectedIds.includes(seg.id)} onChange={() => toggleSel(seg.id)} /> Ürün burayı kaplasın
+                                      </label>
+                                      {sw.segments.length > 1 && <button type="button" onClick={() => removeSeg(seg.id)} aria-label={`Parça ${si + 1} sil`} className="rounded-lg bg-red-50 p-2 text-red-600 hover:bg-red-100 dark:bg-red-950/30"><Trash2 className="h-3 w-3" /></button>}
+                                    </div>
+                                  ))}
+                                  {sw.segments.length < MAX_WIDTH_SEGMENTS ? (
+                                    <button type="button" onClick={() => updateSegments(item.id, { ...sw, segments: [...sw.segments, { id: crypto.randomUUID(), name: "", cm: 0 }] })} className="inline-flex items-center gap-1 rounded-lg bg-primary-50 px-3 py-1.5 text-xs font-black text-primary-700 hover:bg-primary-100 dark:bg-primary-950/30 dark:text-primary-300"><Plus className="h-3 w-3" /> Parça Ekle ({sw.segments.length}/{MAX_WIDTH_SEGMENTS})</button>
+                                  ) : <div className="text-[11px] font-bold text-slate-500">En fazla {MAX_WIDTH_SEGMENTS} parça eklenebilir.</div>}
+                                  <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm dark:bg-slate-800" data-testid="segment-totals">
+                                    <div>Toplam En: <b>{total} cm</b></div>
+                                    <div>Ürün Eni (hesaba giren): <b>{covered} cm</b>{sw.selectedIds.length === 0 ? " (tüm parçalar)" : ""}</div>
+                                    <div className="mt-1 text-[11px] text-slate-500">{describeSegments(sw)}</div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                         {!isManual(item.productType) && !isLinear(item.productType) && <label><span className={labelCls}>Boy (cm)</span>
                           <input type="number" value={item.heightCm > 0 ? item.heightCm : ""} onChange={e => updateItem(item.id, { heightCm: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })} className={inputCls} />
                         </label>}

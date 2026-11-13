@@ -26,6 +26,7 @@ import {
 import { toLocalDateISO } from "../utils/date";
 
 import { assertRowsDeleted } from "../utils/strictDelete";
+import { stripSegmentsMarker } from "../utils/segmentedWidth";
 const APPOINTMENT_STATUS_LABELS: Record<string, string> = {
     planned: "Planlandı",
     onway: "Yolda",
@@ -110,7 +111,7 @@ export default function AppointmentDetail() {
 
             const appointment = data as unknown as AppointmentRow;
             setRow(appointment);
-            setMNotes(appointment.measurement_notes || "");
+            setMNotes(stripSegmentsMarker(appointment.measurement_notes));
             setEditAddress(appointment.address || "");
             setEditAssignedTo(appointment.assigned_to || "");
 
@@ -543,7 +544,7 @@ const myCompany = pickPrimaryMembership(myCompanyRows as any[] | null) as { comp
                     </div>
                     <div>
                         <div className="text-indigo-800 dark:text-indigo-400 font-black mb-1">Müşteri / Yönetici Notu</div>
-                        <div className="text-indigo-900 dark:text-indigo-200 text-sm font-medium leading-relaxed">{row.note}</div>
+                        <div className="text-indigo-900 dark:text-indigo-200 text-sm font-medium leading-relaxed">{stripSegmentsMarker(row.note)}</div>
                     </div>
                 </div>
             )}

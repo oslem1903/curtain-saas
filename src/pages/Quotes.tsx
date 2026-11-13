@@ -11,6 +11,7 @@ import { logAction } from "../utils/audit";
 import { DELIVERY_DATE_LABEL, todayISO, isValidDeliveryDate, orderDeliveryFields } from "../utils/order";
 import { postSupplierDebt } from "../utils/supplierCari";
 import { extractSahaBilgileriFromNote } from "../utils/sahaJsonParser";
+import { describeSegments, parseSegments, stripSegmentsMarker, totalWidth } from "../utils/segmentedWidth";
 import { createFinanceService } from "../services/finance";
 import { buildInstallmentPlanFromDraft } from "../utils/installments";
 import type { InstallmentDraftRow } from "../utils/installments";
@@ -310,6 +311,8 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           productOptions.rounded_width_cm = decorativeRail(row.width_cm ?? 0).roundedWidth;
           productOptions.rounded_height_cm = 0;
         }
+        const segs = parseSegments(noteStr);
+        if (segs) productOptions.width_segments = { total_cm: totalWidth(segs.segments), covered_cm: row.width_cm ?? null, parts: segs.segments.map(sg => ({ name: sg.name, cm: sg.cm })) };
         if (isTulFon) productOptions.pile = /Pile: S/.test(noteStr) ? "S" : /Pile: 3/.test(noteStr) ? "3" : "2";
         if (Object.keys(fieldInfo).length > 0) productOptions.field_info = fieldInfo;
 
@@ -323,7 +326,7 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
           unit_price: unitPrice,
           line_total: lineTotal,
           room: row.room_name || null,
-          note: [productNote, row.note].filter(Boolean).join("\n") || null,
+          note: [productNote, stripSegmentsMarker(row.note)].filter(Boolean).join("\n") || null,
           sewing_allowance_cm: isTulFon ? 15 : null,
           supplier_id: row.supplier_id || null,
           supplier_unit_cost: supplierUnitCost,
@@ -684,8 +687,10 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
               </div>
 
               <div className="space-y-2 mb-5">
-                {group.rows.map((row, i) => (
-                  <div key={row.id} className="flex justify-between items-center rounded-xl bg-slate-50 px-4 py-2 text-sm dark:bg-slate-800/50">
+                {group.rows.map((row, i) => {
+                  const rowSegs = parseSegments(row.note);
+                  return (
+                  <div key={row.id} className="flex flex-wrap justify-between items-center rounded-xl bg-slate-50 px-4 py-2 text-sm dark:bg-slate-800/50">
                     <div className="flex items-center gap-3">
                       <span className="font-black text-slate-400">{i + 1}.</span>
                       <span className="font-bold text-slate-700 dark:text-slate-300">{row.room_name || "Alan"}</span>
@@ -695,8 +700,14 @@ export default function Quotes({ embedded = false }: { embedded?: boolean } = {}
                       <span>{row.product_type === "dekoratif_ray" ? railDescription(row.width_cm ?? 0) : `${row.width_cm}x${row.height_cm} cm`} • {Math.max(1, row.quantity ?? 1)} adet • Birim miktarı: {areaM2Of(row).toFixed(2)}</span>
                       <span className="font-black text-slate-800 dark:text-slate-200">{fmtTL(calcEstimate(row))}</span>
                     </div>
+                    {rowSegs && (
+                      <div className="mt-1 w-full text-[11px] text-slate-500" data-testid="quote-segments">
+                        Toplam en {totalWidth(rowSegs.segments)} cm: {describeSegments(rowSegs)}
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
