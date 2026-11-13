@@ -58,7 +58,10 @@
       "!node_modules/**/*"
     ],
     "copyright": "Copyright © OZIDIJITAL",
-    "electronLanguages": ["tr", "en-US"]
+    "electronLanguages": [
+      "tr",
+      "en-US"
+    ]
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

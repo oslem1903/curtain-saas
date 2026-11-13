@@ -9,6 +9,7 @@ import {
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
 import { cn } from "../utils/cn";
+import { getErrorMessage } from "../utils/errorMessage";
 
 type Company = { id: string; name: string };
 type Notification = {
@@ -28,6 +29,8 @@ export default function SuperAdminNotifications() {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
+    const [error, setError] = useState("");
+    const [success, setSuccess] = useState("");
 
     const [form, setForm] = useState({
         target: 'all' as 'all' | 'selected',
@@ -46,34 +49,39 @@ export default function SuperAdminNotifications() {
         try {
             const [cos, notifs] = await Promise.all([
                 supabase.from('companies').select('id, name'),
-                supabase.from('notifications').select('*, company:companies(name)').order('created_at', { ascending: false }).limit(50)
+                supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50)
             ]);
+            if (cos.error) throw cos.error;
+            if (notifs.error) throw notifs.error;
             if (cos.data) setCompanies(cos.data);
-            if (notifs.data) setNotifications(notifs.data as Notification[]);
+            if (notifs.data) setNotifications(notifs.data.map(n => ({ ...n, company: cos.data?.find(c => c.id === n.company_id) })) as Notification[]);
         } catch (e) {
             console.error(e);
+            setError(getErrorMessage(e, "Bildirim geçmişi yüklenemedi."));
         } finally {
             setLoading(false);
         }
     }
 
     async function handleSend() {
-        if (!form.title || !form.message) return;
+        if (sending || !form.title.trim() || !form.message.trim()) return;
+        setError("");
+        setSuccess("");
         setSending(true);
         try {
-            // This is simplified. In reality, we need to create notifications for ALL users in targeted companies.
-            // A more scalable way would be an edge function that handles the fan-out.
-            // For MVP, let's create a notification for the ADMINS of the companies.
-            
-            const targetCompanyIds = form.target === 'all' ? companies.map(c => c.id) : form.company_ids;
-
-            // Get users for these companies
-            const { data: members } = await supabase
-                .from('company_members')
-                .select('user_id, company_id')
-                .in('company_id', targetCompanyIds);
-
-            if (!members || members.length === 0) return;
+            const targetCompanyIds = [...new Set(form.target === 'all' ? companies.map(c => c.id) : form.company_ids)];
+            if (targetCompanyIds.length === 0) throw new Error("En az bir firma seçin.");
+            // The same server-checked admin bridge used by the company editor.
+            // Direct membership SELECT may legitimately return zero rows under RLS.
+            const groups = await Promise.all(targetCompanyIds.map(async companyId => {
+                const { data, error: memberError } = await supabase.rpc("super_admin_list_company_members", { p_company_id: companyId });
+                if (memberError) throw memberError;
+                const active = ((data ?? []) as { user_id: string; is_active: boolean }[])
+                    .filter(m => m.user_id && m.is_active !== false);
+                if (active.length === 0) throw new Error(`${companies.find(c => c.id === companyId)?.name || "Firma"} için aktif alıcı bulunamadı. Bildirim gönderilmedi.`);
+                return [...new Set(active.map(m => m.user_id))].map(userId => ({ user_id: userId, company_id: companyId }));
+            }));
+            const members = groups.flat();
 
             const payloads = members.map(m => ({
                 company_id: m.company_id,
@@ -83,14 +91,16 @@ export default function SuperAdminNotifications() {
                 type: form.type
             }));
 
-            const { error } = await supabase.from('notifications').insert(payloads);
-            if (error) throw error;
+            const { data: saved, error: sendError } = await supabase.from('notifications').insert(payloads).select('id');
+            if (sendError) throw sendError;
+            if (saved?.length !== payloads.length) throw new Error("Bildirim gönderim sonucu doğrulanamadı. Yeniden göndermeden önce geçmişi kontrol edin.");
 
             setForm({ ...form, title: '', message: '' });
-            alert("Bildirimler başarıyla gönderildi!");
-            loadData();
+            setSuccess(`${saved.length} kullanıcıya bildirim gönderildi.`);
+            await loadData();
         } catch (e) {
             console.error(e);
+            setError(getErrorMessage(e, "Bildirim gönderilemedi."));
         } finally {
             setSending(false);
         }
@@ -108,6 +118,8 @@ export default function SuperAdminNotifications() {
                     </div>
                 </div>
 
+                {error && <p role="alert" className="mb-5 rounded-xl bg-red-50 p-4 text-red-700">{error}</p>}
+                {success && <p role="status" className="mb-5 rounded-xl bg-emerald-50 p-4 text-emerald-700">{success}</p>}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Send Notification Form */}
                 <div className="lg:col-span-1">

@@ -1,0 +1,72 @@
+name: Mobile order hotfix validation
+
+on:
+  push:
+    branches: [release/mobile-1.0.24]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/load-release-client-config.mjs
+      - run: node --import tsx scripts/check-order-creation.ts
+      - run: node --import tsx scripts/check-locked-native.ts
+      - run: npm run cap:build
+      - name: Build unsigned Android release
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:bundleRelease :app:assembleRelease
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PerdePRO-1.0.24-Android-UNSIGNED
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/release/*unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/load-release-client-config.mjs
+      - run: node --import tsx scripts/check-order-creation.ts
+      - run: node --import tsx scripts/check-locked-native.ts
+      - run: npm run cap:build
+      - name: Archive iOS without signing
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/PerdePRO-1.0.24.xcarchive" archive CODE_SIGNING_ALLOWED=NO
+          ditto -c -k --keepParent "$RUNNER_TEMP/PerdePRO-1.0.24.xcarchive" "$RUNNER_TEMP/PerdePRO-1.0.24-iOS-UNSIGNED.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PerdePRO-1.0.24-iOS-UNSIGNED
+          path: ${{ runner.temp }}/PerdePRO-1.0.24-iOS-UNSIGNED.zip
+          if-no-files-found: error
+          retention-days: 14
