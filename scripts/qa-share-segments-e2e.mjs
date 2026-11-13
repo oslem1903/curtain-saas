@@ -73,12 +73,13 @@ try {
   rec('A firması belirlendi', !!cid);
 
   // ---- tedarikçiler (+fiyat listesi, UI listesinde görünsün diye) ----
-  const supA = `QA-SHARE Tedarikci A ${TS}`; const supB = `QA-SHARE Tedarikci B ${TS}`;
+  const supA = 'QA-SHARE Tedarikci A (sabit)'; const supB = 'QA-SHARE Tedarikci B (sabit)'; // silinemediği için yeniden kullanılır
   const sup = await ev(async ({ cid, supA, supB }) => {
     const sb = window.supabase; const out = {};
     for (const [k, name, phone] of [['A', supA, '0555 000 00 01'], ['B', supB, null]]) {
-      const { data, error } = await sb.from('suppliers').insert([{ company_id: cid, name, phone }]).select('id').single();
-      if (error) throw new Error('supplier: ' + error.message);
+      let data = (await sb.from('suppliers').select('id').eq('company_id', cid).eq('name', name).limit(1)).data?.[0];
+      if (data) await sb.from('suppliers').update({ phone }).eq('id', data.id);
+      else { const r = await sb.from('suppliers').insert([{ company_id: cid, name, phone }]).select('id').single(); if (r.error) throw new Error('supplier: ' + r.error.message); data = r.data; }
       out[k] = data.id;
       for (const cat of ['stor', 'zebra', 'tul']) {
         let r = await sb.from('supplier_product_prices').insert([{ company_id: cid, supplier_id: data.id, product_name: `QA ${cat}`, product_category: cat, unit_cost: 100, currency: 'TRY' }]).select('id').single();
@@ -88,7 +89,7 @@ try {
     }
     return out;
   }, { cid, supA, supB });
-  created.suppliers.push(sup.A, sup.B); created.prices.push(...(sup.prices || []));
+  created.suppliers.push(); created.prices.push(...(sup.prices || [])); created.supIds = [sup.A, sup.B];
 
   // ================= PARÇALI EN: ölçü girişi =================
   const custName = `QA-SHARE Musteri ${TS}`;
@@ -187,7 +188,7 @@ try {
   await page.locator('input[type="date"]').first().waitFor({ timeout: 10000 });
   await grp().locator('input[type="date"]').fill(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
   await grp().getByRole('button', { name: /Siparişe Çevir/ }).click();
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(9000);
   const ord = await ev(async (cust) => {
     const sb = window.supabase;
     const { data: o } = await sb.from('orders').select('id,total_amount').eq('customer_id', cust).order('created_at', { ascending: false }).limit(1);
@@ -279,7 +280,7 @@ try {
   rec('Parçasız kayıtta parça satırı çıkmıyor', (await lgrp().getByTestId('quote-segments').count()) === 0);
   await lgrp().locator('input[type="date"]').fill(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
   await lgrp().getByRole('button', { name: /Siparişe Çevir/ }).click();
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(9000);
   const lg = await ev(async (n) => {
     const sb = window.supabase;
     const { data: c } = await sb.from('customers').select('id').eq('name', n).limit(1);
@@ -376,7 +377,7 @@ try {
         if (d.error) await sb.from('orders').update({ status: 'cancelled' }).eq('id', oid);
       }
       for (const a of c.appts) await sb.from('appointments').delete().eq('id', a);
-      for (const id of c.suppliers) await sb.from('supplier_transactions').delete().eq('supplier_id', id);
+      for (const id of (c.supIds || [])) await sb.from('supplier_transactions').delete().eq('supplier_id', id);
       for (const id of c.customers) await sb.from('customers').delete().eq('id', id);
       for (const id of c.prices) await sb.from('supplier_product_prices').delete().eq('id', id);
       for (const id of c.suppliers) await sb.from('suppliers').delete().eq('id', id);

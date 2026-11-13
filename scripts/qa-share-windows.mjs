@@ -30,7 +30,8 @@ try {
   await page.waitForURL(/#\/(dashboard|app\/dashboard|field)/, { timeout: 60000 });
 
   // Ana süreçte openExternal'ı yakala
-  await app.evaluate(({ shell }) => {
+  const REAL = process.env.QA_REAL_OPEN === '1';
+  if (!REAL) await app.evaluate(({ shell }) => {
     globalThis.__opened = [];
     shell.openExternal = async (u) => { globalThis.__opened.push(String(u)); };
   });
@@ -42,9 +43,9 @@ try {
     let cid = pr.data?.company_id;
     if (!cid) { const m = await sb.from('company_members').select('company_id').eq('user_id', user.id).limit(1); cid = m.data?.[0]?.company_id; }
     const { data: c } = await sb.from('customers').insert([{ company_id: cid, name: `QA-SHARE Win ${ts}` }]).select('id').single();
-    const mk = async (name, phone) => (await sb.from('suppliers').insert([{ company_id: cid, name, phone }]).select('id').single()).data.id;
-    const sA = await mk(`QA-SHARE Win A ${ts}`, '0555 000 00 01');
-    const sB = await mk(`QA-SHARE Win B ${ts}`, null);
+    const mk = async (name, phone) => { const ex = (await sb.from('suppliers').select('id').eq('company_id', cid).eq('name', name).limit(1)).data?.[0]; if (ex) { await sb.from('suppliers').update({ phone }).eq('id', ex.id); return ex.id; } return (await sb.from('suppliers').insert([{ company_id: cid, name, phone }]).select('id').single()).data.id; };
+    const sA = await mk('QA-SHARE Win A (sabit)', '0555 000 00 01');
+    const sB = await mk('QA-SHARE Win B (sabit)', null);
     const { data: o } = await sb.from('orders').insert([{ company_id: cid, customer_id: c.id, status: 'new_order', total_amount: 1000, deposit_amount: 0, paid_amount: 0, remaining_amount: 1000 }]).select('id').single();
     const items = [
       { order_id: o.id, company_id: cid, product_type: 'stor', width_cm: 180, height_cm: 210, qty: 1, unit_price: 500, line_total: 1000, area_m2: 3.78, supplier_id: sA, product_options: { model_name: 'Lina', color_name: 'Krem', supplier_note: 'Zincir sağ', width_segments: { total_cm: 400, covered_cm: 180, parts: [{ name: 'Pencere', cm: 180 }] } } },
@@ -65,6 +66,13 @@ try {
   const href = await page.getByTestId('share-open-whatsapp').getAttribute('href');
   await page.getByTestId('share-open-whatsapp').click();
   await page.waitForTimeout(1500);
+  if (REAL) {
+    console.log('REAL_OPEN_CLICKED', new Date().toISOString());
+    await page.waitForTimeout(Number(process.env.QA_HOLD_MS || 20000));
+    await page.getByTestId('share-supplier-select').selectOption(seed.sups[1]);
+    rec('Windows (gerçek açılış): tıklama gerçekleşti, uygulamada ek pencere yok', app.windows().length === 1);
+    throw new Error('REAL_MODE_DONE');
+  }
   const opened = await app.evaluate(() => globalThis.__opened);
   rec('Windows: WhatsApp Aç → işletim sistemine doğru numara ve hazır mesaj verildi', opened.length >= 1 && opened[0] === href && opened[0].startsWith('https://wa.me/905550000001?text=') && decodeURIComponent(opened[0].split('?text=')[1]) === msg, opened[0]?.slice(0, 45));
   rec('Windows: uygulama içinde yeni pencere/sayfa açılmadı', app.windows().length === 1);
@@ -77,14 +85,13 @@ try {
   rec('Windows: Mesajı Kopyala çalıştı', copied, copied ? '' : 'pano yazılamadı');
   void dialogShown;
 } catch (e) {
-  fail++; console.log('HATA:', e.message);
+  if (e.message !== 'REAL_MODE_DONE') { fail++; console.log('HATA:', e.message); }
 } finally {
   try {
     await page?.evaluate(async (c) => {
       const sb = window.supabase;
       if (c.order) { await sb.from('supplier_transactions').delete().in('supplier_id', c.sup); await sb.from('order_items').delete().eq('order_id', c.order); const d = await sb.from('orders').delete().eq('id', c.order); if (d.error) await sb.from('orders').update({ status: 'cancelled' }).eq('id', c.order); }
       if (c.cust) await sb.from('customers').delete().eq('id', c.cust);
-      for (const id of c.sup) await sb.from('suppliers').delete().eq('id', id);
     }, created);
   } catch { /* */ }
   await app.close().catch(() => {});
