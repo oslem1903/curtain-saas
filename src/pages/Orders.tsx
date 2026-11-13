@@ -7,6 +7,7 @@ import { withoutDeleted } from "../utils/softDelete";
 import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
 import { EmptyState } from "../components/EmptyState";
+import { stripSegmentsMarker } from "../utils/segmentedWidth";
 
 /** -----------------------
  * Helpers
@@ -517,7 +518,7 @@ export default function Orders() {
 
                                             {o.note ? (
                                                 <div className="text-sm text-slate-600 dark:text-slate-300 mt-2 line-clamp-1">
-                                                    {o.note}
+                                                    {stripSegmentsMarker(o.note)}
                                                 </div>
                                             ) : null}
                                         </div>

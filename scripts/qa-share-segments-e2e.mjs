@@ -40,6 +40,8 @@ const { c: ctxA, p: page } = await mkCtx(A);
 const ev = (fn, arg) => page.evaluate(fn, arg);
 page.on('pageerror', (e) => console.log('PAGEERR', String(e).slice(0, 300)));
 page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE', m.text().slice(0, 200)); });
+const failedReqs = {};
+page.on('requestfailed', (r) => { if (/supabase\.co/.test(r.url())) { const k = (r.failure()?.errorText || '?'); failedReqs[k] = (failedReqs[k] || 0) + 1; } });
 const cards = () => page.locator('div[class*="bg-slate-50/80"]');
 
 // wa.me isteğini yakala ve ENGELLE (mesaj gönderilmez)
@@ -382,5 +384,6 @@ try {
   }, created).catch(() => {});
   await browser.close();
 }
+console.log('INFO  supabase requestfailed özeti:', JSON.stringify(failedReqs));
 console.log(fail ? `\n${fail} KONTROL BASARISIZ` : '\nTUM KONTROLLER GECTI');
 process.exit(fail ? 1 : 0);

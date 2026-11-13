@@ -8,6 +8,7 @@ import { PAGE_SIZE } from "../constants/pagination";
 import { Pagination } from "../components/Pagination";
 import { todayLocalISO } from "../utils/date";
 import { printHtmlDocument } from "../utils/printDocument";
+import { stripSegmentsMarker } from "../utils/segmentedWidth";
 
 type InvoiceRow = {
     id: string;
@@ -182,7 +183,7 @@ async function syncOrdersToInvoices(companyId: string) {
                     total_tax_amount: taxAmount,
                     total_tax_inclusive: order.total_amount,
                     status: order.status === "paid" ? "paid" : "sent",
-                    notes: order.note || `Siparis faturasi - ${getPartyName(order.customers) || "Musteri"}`,
+                    notes: stripSegmentsMarker(order.note) || `Siparis faturasi - ${getPartyName(order.customers) || "Musteri"}`,
                 },
             ])
             .select("id")

@@ -80,6 +80,12 @@ function showPurchaseRequired() {
     }
 }
 
+let pageUnloading = false;
+if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", () => { pageUnloading = true; });
+    window.addEventListener("beforeunload", () => { pageUnloading = true; });
+}
+
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (isReadOnly && init?.method) {
         const urlStr = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
@@ -131,7 +137,10 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         }
         return response;
     } catch (error) {
-        if (reportable) console.error(`Veritabanı bağlantısı kurulamadı: ${endpoint}`);
+        // Kullanıcı sayfadan ayrılırken / yükleme iptal edilirken (AbortError, sayfa kapanışı) kesilen
+        // istekler gerçek bağlantı hatası değildir; yanıltıcı log üretmeyelim.
+        const aborted = (error as { name?: string } | null)?.name === "AbortError" || init?.signal?.aborted === true || pageUnloading;
+        if (reportable && !aborted) console.error(`Veritabanı bağlantısı kurulamadı: ${endpoint}`);
         throw error;
     }
 };

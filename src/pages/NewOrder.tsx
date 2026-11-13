@@ -504,7 +504,7 @@ export default function NewOrder() {
         if (appt.address) setApptAddress(appt.address);
         if (appt.assigned_to) setAssignedTo(appt.assigned_to);
 
-        const noteParts = [appt.measurement_notes?.trim(), appt.note?.trim()].filter(Boolean);
+        const noteParts = [stripSegmentsMarker(appt.measurement_notes), stripSegmentsMarker(appt.note)].filter(Boolean);
         if (noteParts.length > 0) setNote(`[KESIF / OLCU]\n${noteParts.join("\n\n")}`);
 
         if (measurementLine.supplier_id) setFabricSupplierId(measurementLine.supplier_id);
@@ -527,7 +527,7 @@ export default function NewOrder() {
         if (state.address) setApptAddress(state.address);
         if (state.assignedTo) setAssignedTo(state.assignedTo);
         if (state.selectedSupplierId) setFabricSupplierId(state.selectedSupplierId);
-        if (state.measurementNotes) setNote((prev) => `[ÖLÇÜ NOTLARI]\n${state.measurementNotes}\n\n${prev}`);
+        if (state.measurementNotes) setNote((prev) => `[ÖLÇÜ NOTLARI]\n${stripSegmentsMarker(state.measurementNotes)}\n\n${prev}`);
         if (state.measurementAreaM2 || state.totalCost || state.totalSale || state.profit) {
             const s = [
                 state.measurementAreaM2 ? `m²: ${safeNumber(state.measurementAreaM2).toFixed(2)}` : null,
