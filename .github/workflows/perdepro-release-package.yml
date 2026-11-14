@@ -58,12 +58,14 @@ jobs:
       - run: node --import tsx scripts/check-order-creation.ts
       - run: node --import tsx scripts/check-locked-native.ts
       - run: npm run build && npx cap sync android
-      - name: Build Android APK for release signing
+      - name: Build Android App Bundle and APK for release signing
         working-directory: android
-        run: bash ./gradlew --no-daemon :app:assembleRelease
+        run: bash ./gradlew --no-daemon :app:bundleRelease :app:assembleRelease
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PerdePRO-1.0.25-Android-unsigned
-          path: android/app/build/outputs/apk/release/*unsigned.apk
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/release/*unsigned.apk
           if-no-files-found: error
           retention-days: 14
