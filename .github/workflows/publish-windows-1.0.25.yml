@@ -1,0 +1,31 @@
+name: Publish PerdePRO Windows 1.0.25
+on:
+  push:
+    branches: [release/perdepro-1.0.25-build]
+    paths: [.github/workflows/publish-windows-1.0.25.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download and verify the existing Windows build
+        run: |
+          gh run download 43494123876 --repo "$GITHUB_REPOSITORY" --name PerdePRO-1.0.25-Windows
+          echo "b638f5a043585ceb9152e7aeb72208af3b2cf02a9bdd72d5350bb94b3fdec92b  PerdePRO-Setup-1.0.25.exe" | sha256sum --check
+          stat --format='%s bytes' PerdePRO-Setup-1.0.25.exe
+      - name: Publish verified installer
+        run: |
+          gh release create windows-v1.0.25 PerdePRO-Setup-1.0.25.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 1d0f9888a4a8cad89d0173a75d618ee811242b6e \
+            --title "PerdePRO Windows 1.0.25" \
+            --notes "Sipariş detayından tedarikçiye WhatsApp paylaşımı ve ölçü alırken Parçalı En eklendi. Süper Admin bildirimlerinde firma alıcılarının bulunması düzeltildi."
